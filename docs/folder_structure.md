@@ -43,6 +43,8 @@ FMCW_LiDAR/
 
 - `requirements.md`
 - `system_architecture.md`
+- `data_contract.md`
+- `build_setup.md`
 - `udp_protocol.md`
 - `raw_data_format.md`
 

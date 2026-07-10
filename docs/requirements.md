@@ -111,7 +111,7 @@ UI는 기존 단순 실시간 plot 화면에서 장비 운용용 패널로 확�
 UI 결정:
 
 - Windows와 Jetson 모두 Qt 6 기반 UI로 개발한다.
-- 기본 UI는 Qt Widgets 또는 Qt Quick/QML 중 실시간 plot/장비 제어에 유리한 쪽을 선택하되, core와 UI는 분리한다.
+- 기본 UI는 복잡한 장비 폼과 데스크톱 계측기 구성을 우선해 Qt Widgets로 구현하고, 실시간 2D/3D rendering은 QOpenGLWidget 계열로 분리한다.
 - 3D/point cloud viewer는 Qt UI 안에서 가볍게 동작하는 OpenGL 기반 renderer를 우선한다.
 - Web dashboard, Unity/Unreal, WPF/WinUI, Avalonia는 초기 버전 범위에서 제외한다.
 
@@ -166,8 +166,8 @@ UI에서 다음 항목을 설정할 수 있어야 한다.
 - Trigger slope
 - Trigger level
 - Trigger delay
-- Laser trigger mode: `up_chirp_only`, `up_down_pair`
-- Full-period acquisition enable
+- Laser trigger mode: `up_chirp_only`로 고정
+- Full-period acquisition: 항상 enable
 - Chirp period samples
 - Pre-trigger samples
 - Post-trigger samples
@@ -181,8 +181,8 @@ UI에서 다음 항목을 설정할 수 있어야 한다.
 설정 검증:
 
 - `sample_point`는 FFT backend가 지원하는 범위여야 한다.
-- legacy `up_down_pair` 모드에서는 `A_scan count`가 up/down chirp pairing을 위해 짝수여야 한다.
-- 신규 `up_chirp_only` 모드에서는 trigger 1개가 전체 up+down chirp period 1개를 의미한다.
+- v1 hardware acquisition에서는 trigger 1개가 전체 up+down chirp period 1개를 의미한다.
+- legacy `up_down_pair`는 hardware profile이나 UI에 노출하지 않고 replay/import 변환에서만 읽는다.
 - `up_chirp_only` 모드의 record length는 full chirp period와 margin을 포함해야 한다.
 - up/down segment 범위는 record 내부에 있어야 하며 서로 겹치지 않아야 한다.
 - up/down segment 길이는 같은 FFT length를 사용하거나 padding/resampling 정책이 명확해야 한다.
@@ -199,7 +199,7 @@ UI에서 다음 항목을 설정할 수 있어야 한다.
 
 - 실행 중 변경 가능: peak threshold, plot range, save enable, UDP enable, color map, segment overlay 표시
 - Preview 중 변경 가능: up/down segment start/end, guard samples
-- 재시작 필요: sampling rate, sample point, channel, record count, trigger mode, chirp period samples, DMA buffer count
+- 재시작 필요: sampling rate, sample point, channel, record count, chirp period samples, DMA buffer count
 
 현재 코드 기준 관련 항목:
 
@@ -348,11 +348,12 @@ legacy 참고:
 
 필수 요구사항:
 
-- `chirp_segmentation.mode`: `up_trigger_only`, `legacy_pair`
+- `chirp_segmentation.mode`: hardware acquisition에서는 `up_chirp_only`로 고정
+- `legacy_pair`: 과거 raw data replay/import 변환기에서만 허용
 - `trigger_to_period_offset`: trigger 이후 full period 시작 sample offset
 - `chirp_period_samples`: full up+down period 전체 sample 수
-- `up_segment.start_sample`, `up_segment.end_sample`
-- `down_segment.start_sample`, `down_segment.end_sample`
+- `up_segment.start_sample`, `up_segment.end_sample_exclusive`
+- `down_segment.start_sample`, `down_segment.end_sample_exclusive`
 - `guard_samples`: chirp 전환부와 불안정 구간 제외 sample 수
 - `segment_fft_length`: FFT 입력 길이
 - `segment_window`: Hann, Hamming, Blackman, Rectangular 등
@@ -372,6 +373,8 @@ UI 요구사항:
 - processed 저장은 적용된 segmentation 설정과 up/down segment별 결과를 metadata에 포함한다.
 - replay 모드는 저장된 full-period raw buffer에 동일한 segmentation 설정을 적용해야 한다.
 - segmentation 설정 변경 이력은 session metadata에 frame range와 함께 남긴다.
+- `RawFrame` 1개는 단일 채널에서 up 시작 trigger 1회로 획득한 full up+down period record 1개로 정의한다.
+- sample segment는 `[start_sample, end_sample_exclusive)` 규칙을 사용하며 자세한 계약은 `docs/data_contract.md`를 따른다.
 
 FFT 모드:
 
@@ -537,6 +540,7 @@ Raw data 저장 기능을 추가한다.
 - raw writer는 acquisition thread와 분리된 비동기 writer thread로 동작한다.
 - 저장 queue 사용량, disk throughput, dropped frame count를 UI에 표시한다.
 - 저장 시작 전에 예상 데이터율과 남은 디스크 공간을 계산한다.
+- 예상 raw 데이터율은 `record_length * bytes_per_sample * trigger_rate`를 기본으로 계산하고 DMA padding과 file header overhead를 별도 표시한다.
 - 파일은 일정 크기 또는 일정 frame 수마다 자동 분할한다.
 - 저장 중 설정 변경이 발생하면 metadata에 변경 시점과 frame ID를 기록한다.
 - raw 저장 실패 시 기본 정책은 acquisition stop으로 한다.
@@ -797,6 +801,9 @@ Timing 요구사항:
 - OS별 코드는 `drivers/windows`, `drivers/linux`처럼 분리한다.
 - 공통 알고리즘은 OS 독립적으로 유지한다.
 - Visual Studio 절대경로 의존성을 제거한다.
+- Qt, CUDA, FFTW, AlazarTech SDK는 저장소에 vendor binary로 포함하지 않고 CMake package 또는 cache root로 탐색한다.
+- 개인 PC SDK 경로는 `CMakeUserPresets.json`에만 두고 source-controlled CMake 파일에 기록하지 않는다.
+- 플랫폼별 준비 절차는 `docs/build_setup.md`를 따른다.
 
 ### 4.4 Maintainability
 
@@ -898,17 +905,21 @@ FMCW_LiDAR/
 - Qt 6 app skeleton 생성
 - Windows app entry: `src/apps/windows`
 - Jetson app entry: `src/apps/jetson`
-- 공통 core module 생성: config, state machine, frame metadata, logging
+- 공통 core module 생성: state machine, frame metadata, logging
 - 공통 driver interface 생성: Alazar, MCU, EDFA, UDP
 - 공통 processing interface 생성: CUDA FFT, FFTW FFT
 - 공통 storage interface 생성: raw writer, processed writer
 - platform adapter 구분: Windows/Jetson SDK, serial, filesystem, timer
+- full-period raw frame과 revision metadata 계약 문서화
+- 상태 전이 contract test 추가
 
 완료 조건:
 
-- 장비 없이도 Qt app이 실행된다.
-- profile load/validate/log/status shell이 동작한다.
+- 선택한 플랫폼에서 Qt app shell이 실행된다.
+- core contract test가 통과한다.
+- log/status shell이 동작한다.
 - Windows와 Jetson build profile이 분리되어 있다.
+- Qt 6 또는 C++ compiler가 없으면 누락된 필수 dependency를 명확히 보고한다.
 
 ### Phase 2: Configuration and System State
 
@@ -949,13 +960,15 @@ FMCW_LiDAR/
 - MCU UART/protocol 정리 및 adapter 구현
 - EDFA optional driver 구현: none/manual/controlled
 - EDFA 없는 profile에서도 정상 Start 가능하게 처리
+- 최소 fake digitizer/EDFA/MCU adapter로 장비 없는 acquisition path 검증
 
 완료 조건:
 
-- Windows에서 Alazar 단일 채널 raw acquisition이 가능하다.
-- Jetson에서 Alazar SDK 연결/빌드 절차가 검증된다.
+- fake digitizer에서 single-channel full-period raw acquisition이 가능하다.
+- Windows Alazar adapter가 SDK가 설치된 환경에서 빌드되고 단일 채널 raw acquisition acceptance 절차가 정의된다.
+- Jetson Alazar SDK 연결/빌드 절차와 hardware acceptance 절차가 정의된다.
 - EDFA 미사용 profile이 오류 없이 동작한다.
-- MCU/EDFA 연결 상태가 Health panel에 표시된다.
+- MCU/EDFA 연결 상태가 core telemetry snapshot에 제공된다.
 
 ### Phase 4: Processing and Storage Pipeline
 
@@ -1011,7 +1024,7 @@ FMCW_LiDAR/
 - Start 실패 시 사용자가 이해할 수 있는 오류가 표시된다.
 - 2D waveform/FFT가 acquisition과 독립된 rate로 갱신된다.
 
-### Phase 6: 3D, UDP, and Simulator
+### Phase 6: 3D, UDP, and Simulator Expansion
 
 목표:
 
@@ -1023,10 +1036,8 @@ FMCW_LiDAR/
 - point decimation/LOD 적용
 - UDP sender 구현
 - UDP receiver 테스트 도구 작성
-- fake digitizer mode
-- fake EDFA controller mode
-- fake MCU/scan mode
-- synthetic FMCW signal generator
+- 고속 synthetic FMCW signal generator와 fault injection
+- fake digitizer/EDFA/MCU의 timing, timeout, alarm 시나리오 확장
 - diagnostics export 구현
 
 완료 조건:
@@ -1073,6 +1084,7 @@ FMCW_LiDAR/
 6. 3D point cloud는 실시간성과 가벼움을 우선해 Qt/OpenGL 기반 renderer로 시작한다.
 7. 실시간 queue overflow 기본 정책은 stop으로 한다.
 8. UI는 Basic/Advanced view로 나눈다. Basic은 운용에 필요한 최소 설정만, Advanced는 sampling/trigger/DMA/FFT/segmentation/protocol 같은 상세 설정을 다룬다.
+9. v1 hardware acquisition trigger는 up chirp 시작 1회만 사용하며, trigger마다 full up+down period를 저장한 뒤 software에서 두 구간을 분리한다.
 
 ## 8. Recommended First Implementation Target
 

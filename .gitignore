@@ -49,3 +49,6 @@ outputs/*
 # Local IDE settings
 .idea/
 .vscode/
+
+# Machine-specific CMake paths and SDK locations
+CMakeUserPresets.json

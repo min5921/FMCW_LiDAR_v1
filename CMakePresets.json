@@ -1,0 +1,87 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 24,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "binaryDir": "${sourceDir}/build/preset-${presetName}",
+      "cacheVariables": {
+        "FMCW_BUILD_QT_APPS": "ON",
+        "FMCW_BUILD_TESTS": "ON"
+      }
+    },
+    {
+      "name": "windows-msvc-debug",
+      "displayName": "Windows MSVC Debug",
+      "inherits": "base",
+      "generator": "NMake Makefiles",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "FMCW_TARGET_PLATFORM": "WINDOWS"
+      }
+    },
+    {
+      "name": "windows-msvc-release",
+      "displayName": "Windows MSVC Release",
+      "inherits": "windows-msvc-debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    },
+    {
+      "name": "jetson-release",
+      "displayName": "Jetson Release",
+      "inherits": "base",
+      "generator": "Ninja",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Linux"
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "FMCW_TARGET_PLATFORM": "JETSON"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "windows-msvc-debug",
+      "configurePreset": "windows-msvc-debug"
+    },
+    {
+      "name": "windows-msvc-release",
+      "configurePreset": "windows-msvc-release"
+    },
+    {
+      "name": "jetson-release",
+      "configurePreset": "jetson-release"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "windows-msvc-debug",
+      "configurePreset": "windows-msvc-debug",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "jetson-release",
+      "configurePreset": "jetson-release",
+      "output": {
+        "outputOnFailure": true
+      }
+    }
+  ]
+}

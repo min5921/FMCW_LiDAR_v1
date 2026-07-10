@@ -1,0 +1,116 @@
+#pragma once
+
+#include <cstdint>
+#include <memory>
+#include <string>
+#include <vector>
+
+namespace fmcw {
+
+inline constexpr std::uint32_t kRawFrameFormatVersion = 1;
+
+enum class FrameKind {
+  FullChirpPeriod,
+};
+
+enum class SampleFormat {
+  SignedInt16,
+};
+
+enum class ByteOrder {
+  LittleEndian,
+  BigEndian,
+};
+
+enum class DigitizerChannel {
+  A,
+  B,
+};
+
+struct SegmentRange {
+  // Half-open sample interval: [start_sample, end_sample_exclusive).
+  std::uint32_t start_sample = 0;
+  std::uint32_t end_sample_exclusive = 0;
+
+  constexpr std::uint32_t length() const {
+    return end_sample_exclusive >= start_sample ? end_sample_exclusive - start_sample : 0;
+  }
+
+  constexpr bool validFor(std::uint32_t record_length) const {
+    return start_sample < end_sample_exclusive && end_sample_exclusive <= record_length;
+  }
+};
+
+struct TriggerMetadata {
+  std::uint64_t sequence = 0;
+  std::uint64_t timestamp_ns = 0;
+  std::int64_t period_jitter_ns = 0;
+  std::uint32_t missed_trigger_count = 0;
+  bool valid = false;
+};
+
+struct ScanPosition {
+  std::uint32_t x_index = 0;
+  std::uint32_t y_index = 0;
+  float x_angle_deg = 0.0F;
+  float y_angle_deg = 0.0F;
+  bool valid = false;
+};
+
+struct OpticalStateReference {
+  std::uint64_t revision = 0;
+  bool laser_enabled = false;
+  bool edfa_used = false;
+  bool edfa_output_enabled = false;
+};
+
+struct RawFrameMetadata {
+  std::uint32_t format_version = kRawFrameFormatVersion;
+  FrameKind frame_kind = FrameKind::FullChirpPeriod;
+  std::uint64_t frame_id = 0;
+  std::uint64_t host_timestamp_ns = 0;
+  std::uint64_t config_revision = 0;
+  TriggerMetadata trigger;
+  ScanPosition scan_position;
+  OpticalStateReference optical_state;
+  DigitizerChannel channel = DigitizerChannel::A;
+  SampleFormat sample_format = SampleFormat::SignedInt16;
+  ByteOrder byte_order = ByteOrder::LittleEndian;
+  double sample_rate_hz = 0.0;
+  std::uint32_t record_length = 0;
+  std::uint32_t pre_trigger_samples = 0;
+  std::uint32_t post_trigger_samples = 0;
+  SegmentRange up_segment;
+  SegmentRange down_segment;
+};
+
+struct RawFrame {
+  RawFrameMetadata metadata;
+  std::vector<std::int16_t> samples;
+};
+
+using RawFramePtr = std::shared_ptr<const RawFrame>;
+
+struct PointXYZI {
+  float x = 0.0F;
+  float y = 0.0F;
+  float z = 0.0F;
+  float intensity = 0.0F;
+  float velocity = 0.0F;
+};
+
+struct ProcessedFrame {
+  std::uint64_t frame_id = 0;
+  std::uint64_t config_revision = 0;
+  std::vector<float> up_fft_magnitude_db;
+  std::vector<float> down_fft_magnitude_db;
+  std::vector<float> distance_m;
+  std::vector<float> velocity_mps;
+  std::vector<PointXYZI> points;
+  double processing_latency_ms = 0.0;
+  std::string processing_note;
+};
+
+using ProcessedFramePtr = std::shared_ptr<const ProcessedFrame>;
+
+}  // namespace fmcw
