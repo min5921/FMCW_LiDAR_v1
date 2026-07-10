@@ -47,15 +47,24 @@ edfa:
 | `processing` | FFTW/CUDA, window/peak, queue | dB, bin, frame |
 | `udp` | IPv4 endpoint, packet version, backpressure | port, point |
 | `storage` | raw/processed toggle, split/flush, queue | GB, frame |
-| `ui` | Basic/Advanced, 2D/3D refresh rate | Hz |
+| `ui` | 2D/3D refresh rate, overlay, color map, last profile | Hz |
 | `calibration` | distance/velocity/angle correction | m, m/s, deg |
 | `mcu` | optional UART, ACK, retry | baud, ms |
 
 `chirp_segmentation.mode`는 `up_chirp_only`만 허용한다. Digitizer는 up chirp trigger에서 전체 up/down 주기를 한 번에 받고, `up_segment`와 `down_segment`의 half-open range `[start, end)`를 후단 처리에 전달한다.
 
-## Basic And Advanced
+## Single UI And Field Presentation
 
-Basic 화면은 운용자가 자주 쓰는 profile 선택, 저장 on/off, UDP on/off, UI mode와 plot rate를 노출한다. Advanced 화면은 sampling rate, sample point, DMA, trigger, laser/EDFA/MCU protocol, segmentation, FFT backend, queue, calibration을 포함한다.
+전역 Basic/Advanced mode는 schema version 2에서 제거했다. 모든 설정 페이지는 항상 접근 가능하며, field policy의 `primary`는 페이지에 바로 표시하고 `detailed`는 같은 페이지의 `Details` 영역에 표시한다. 이 구분은 접근 권한이나 별도 운용 mode가 아니다.
+
+Processing group에는 peak threshold/search range와 함께 `peak_tracking_enabled`, `peak_tracking_max_delta_bins`, `peak_reacquire_width_bins`, `peak_lost_policy`를 저장한다. 이 값은 실행 중 변경 가능한 runtime 설정이다.
+
+### Schema Version 2 Migration
+
+- full profile의 `profile.schema_version`을 `2`로 변경한다.
+- 더 이상 지원하지 않는 `ui.mode` key를 제거한다.
+- partial profile은 새 peak tracking key를 생략하면 built-in default를 상속한다.
+- export한 full profile에는 네 개 peak tracking key를 기록한다.
 
 각 field에는 변경 정책이 함께 등록된다.
 

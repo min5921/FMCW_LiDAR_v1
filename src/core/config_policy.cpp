@@ -14,15 +14,18 @@ bool contains(const std::array<std::string_view, Size>& values, std::string_view
 }
 
 ConfigFieldPolicy classify(std::string_view path) {
-  static constexpr std::array<std::string_view, 11> basic_paths = {
+  static constexpr std::array<std::string_view, 17> primary_paths = {
       "profile.id", "profile.name", "storage.raw_enabled", "storage.processed_enabled", "udp.enabled",
-      "ui.mode", "ui.plot_update_hz", "ui.point_cloud_update_hz", "ui.segment_overlay", "ui.color_map",
-      "ui.last_profile"};
-  static constexpr std::array<std::string_view, 12> runtime_paths = {
+      "ui.plot_update_hz", "ui.point_cloud_update_hz", "ui.segment_overlay", "ui.color_map", "ui.last_profile",
+      "processing.peak_threshold_db", "processing.peak_search_start_bin", "processing.peak_search_end_bin",
+      "processing.peak_tracking_enabled", "processing.peak_tracking_max_delta_bins",
+      "processing.peak_reacquire_width_bins", "processing.peak_lost_policy"};
+  static constexpr std::array<std::string_view, 15> runtime_paths = {
       "processing.dc_removal", "processing.normalize", "processing.peak_threshold_db",
       "processing.peak_search_start_bin", "processing.peak_search_end_bin", "storage.raw_enabled",
-      "storage.processed_enabled", "udp.enabled", "ui.mode", "ui.plot_update_hz",
-      "ui.point_cloud_update_hz", "ui.segment_overlay"};
+      "storage.processed_enabled", "udp.enabled", "ui.plot_update_hz", "ui.point_cloud_update_hz",
+      "ui.segment_overlay", "processing.peak_tracking_enabled", "processing.peak_tracking_max_delta_bins",
+      "processing.peak_reacquire_width_bins", "processing.peak_lost_policy"};
   static constexpr std::array<std::string_view, 7> preview_paths = {
       "chirp_segmentation.up_segment.start_sample", "chirp_segmentation.up_segment.end_sample_exclusive",
       "chirp_segmentation.down_segment.start_sample", "chirp_segmentation.down_segment.end_sample_exclusive",
@@ -30,7 +33,7 @@ ConfigFieldPolicy classify(std::string_view path) {
 
   ConfigFieldPolicy result;
   result.path = std::string(path);
-  result.exposure = contains(basic_paths, path) ? UiExposure::Basic : UiExposure::Advanced;
+  result.presentation = contains(primary_paths, path) ? FieldPresentation::Primary : FieldPresentation::Detailed;
   if (contains(runtime_paths, path)) {
     result.change_policy = ChangePolicy::Runtime;
   } else if (contains(preview_paths, path)) {
@@ -61,8 +64,8 @@ ConfigFieldPolicy policyFor(std::string_view path) {
   return found == policies.end() ? classify(path) : *found;
 }
 
-std::string toString(UiExposure exposure) {
-  return exposure == UiExposure::Basic ? "basic" : "advanced";
+std::string toString(FieldPresentation presentation) {
+  return presentation == FieldPresentation::Primary ? "primary" : "detailed";
 }
 
 std::string toString(ChangePolicy policy) {

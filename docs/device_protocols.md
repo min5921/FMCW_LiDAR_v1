@@ -86,4 +86,4 @@ EDFA profile mode:
 - `manual`: 통신 없이 운용자 제어 상태로 동작
 - `controlled`: status 확인 후 mode, 안전 범위 내 setpoint, activation ACK를 순서대로 확인
 
-Start는 controlled EDFA 출력 확인, MCU scan 시작, digitizer 시작 순서다. Stop과 오류 처리는 digitizer abort, MCU stop, EDFA output off 순서로 진행한다.
+Start는 controlled EDFA 출력 확인, digitizer arm, MCU scan 시작 순서다. Stop과 오류 처리는 MCU stop, digitizer abort/stop, EDFA output off 순서로 진행한다.

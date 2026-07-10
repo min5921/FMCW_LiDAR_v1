@@ -92,7 +92,14 @@ std::string toString(UdpBackpressurePolicy value) {
   return "latest_frame";
 }
 
-std::string toString(UiMode value) { return value == UiMode::Basic ? "basic" : "advanced"; }
+std::string toString(PeakLostPolicy value) {
+  switch (value) {
+    case PeakLostPolicy::HoldLast: return "hold_last";
+    case PeakLostPolicy::Reacquire: return "reacquire";
+    case PeakLostPolicy::StopAcquisition: return "stop_acquisition";
+  }
+  return "reacquire";
+}
 
 std::string toString(SerialParity value) {
   switch (value) {
@@ -172,8 +179,11 @@ bool fromString(std::string_view text, UdpBackpressurePolicy& value) {
                                  {"stop_sending", UdpBackpressurePolicy::StopSending}});
 }
 
-bool fromString(std::string_view text, UiMode& value) {
-  return parseEnum(text, value, {{"basic", UiMode::Basic}, {"advanced", UiMode::Advanced}});
+bool fromString(std::string_view text, PeakLostPolicy& value) {
+  return parseEnum(text, value, {{"hold_last", PeakLostPolicy::HoldLast},
+                                 {"reacquire", PeakLostPolicy::Reacquire},
+                                 {"stop_acquisition", PeakLostPolicy::StopAcquisition},
+                                 {"stop", PeakLostPolicy::StopAcquisition}});
 }
 
 bool fromString(std::string_view text, SerialParity& value) {

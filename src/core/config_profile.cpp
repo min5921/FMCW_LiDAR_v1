@@ -242,6 +242,12 @@ ConfigDocument ConfigProfileCodec::encode(const SystemConfig& config) {
   document.setNumber("processing.peak_threshold_db", config.processing.peak_threshold_db);
   setUnsigned(document, "processing.peak_search_start_bin", config.processing.peak_search_start_bin);
   setUnsigned(document, "processing.peak_search_end_bin", config.processing.peak_search_end_bin);
+  document.setBoolean("processing.peak_tracking_enabled", config.processing.peak_tracking_enabled);
+  setUnsigned(document, "processing.peak_tracking_max_delta_bins",
+              config.processing.peak_tracking_max_delta_bins);
+  setUnsigned(document, "processing.peak_reacquire_width_bins",
+              config.processing.peak_reacquire_width_bins);
+  document.setString("processing.peak_lost_policy", toString(config.processing.peak_lost_policy));
   setUnsigned(document, "processing.queue_capacity", config.processing.queue_capacity);
   document.setString("processing.overflow_policy", toString(config.processing.overflow_policy));
 
@@ -261,7 +267,6 @@ ConfigDocument ConfigProfileCodec::encode(const SystemConfig& config) {
   document.setNumber("storage.split_file_size_gb", config.storage.split_file_size_gb);
   setUnsigned(document, "storage.flush_interval_frames", config.storage.flush_interval_frames);
 
-  document.setString("ui.mode", toString(config.ui.mode));
   document.setNumber("ui.plot_update_hz", config.ui.plot_update_hz);
   document.setNumber("ui.point_cloud_update_hz", config.ui.point_cloud_update_hz);
   document.setBoolean("ui.segment_overlay", config.ui.segment_overlay);
@@ -383,6 +388,12 @@ bool ConfigProfileCodec::decode(const ConfigDocument& document, SystemConfig& co
   readNumber(document, "processing.peak_threshold_db", config.processing.peak_threshold_db, issues, source);
   readInteger(document, "processing.peak_search_start_bin", config.processing.peak_search_start_bin, issues, source);
   readInteger(document, "processing.peak_search_end_bin", config.processing.peak_search_end_bin, issues, source);
+  readBool(document, "processing.peak_tracking_enabled", config.processing.peak_tracking_enabled, issues, source);
+  readInteger(document, "processing.peak_tracking_max_delta_bins",
+              config.processing.peak_tracking_max_delta_bins, issues, source);
+  readInteger(document, "processing.peak_reacquire_width_bins",
+              config.processing.peak_reacquire_width_bins, issues, source);
+  readEnum(document, "processing.peak_lost_policy", config.processing.peak_lost_policy, issues, source);
   readInteger(document, "processing.queue_capacity", config.processing.queue_capacity, issues, source);
   readEnum(document, "processing.overflow_policy", config.processing.overflow_policy, issues, source);
 
@@ -402,7 +413,6 @@ bool ConfigProfileCodec::decode(const ConfigDocument& document, SystemConfig& co
   readNumber(document, "storage.split_file_size_gb", config.storage.split_file_size_gb, issues, source);
   readInteger(document, "storage.flush_interval_frames", config.storage.flush_interval_frames, issues, source);
 
-  readEnum(document, "ui.mode", config.ui.mode, issues, source);
   readNumber(document, "ui.plot_update_hz", config.ui.plot_update_hz, issues, source);
   readNumber(document, "ui.point_cloud_update_hz", config.ui.point_cloud_update_hz, issues, source);
   readBool(document, "ui.segment_overlay", config.ui.segment_overlay, issues, source);

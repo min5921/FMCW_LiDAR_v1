@@ -8,7 +8,7 @@
 
 namespace fmcw {
 
-inline constexpr std::uint32_t kConfigSchemaVersion = 1;
+inline constexpr std::uint32_t kConfigSchemaVersion = 2;
 
 enum class Coupling {
   Ac,
@@ -79,9 +79,10 @@ enum class UdpBackpressurePolicy {
   StopSending,
 };
 
-enum class UiMode {
-  Basic,
-  Advanced,
+enum class PeakLostPolicy {
+  HoldLast,
+  Reacquire,
+  StopAcquisition,
 };
 
 enum class SerialParity {
@@ -189,6 +190,10 @@ struct ProcessingConfig {
   double peak_threshold_db = -45.0;
   std::uint32_t peak_search_start_bin = 2;
   std::uint32_t peak_search_end_bin = 900;
+  bool peak_tracking_enabled = true;
+  std::uint32_t peak_tracking_max_delta_bins = 12;
+  std::uint32_t peak_reacquire_width_bins = 64;
+  PeakLostPolicy peak_lost_policy = PeakLostPolicy::Reacquire;
   std::uint32_t queue_capacity = 32;
   QueueOverflowPolicy overflow_policy = QueueOverflowPolicy::StopAcquisition;
 };
@@ -214,7 +219,6 @@ struct StorageConfig {
 };
 
 struct UiConfig {
-  UiMode mode = UiMode::Basic;
   double plot_update_hz = 30.0;
   double point_cloud_update_hz = 10.0;
   bool segment_overlay = true;
@@ -272,7 +276,7 @@ std::string toString(EdfaControlMode value);
 std::string toString(OpticalPowerUnit value);
 std::string toString(QueueOverflowPolicy value);
 std::string toString(UdpBackpressurePolicy value);
-std::string toString(UiMode value);
+std::string toString(PeakLostPolicy value);
 std::string toString(SerialParity value);
 
 bool fromString(std::string_view text, DigitizerChannel& value);
@@ -289,7 +293,7 @@ bool fromString(std::string_view text, EdfaControlMode& value);
 bool fromString(std::string_view text, OpticalPowerUnit& value);
 bool fromString(std::string_view text, QueueOverflowPolicy& value);
 bool fromString(std::string_view text, UdpBackpressurePolicy& value);
-bool fromString(std::string_view text, UiMode& value);
+bool fromString(std::string_view text, PeakLostPolicy& value);
 bool fromString(std::string_view text, SerialParity& value);
 
 }  // namespace fmcw

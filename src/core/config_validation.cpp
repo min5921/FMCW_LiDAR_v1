@@ -159,6 +159,23 @@ ValidationResult ConfigValidator::validate(const SystemConfig& config) {
     add(result, ValidationSeverity::Error, "processing.peak_search_end_bin", "Peak search range is outside the usable FFT bins",
         "Set start < end < segment_fft_length / 2");
   }
+  const auto peak_search_width = config.processing.peak_search_end_bin > config.processing.peak_search_start_bin
+      ? config.processing.peak_search_end_bin - config.processing.peak_search_start_bin
+      : 0U;
+  if (config.processing.peak_tracking_enabled &&
+      (config.processing.peak_tracking_max_delta_bins == 0U ||
+       config.processing.peak_tracking_max_delta_bins > peak_search_width)) {
+    add(result, ValidationSeverity::Error, "processing.peak_tracking_max_delta_bins",
+        "Peak tracking delta must fit inside the configured peak search range",
+        "Set peak_tracking_max_delta_bins between 1 and the peak search width");
+  }
+  if (config.processing.peak_tracking_enabled &&
+      (config.processing.peak_reacquire_width_bins < config.processing.peak_tracking_max_delta_bins ||
+       config.processing.peak_reacquire_width_bins > peak_search_width)) {
+    add(result, ValidationSeverity::Error, "processing.peak_reacquire_width_bins",
+        "Peak reacquire width must cover the tracking delta and fit inside the search range",
+        "Set peak_reacquire_width_bins between peak_tracking_max_delta_bins and the peak search width");
+  }
   if (config.processing.queue_capacity == 0 || config.storage.queue_capacity == 0 || config.udp.queue_capacity == 0) {
     add(result, ValidationSeverity::Error, "processing.queue_capacity", "All real-time queue capacities must be non-zero",
         "Set processing, storage, and UDP queue capacities above zero");

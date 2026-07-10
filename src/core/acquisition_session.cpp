@@ -5,6 +5,7 @@
 #include <chrono>
 #include <sstream>
 #include <string_view>
+#include <thread>
 #include <utility>
 
 namespace fmcw {
@@ -130,15 +131,20 @@ bool AcquisitionSession::start(std::string& error) {
       edfa_.emergencyOff(ignored);
       return false;
     }
+    if (config_.edfa.warmup_delay_ms > 0U) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(config_.edfa.warmup_delay_ms));
+    }
   }
-  if (config_.mcu.enabled && !mcu_.startScan(error)) {
+  // Arm the receiver before the MCU enables the trigger-producing scan waveform.
+  if (!digitizer_.start(error)) {
     std::string ignored;
     edfa_.emergencyOff(ignored);
     return false;
   }
-  if (!digitizer_.start(error)) {
+  if (config_.mcu.enabled && !mcu_.startScan(error)) {
     std::string ignored;
-    mcu_.emergencyStop(ignored);
+    digitizer_.abort(ignored);
+    digitizer_.stop(ignored);
     edfa_.emergencyOff(ignored);
     return false;
   }
@@ -212,7 +218,17 @@ bool AcquisitionSession::stopDevices(bool emergency, std::string& error) {
   bool success = true;
   std::string device_error;
 
+  // Remove the trigger source before aborting the digitizer DMA path.
+  if (config_.mcu.enabled) {
+    device_error.clear();
+    const bool stopped = emergency ? mcu_.emergencyStop(device_error) : mcu_.stopScan(device_error);
+    if (!stopped) {
+      appendError(error, "MCU stop", device_error);
+      success = false;
+    }
+  }
   if (running_ || digitizer_.telemetry().device.running) {
+    device_error.clear();
     if (!digitizer_.abort(device_error)) {
       appendError(error, "digitizer abort", device_error);
       success = false;
@@ -220,14 +236,6 @@ bool AcquisitionSession::stopDevices(bool emergency, std::string& error) {
     device_error.clear();
     if (!digitizer_.stop(device_error)) {
       appendError(error, "digitizer stop", device_error);
-      success = false;
-    }
-  }
-  if (config_.mcu.enabled) {
-    device_error.clear();
-    const bool stopped = emergency ? mcu_.emergencyStop(device_error) : mcu_.stopScan(device_error);
-    if (!stopped) {
-      appendError(error, "MCU stop", device_error);
       success = false;
     }
   }

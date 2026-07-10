@@ -1,5 +1,5 @@
 profile:
-  schema_version: 1
+  schema_version: 2
   id: default
   name: "Default FMCW LiDAR"
   description: "Safe default full-period acquisition profile"
@@ -86,6 +86,10 @@ processing:
   peak_threshold_db: -45
   peak_search_start_bin: 2
   peak_search_end_bin: 900
+  peak_tracking_enabled: true
+  peak_tracking_max_delta_bins: 12
+  peak_reacquire_width_bins: 64
+  peak_lost_policy: reacquire
   queue_capacity: 32
   overflow_policy: stop_acquisition
 udp:
@@ -105,7 +109,6 @@ storage:
   split_file_size_gb: 4
   flush_interval_frames: 128
 ui:
-  mode: basic
   plot_update_hz: 30
   point_cloud_update_hz: 10
   segment_overlay: true

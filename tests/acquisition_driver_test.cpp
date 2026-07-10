@@ -255,6 +255,7 @@ void testOptionalControlledDevicesAndChannelB() {
   config.digitizer.channel = fmcw::DigitizerChannel::B;
   config.edfa.mode = fmcw::EdfaMode::Controlled;
   config.edfa.port = "SIM";
+  config.edfa.warmup_delay_ms = 0;
   config.mcu.enabled = true;
   config.mcu.port = "SIM";
   std::string error;
@@ -262,7 +263,7 @@ void testOptionalControlledDevicesAndChannelB() {
   expect(session.configure(config, 22, error), "controlled fake session configures");
   expect(session.connect(error), "controlled fake session connects");
   expect(mcu.uploadWaveform({{1, 2, 3, 4, true}}, error), "fake MCU waveform loads before Start");
-  expect(session.start(error), "controlled EDFA and MCU start before acquisition");
+  expect(session.start(error), "controlled EDFA starts, digitizer arms, and MCU scan starts last");
   fmcw::RawFrame frame;
   expect(session.waitForFrame(frame, std::chrono::milliseconds(10), error) == fmcw::FrameWaitResult::FrameReady,
          "controlled fake session returns a frame");
@@ -272,6 +273,26 @@ void testOptionalControlledDevicesAndChannelB() {
   expect(session.telemetry().mcu.scan_enabled, "core telemetry exposes active MCU scan state");
   expect(session.stop(error), "controlled session stops devices");
   expect(!edfa.status().output_enabled && !mcu.status().scan_enabled, "Stop disables EDFA output and MCU scan");
+}
+
+void testScannerStartFailureRollsBackArmedDevices() {
+  fmcw::FakeDigitizer digitizer;
+  fmcw::FakeEdfaController edfa;
+  fmcw::FakeMcuController mcu;
+  fmcw::AcquisitionSession session(digitizer, edfa, mcu);
+  fmcw::SystemConfig config;
+  config.edfa.mode = fmcw::EdfaMode::Controlled;
+  config.edfa.port = "SIM";
+  config.edfa.warmup_delay_ms = 0;
+  config.mcu.enabled = true;
+  config.mcu.port = "SIM";
+  std::string error;
+
+  expect(session.configure(config, 23, error) && session.connect(error),
+         "rollback test session configures and connects");
+  expect(!session.start(error), "Start fails when the MCU waveform is not loaded");
+  expect(!digitizer.telemetry().device.running && !edfa.status().output_enabled && !mcu.status().scan_enabled,
+         "failed scanner Start rolls back the armed digitizer and EDFA output");
 }
 
 void testFiniteFakeAcquisition() {
@@ -311,6 +332,7 @@ int main() {
   testSerialControllers();
   testFakeFullPeriodSession();
   testOptionalControlledDevicesAndChannelB();
+  testScannerStartFailureRollsBackArmedDevices();
   testFiniteFakeAcquisition();
   testAlazarBuildGate();
 

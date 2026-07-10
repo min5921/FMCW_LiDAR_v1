@@ -31,6 +31,10 @@ void testDefaultsAndRoundTrip() {
   expect(decoded.config.digitizer.channel == fmcw::DigitizerChannel::A, "round trip preserves single channel A");
   expect(decoded.config.chirp_segmentation.mode == fmcw::ChirpTriggerMode::UpChirpOnly,
          "round trip preserves up-chirp-only trigger mode");
+  expect(decoded.config.profile.schema_version == 2, "round trip uses the single-UI schema version");
+  expect(decoded.config.processing.peak_tracking_enabled &&
+             decoded.config.processing.peak_lost_policy == fmcw::PeakLostPolicy::Reacquire,
+         "round trip preserves peak tracking controls");
 }
 
 void testStrictYamlAndLayering() {
@@ -39,6 +43,9 @@ void testStrictYamlAndLayering() {
 
   const auto malformed = fmcw::ConfigProfileCodec::decodeYaml("digitizer:\n   sample_point: 100\n", "indent");
   expect(!malformed.ok(), "non-two-space indentation is rejected");
+
+  const auto removed_ui_mode = fmcw::ConfigProfileCodec::decodeYaml("ui:\n  mode: basic\n", "legacy-ui-mode");
+  expect(!removed_ui_mode.ok(), "removed global Basic/Advanced mode is rejected");
 
   const std::filesystem::path source_root = FMCW_TEST_SOURCE_DIR;
   const auto layered = fmcw::ConfigProfileCodec::loadLayered({
@@ -63,18 +70,34 @@ void testStrictYamlAndLayering() {
   expect(!fmcw::ConfigValidator::validate(jetson.config).hasErrors(), "Jetson platform profile passes validation");
 }
 
-void testExposureAndChangePolicy() {
-  expect(fmcw::policyFor("storage.raw_enabled").exposure == fmcw::UiExposure::Basic,
-         "raw save toggle is exposed in Basic mode");
-  expect(fmcw::policyFor("digitizer.sample_rate_hz").exposure == fmcw::UiExposure::Advanced,
-         "sampling rate is Advanced-only");
+void testPresentationAndChangePolicy() {
+  expect(fmcw::policyFor("storage.raw_enabled").presentation == fmcw::FieldPresentation::Primary,
+         "raw save toggle is a primary page control");
+  expect(fmcw::policyFor("digitizer.sample_rate_hz").presentation == fmcw::FieldPresentation::Detailed,
+         "sampling rate is shown in the Digitizer page details");
   expect(fmcw::policyFor("digitizer.sample_rate_hz").change_policy == fmcw::ChangePolicy::RestartRequired,
          "sampling rate requires restart");
   expect(fmcw::policyFor("processing.peak_threshold_db").change_policy == fmcw::ChangePolicy::Runtime,
          "peak threshold applies at runtime");
+  expect(fmcw::policyFor("processing.peak_tracking_max_delta_bins").change_policy ==
+             fmcw::ChangePolicy::Runtime,
+         "peak tracking delta applies at runtime");
   expect(fmcw::policyFor("chirp_segmentation.up_segment.start_sample").change_policy ==
              fmcw::ChangePolicy::PreviewOnly,
          "segment boundary applies only during preview");
+}
+
+void testPeakTrackingValidation() {
+  fmcw::SystemConfig legacy_schema;
+  legacy_schema.profile.schema_version = 1;
+  expect(fmcw::ConfigValidator::validate(legacy_schema).hasErrors(),
+         "schema version 1 requires migration before Start");
+
+  fmcw::SystemConfig invalid;
+  invalid.processing.peak_tracking_max_delta_bins = 80;
+  invalid.processing.peak_reacquire_width_bins = 40;
+  const auto validation = fmcw::ConfigValidator::validate(invalid);
+  expect(validation.hasErrors(), "reacquire width smaller than tracking delta is rejected");
 }
 
 void testActiveAndPendingConfiguration() {
@@ -143,7 +166,8 @@ void testStartGateSnapshotAndOverflowStop() {
 int main() {
   testDefaultsAndRoundTrip();
   testStrictYamlAndLayering();
-  testExposureAndChangePolicy();
+  testPresentationAndChangePolicy();
+  testPeakTrackingValidation();
   testActiveAndPendingConfiguration();
   testStartGateSnapshotAndOverflowStop();
 

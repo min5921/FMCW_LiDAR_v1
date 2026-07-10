@@ -83,16 +83,13 @@ UI는 기존 단순 실시간 plot 화면에서 장비 운용용 패널로 확�
 
 필수 화면:
 
-- Dashboard
-- Digitizer Setup
-- Laser Setup
-- Optical/EDFA Setup
-- Scan Setup
-- Signal Processing
-- Network/UDP
-- Data Logging
-- 2D Plot
-- 3D Viewer
+- Overview
+- Live View: Time Domain, FFT, Peak Analysis, Distance/Velocity, B-scan, 3D
+- Digitizer
+- Laser / EDFA
+- Scan / MCU
+- Processing
+- Storage / UDP
 - System Log
 
 필수 사용자 흐름:
@@ -100,7 +97,7 @@ UI는 기존 단순 실시간 plot 화면에서 장비 운용용 패널로 확�
 1. 장비 연결 확인
 2. 설정 profile 선택 또는 새 설정 작성
 3. 설정값 검증
-4. Preview 또는 test acquisition
+4. 설정 validation 및 chirp segmentation snapshot 확인
 5. Start acquisition
 6. 실시간 plot/point cloud 확인
 7. raw/processed 저장 여부 확인
@@ -131,7 +128,9 @@ UI 선택 기준:
 - 자주 쓰는 설정은 preset/profile로 저장한다.
 - Start/Stop, Save, UDP, Laser, Scanner, Digitizer 상태를 색상과 텍스트로 동시에 표시한다.
 - 오류 메시지는 장비명, 원인, 사용자가 할 다음 행동을 포함한다.
-- 초보자용 Basic view와 전문가용 Advanced view를 제공한다.
+- 전역 Basic/Advanced 모드는 사용하지 않고 모든 설정 페이지를 같은 navigation에서 제공한다.
+- 자주 쓰지 않는 설정은 해당 페이지 내부 `Details` 영역으로 접되 접근 권한이나 별도 UI mode로 숨기지 않는다.
+- 시스템 acquisition과 scanner 동작은 상단의 한 개 global START/STOP으로 제어한다.
 - 실시간 화면에서는 프레임률, drop count, 저장 속도, GPU/CPU 처리 시간, UDP 송신률을 항상 볼 수 있어야 한다.
 - 로그는 Info, Warning, Error, Critical로 필터링할 수 있어야 한다.
 - 측정 session마다 설정 snapshot, 시작/종료 시간, 저장 파일 경로를 자동 기록한다.
@@ -142,11 +141,7 @@ UI 선택 기준:
 - Jetson/Linux UI: Qt 6 로컬 UI
 - 3D viewer: Qt/OpenGL 기반 경량 point cloud renderer
 
-Basic/Advanced view 기준:
-
-- Basic view: 연결 상태, profile 선택, Start/Stop, 저장 on/off, laser/EDFA/MCU 상태, 주요 plot range, 현재 frame/throughput/drop count만 표시한다.
-- Advanced view: sampling rate, sample point, DMA buffer, trigger delay, chirp segmentation, FFT backend, queue limit, UDP packet, calibration, device protocol 설정을 표시한다.
-- 위험하거나 장비 재시작이 필요한 값은 Advanced view에서만 수정 가능하게 한다.
+화면 책임과 Qt runtime 계약은 `docs/gui_runtime_requirements.md`를 따른다. Overview는 상태와 session summary만 표시하고, 실시간 plot은 Live View가 전담한다. 실행 중 변경 가능한 값과 restart-required 값은 각 field 옆 상태로 구분한다.
 
 ### 3.2 Digitizer Board Setup
 
@@ -299,11 +294,12 @@ legacy 참고:
 - Trigger shift
 - Scanner port
 - Scanner sample rate
-- Scanner start/stop/re-init
+- Scanner waveform upload/reconnect/readiness
 
 스캔 UX 요구사항:
 
 - scanner 연결 상태와 응답 상태를 구분해서 표시한다.
+- Scan / MCU 페이지에는 별도 Start/Stop을 두지 않고 global START/STOP과 연동 상태만 표시한다.
 - Start acquisition 전에 scanner ready, digitizer ready, trigger ready를 모두 확인한다.
 - 스캔 패턴 preview를 2D로 표시한다.
 - bidirectional scan일 때 짝수/홀수 line의 X 방향 반전을 UI에 표시한다.
@@ -336,11 +332,12 @@ legacy 참고:
 6. FFT
 7. Magnitude dB 변환
 8. Peak detection
-9. Extracted up/down chirp matching
-10. Distance calculation
-11. Velocity calculation
-12. XYZ point 변환
-13. Heatmap/point cloud 갱신
+9. Peak index tracking, loss detection, reacquire
+10. Extracted up/down chirp matching
+11. Distance calculation
+12. Velocity calculation
+13. XYZ point 변환
+14. Heatmap/point cloud 갱신
 
 ### 3.5.1 Chirp Segmentation
 
@@ -361,9 +358,10 @@ legacy 참고:
 
 UI 요구사항:
 
-- Raw waveform preview에 trigger, up segment, down segment, guard zone을 색상 overlay로 표시한다.
+- Processing 페이지는 사용자가 요청한 한 개 full-period frame을 고정 snapshot으로 표시하고 trigger, up segment, down segment, guard zone을 색상 overlay로 표시한다.
 - segment start/end는 sample index와 시간 단위(us/ns)를 함께 보여준다.
-- 사용자가 Preview 상태에서 segment boundary를 조정하고 즉시 FFT preview를 볼 수 있어야 한다.
+- 사용자가 고정 snapshot에서 segment boundary를 조정하면 overlay와 validation 결과를 즉시 갱신한다.
+- 연속 실시간 waveform은 Live View의 Time Domain 탭에서만 표시한다.
 - segment가 record 밖으로 나가거나 서로 겹치면 Start를 막는다.
 - trigger period jitter, missed period, segment clipping count를 diagnostics에 기록한다.
 
@@ -396,7 +394,9 @@ CPU FFT 요구사항:
 - GPU FFT 실패 시 기본 정책은 acquisition stop으로 한다.
 - FFTW fallback은 디버그/검증 모드에서만 수동 선택한다.
 - processing queue 길이, 처리 지연, drop count를 실시간 표시한다.
-- peak detection threshold와 search range는 실행 중 변경 가능해야 한다.
+- peak detection threshold, search range, tracking delta, reacquire width, lost policy는 실행 중 변경 가능해야 한다.
+- v1 peak tracking은 한 B-scan line 안의 연속 A-scan continuity를 기준으로 up/down chirp에 각각 적용한다.
+- held peak는 표시할 수 있지만 invalid 결과로 기록하며 거리/속도/UDP 유효값으로 사용하지 않는다.
 - 설정 변경이 처리 결과에 반영된 frame 번호를 기록한다.
 - raw replay 모드에서도 동일한 processing pipeline을 사용한다.
 - GPU FFT와 CPU FFT 결과 차이를 검증하는 regression test를 제공한다.
@@ -419,6 +419,12 @@ CPU FFT 요구사항:
 - Distance vs pixel
 - Velocity vs pixel
 - B-scan heatmap
+
+Live View plot 소유권:
+
+- FFT spectrum은 FFT 탭에서만 표시한다.
+- Peak Analysis는 FFT를 중복 표시하지 않고 Peak Index vs A-scan과 Peak Value dB vs A-scan을 표시한다.
+- B-scan은 `X Pixel x B Scan` Z heatmap으로 표시하며 distance trend line으로 대체하지 않는다.
 
 UI 기능:
 
@@ -887,7 +893,7 @@ FMCW_LiDAR/
 - CPU FFT는 FFTW로 결정
 - raw 저장은 binary + JSON metadata로 결정
 - queue overflow 기본 정책은 stop으로 결정
-- Basic/Advanced view 기준 확정
+- 단일 navigation과 페이지 내부 Primary/Details field 기준 확정
 
 완료 조건:
 
@@ -931,7 +937,7 @@ FMCW_LiDAR/
 
 - YAML profile schema 작성
 - `digitizer`, `laser`, `edfa`, `scan`, `chirp_segmentation`, `processing`, `udp`, `storage`, `ui`, `calibration`, `mcu` 설정 그룹 구현
-- Basic/Advanced view에 따른 설정 노출 기준 구현
+- 전역 UI mode 없이 field별 Primary/Details presentation 기준 구현
 - 설정 validation rule 구현
 - pending change와 restart-required 표시
 - Start/Stop state machine 구현
@@ -941,7 +947,7 @@ FMCW_LiDAR/
 
 - 잘못된 설정은 Start 전에 막힌다.
 - Start 시점의 config snapshot이 session metadata에 저장된다.
-- Basic view와 Advanced view의 설정 범위가 분리된다.
+- 모든 설정 페이지가 단일 navigation에서 접근 가능하고 restart-required 상태가 field별로 구분된다.
 
 ### Phase 3: Acquisition and Device Drivers
 
@@ -981,7 +987,9 @@ FMCW_LiDAR/
 - CUDA/cuFFT backend 정리
 - CPU FFTW backend 구현
 - GPU FFT와 CPU FFT 결과 비교 테스트 작성
-- DC removal, window, FFT, peak detection, distance/velocity 처리 구현
+- DC removal, window, FFT, peak detection/tracking, distance/velocity 처리 구현
+- scan line accumulator와 B-scan matrix 구현
+- UI용 immutable waveform/FFT/peak/B-scan snapshot publisher 구현
 - full-period raw buffer에서 up/down segment extraction 적용
 - raw binary writer 구현
 - JSON metadata sidecar 저장 구현
@@ -1004,17 +1012,17 @@ FMCW_LiDAR/
 
 작업:
 
-- Dashboard/status bar
-- Digitizer Setup
-- Laser Setup
-- Optical/EDFA Setup
-- Scan/MCU Setup
-- Signal Processing Setup
-- Data Logging Setup
-- Network/UDP Setup
+- Overview/status bar
+- global command bar와 단일 START/STOP
+- Digitizer
+- Laser / EDFA
+- Scan / MCU
+- Processing
+- Storage / UDP
 - System Log
-- 2D raw waveform plot
-- FFT magnitude plot
+- Live View: Time Domain, FFT, Peak Analysis, Distance/Velocity, B-scan
+- on-demand chirp segmentation snapshot
+- page view model과 immutable UI snapshot publisher
 - Health/Safety checklist
 - session summary
 
@@ -1022,7 +1030,8 @@ FMCW_LiDAR/
 
 - UI에서 profile 선택, validation, Start, Stop, Save on/off가 가능하다.
 - Start 실패 시 사용자가 이해할 수 있는 오류가 표시된다.
-- 2D waveform/FFT가 acquisition과 독립된 rate로 갱신된다.
+- waveform/FFT/peak/B-scan이 acquisition과 독립된 rate로 갱신된다.
+- digitizer가 arm된 뒤 MCU scan이 시작되고, Stop 시 MCU trigger가 먼저 차단된다.
 
 ### Phase 6: 3D, UDP, and Simulator Expansion
 
@@ -1083,8 +1092,11 @@ FMCW_LiDAR/
 5. raw 저장은 고속 binary + JSON metadata로 시작한다.
 6. 3D point cloud는 실시간성과 가벼움을 우선해 Qt/OpenGL 기반 renderer로 시작한다.
 7. 실시간 queue overflow 기본 정책은 stop으로 한다.
-8. UI는 Basic/Advanced view로 나눈다. Basic은 운용에 필요한 최소 설정만, Advanced는 sampling/trigger/DMA/FFT/segmentation/protocol 같은 상세 설정을 다룬다.
+8. UI는 전역 Basic/Advanced mode 없이 단일 navigation으로 구성하고, 상세 설정은 각 페이지 내부 `Details` 영역에서 제공한다.
 9. v1 hardware acquisition trigger는 up chirp 시작 1회만 사용하며, trigger마다 full up+down period를 저장한 뒤 software에서 두 구간을 분리한다.
+10. acquisition과 scanner는 한 개 global START/STOP으로 운용하며 digitizer를 먼저 arm하고 MCU trigger를 마지막에 시작한다.
+11. chirp segmentation 설정 graph는 연속 실시간 plot이 아니라 요청 시 고정되는 full-period snapshot이다.
+12. FFT spectrum은 Live View FFT 탭만 소유하며 Peak Analysis는 peak index/value와 tracking 상태만 표시한다.
 
 ## 8. Recommended First Implementation Target
 
