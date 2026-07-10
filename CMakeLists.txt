@@ -14,6 +14,7 @@ option(FMCW_BUILD_QT_APPS "Build Qt desktop applications" ON)
 option(FMCW_BUILD_TESTS "Build core contract tests" ON)
 option(FMCW_WITH_FFTW "Enable FFTW CPU backend when fftw3 is available" ON)
 option(FMCW_WITH_CUDA "Enable CUDA/cuFFT backend when CUDA is available" ON)
+option(FMCW_WITH_ALAZAR "Enable AlazarTech ATS-SDK adapter when the SDK is available" ON)
 
 set(FMCW_TARGET_PLATFORM "AUTO" CACHE STRING "Target platform: AUTO, WINDOWS, or JETSON")
 set_property(CACHE FMCW_TARGET_PLATFORM PROPERTY STRINGS AUTO WINDOWS JETSON)

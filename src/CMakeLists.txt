@@ -1,4 +1,5 @@
 set(FMCW_CORE_SOURCES
+  core/acquisition_session.cpp
   core/app_version.cpp
   core/config_document.cpp
   core/config_manager.cpp
@@ -9,6 +10,15 @@ set(FMCW_CORE_SOURCES
   core/logging.cpp
   core/operation_controller.cpp
   core/system_state.cpp
+  drivers/alazar/alazar_digitizer.cpp
+  drivers/edfa/edfa_protocol.cpp
+  drivers/edfa/edfa_serial_controller.cpp
+  drivers/mcu/mcu_protocol.cpp
+  drivers/mcu/mcu_serial_controller.cpp
+  drivers/serial/serial_transport.cpp
+  drivers/simulator/fake_digitizer.cpp
+  drivers/simulator/fake_edfa.cpp
+  drivers/simulator/fake_mcu.cpp
 )
 
 add_library(fmcw_core STATIC ${FMCW_CORE_SOURCES})
@@ -28,6 +38,41 @@ if(FMCW_TARGET_PLATFORM STREQUAL "WINDOWS")
   target_compile_definitions(fmcw_core PUBLIC FMCW_TARGET_WINDOWS=1)
 else()
   target_compile_definitions(fmcw_core PUBLIC FMCW_TARGET_JETSON=1)
+endif()
+
+set(FMCW_HAS_ALAZAR_SDK OFF)
+if(FMCW_WITH_ALAZAR)
+  find_path(ALAZAR_SDK_INCLUDE_DIR
+    NAMES AlazarApi.h AlazarCmd.h AlazarError.h
+    HINTS "${ALAZAR_SDK_ROOT}"
+    PATH_SUFFIXES include Samples_C/Include
+  )
+  if(FMCW_TARGET_PLATFORM STREQUAL "WINDOWS")
+    find_library(ALAZAR_SDK_LIBRARY
+      NAMES ATSApi
+      HINTS "${ALAZAR_SDK_ROOT}"
+      PATH_SUFFIXES lib lib/x64 Samples_C/Library Samples_C/Library/x64
+    )
+  else()
+    find_library(ALAZAR_SDK_LIBRARY
+      NAMES ATSApi
+      HINTS "${ALAZAR_SDK_ROOT}" /usr/local/AlazarTech
+      PATH_SUFFIXES lib lib64
+    )
+  endif()
+  if(ALAZAR_SDK_INCLUDE_DIR AND ALAZAR_SDK_LIBRARY)
+    set(FMCW_HAS_ALAZAR_SDK ON)
+    target_include_directories(fmcw_core PRIVATE "${ALAZAR_SDK_INCLUDE_DIR}")
+    target_link_libraries(fmcw_core PRIVATE "${ALAZAR_SDK_LIBRARY}")
+  endif()
+endif()
+
+if(FMCW_HAS_ALAZAR_SDK)
+  target_compile_definitions(fmcw_core PRIVATE FMCW_HAS_ALAZAR_SDK=1)
+  message(STATUS "AlazarTech ATS-SDK adapter: enabled")
+else()
+  target_compile_definitions(fmcw_core PRIVATE FMCW_HAS_ALAZAR_SDK=0)
+  message(STATUS "AlazarTech ATS-SDK adapter: disabled (set ALAZAR_SDK_ROOT to enable)")
 endif()
 
 if(FMCW_BUILD_QT_APPS)

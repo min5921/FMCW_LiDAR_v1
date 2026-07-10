@@ -49,7 +49,23 @@ Verification:
 
 ## Phase 3: Acquisition and Device Drivers
 
-Status: pending
+Status: done
+
+- `AcquisitionSession` coordinates optional EDFA, optional MCU, and digitizer start/stop safety order.
+- Core telemetry exposes digitizer frame/DMA status, EDFA bypass/output state, and MCU waveform/scan state.
+- Fake A/B single-channel digitizer produces deterministic up-triggered full-period frames with up/down segment metadata.
+- Fake EDFA and MCU adapters allow acquisition with no connected hardware; EDFA `none` and MCU disabled are explicit bypass states.
+- Windows COM and Jetson/Linux tty transports share MCU line and CivilLaser EDFA binary protocol controllers.
+- The Alazar adapter uses NPT AutoDMA and is build-gated by ATS-SDK discovery for `ATSApi.lib` or `libATSApi.so`.
+- Hardware acceptance procedures distinguish Windows SDK validation from exact-board Jetson arm64 driver validation.
+
+Verification:
+
+- Windows MSVC/Qt no-SDK build completed with the Alazar adapter disabled and simulator path enabled.
+- Existing core/config tests and the new acquisition/device test passed through CTest.
+- EDFA packet examples from the vendor document, checksum rejection, MCU ACK/count handling, scripted serial controllers, optional-device safety, channel A/B full-period frames, and telemetry are covered.
+- The SDK-enabled Alazar source path compiled against the preserved vendor headers; only vendor-header code-page warnings remained.
+- Actual Windows/Jetson board, MCU port, and EDFA optical-output acceptance remain hardware-required checks documented in `hardware_acceptance.md`.
 
 ## Phase 4: Processing and Storage Pipeline
 

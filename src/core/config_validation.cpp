@@ -179,9 +179,9 @@ ValidationResult ConfigValidator::validate(const SystemConfig& config) {
   }
 
   if (config.scan.x_start_deg >= config.scan.x_end_deg || config.scan.y_start_deg >= config.scan.y_end_deg ||
-      config.scan.x_pixel_count == 0 || config.scan.y_line_count == 0 || !(config.scan.line_time_ms > 0.0)) {
+      config.scan.x_pixel_count < 2 || config.scan.y_line_count < 2 || !(config.scan.line_time_ms > 0.0)) {
     add(result, ValidationSeverity::Error, "scan", "Scan ranges, dimensions, and line time are invalid",
-        "Set increasing angle ranges and non-zero scan dimensions");
+        "Set increasing angle ranges and at least two points on each scan axis");
   }
   if (digitizer.a_scan_count != config.scan.x_pixel_count || digitizer.b_scan_count != config.scan.y_line_count) {
     add(result, ValidationSeverity::Error, "digitizer.a_scan_count",

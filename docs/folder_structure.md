@@ -118,6 +118,9 @@ legacy/EDFA-Amplifier-V20240219/
 - `drivers/`: Alazar, MTI, serial, UDP, OS별 adapter
 - `drivers/alazar/`: Windows/Jetson 공통 AlazarTech adapter와 OS별 SDK wrapper
 - `drivers/edfa/`: EDFA optional driver, output on/off, optical output setting, simulator
+- `drivers/mcu/`: STM32 waveform command/ACK protocol과 controller
+- `drivers/serial/`: Win32 COM과 Jetson/Linux tty 공통 transport
+- `drivers/simulator/`: 장비 없는 full-period acquisition과 optional device simulator
 - `processing/`: GPU FFT, CPU FFT, peak detection, distance/velocity
 - `storage/`: raw writer, processed writer
 - `visualization/`: 2D plot, heatmap, 3D point cloud 공통 로직

@@ -125,6 +125,7 @@ struct DigitizerConfig {
   std::uint32_t post_trigger_samples = 3968;
   std::uint32_t timeout_ms = 1000;
   std::uint32_t dma_buffer_count = 8;
+  bool fifo_only_streaming = true;
   AcquisitionMode acquisition_mode = AcquisitionMode::Continuous;
   std::uint32_t finite_frame_count = 1;
 };

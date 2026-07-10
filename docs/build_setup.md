@@ -25,6 +25,12 @@ cmake --build --preset windows-msvc-debug
 ctest --preset windows-msvc-debug
 ```
 
+AlazarTech hardware adapter를 활성화하려면 ATS-SDK root를 지정한다. CMake가 `AlazarApi.h`, `AlazarCmd.h`, `AlazarError.h`와 `ATSApi.lib`를 모두 찾으면 adapter가 enabled로 표시된다. SDK가 없으면 simulator와 나머지 앱은 계속 빌드된다.
+
+```powershell
+cmake --preset windows-msvc-release -DALAZAR_SDK_ROOT=C:\AlazarTech\ATS-SDK\26.2.0
+```
+
 ## Jetson/Linux
 
 Required for the Qt application:
@@ -36,19 +42,19 @@ Required for the Qt application:
 - AlazarTech Linux SDK and driver support verified for the exact board and Jetson PCIe connection.
 
 ```bash
-cmake --preset jetson-release
+cmake --preset jetson-release -DALAZAR_SDK_ROOT=/usr/local/AlazarTech
 cmake --build --preset jetson-release
 ctest --preset jetson-release
 ```
 
 ## External SDK Roots
 
-The following CMake cache variables are reserved for dependency discovery as the drivers are implemented:
+The following CMake cache variables are used for dependency discovery:
 
-- `ALAZAR_SDK_ROOT`: AlazarTech headers and platform libraries.
+- `ALAZAR_SDK_ROOT`: AlazarTech headers and `ATSApi.lib`/`libATSApi.so` platform library.
 - `FFTW_ROOT`: FFTW headers and libraries when package discovery is insufficient.
 
-CUDA is discovered through the installed CMake CUDA toolkit support. EDFA serial/FTDI support must use the operating system driver or a separately installed vendor package; vendor executables are not runtime dependencies of the new application.
+CUDA is discovered through the installed CMake CUDA toolkit support. EDFA/MCU serial support uses Win32 COM or POSIX tty directly; FTDI or USB-UART devices still require their operating system driver, but vendor control executables are not runtime dependencies.
 
 ## Current Workspace Check
 

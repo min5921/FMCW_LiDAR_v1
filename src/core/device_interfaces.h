@@ -6,6 +6,7 @@
 #include <chrono>
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace fmcw {
 
@@ -74,14 +75,30 @@ class IEdfaController {
   virtual bool emergencyOff(std::string& error) = 0;
 };
 
+struct McuWaveformFrame {
+  std::uint16_t a = 0;
+  std::uint16_t b = 0;
+  std::uint16_t c = 0;
+  std::uint16_t d = 0;
+  bool trigger = false;
+};
+
+struct McuStatus {
+  DeviceStatus device;
+  std::uint32_t waveform_points = 0;
+  bool scan_enabled = false;
+  std::string last_ack;
+};
+
 class IMcuController {
  public:
   virtual ~IMcuController() = default;
   virtual std::string name() const = 0;
-  virtual DeviceStatus status() const = 0;
+  virtual McuStatus status() const = 0;
   virtual bool connect(std::string& error) = 0;
   virtual void disconnect() = 0;
   virtual bool configure(const SystemConfig& config, std::string& error) = 0;
+  virtual bool uploadWaveform(const std::vector<McuWaveformFrame>& frames, std::string& error) = 0;
   virtual bool startScan(std::string& error) = 0;
   virtual bool stopScan(std::string& error) = 0;
   virtual bool emergencyStop(std::string& error) = 0;

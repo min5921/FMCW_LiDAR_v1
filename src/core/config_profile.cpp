@@ -183,6 +183,7 @@ ConfigDocument ConfigProfileCodec::encode(const SystemConfig& config) {
   setUnsigned(document, "digitizer.post_trigger_samples", config.digitizer.post_trigger_samples);
   setUnsigned(document, "digitizer.timeout_ms", config.digitizer.timeout_ms);
   setUnsigned(document, "digitizer.dma_buffer_count", config.digitizer.dma_buffer_count);
+  document.setBoolean("digitizer.fifo_only_streaming", config.digitizer.fifo_only_streaming);
   document.setString("digitizer.acquisition_mode", toString(config.digitizer.acquisition_mode));
   setUnsigned(document, "digitizer.finite_frame_count", config.digitizer.finite_frame_count);
 
@@ -318,6 +319,7 @@ bool ConfigProfileCodec::decode(const ConfigDocument& document, SystemConfig& co
   readInteger(document, "digitizer.post_trigger_samples", config.digitizer.post_trigger_samples, issues, source);
   readInteger(document, "digitizer.timeout_ms", config.digitizer.timeout_ms, issues, source);
   readInteger(document, "digitizer.dma_buffer_count", config.digitizer.dma_buffer_count, issues, source);
+  readBool(document, "digitizer.fifo_only_streaming", config.digitizer.fifo_only_streaming, issues, source);
   readEnum(document, "digitizer.acquisition_mode", config.digitizer.acquisition_mode, issues, source);
   readInteger(document, "digitizer.finite_frame_count", config.digitizer.finite_frame_count, issues, source);
 

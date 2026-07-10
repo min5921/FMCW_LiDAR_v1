@@ -26,6 +26,7 @@ digitizer:
   post_trigger_samples: 3968
   timeout_ms: 1000
   dma_buffer_count: 8
+  fifo_only_streaming: true
   acquisition_mode: continuous
   finite_frame_count: 1
 laser:
