@@ -1,0 +1,11 @@
+profile:
+  description: "Windows workstation platform layer"
+processing:
+  fft_backend: cuda
+  queue_capacity: 32
+storage:
+  output_directory: "data/raw"
+  queue_capacity: 64
+ui:
+  plot_update_hz: 30
+  point_cloud_update_hz: 10

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core/config_types.h"
 #include "core/frame_types.h"
 
 #include <cstddef>
@@ -64,10 +65,6 @@ class IProcessedFrameWriter {
   virtual bool flush(std::string& error) = 0;
   virtual bool finalize(std::string& error) = 0;
   virtual WriterStatus status() const = 0;
-};
-
-enum class QueueOverflowPolicy {
-  StopAcquisition,
 };
 
 enum class EnqueueResult {

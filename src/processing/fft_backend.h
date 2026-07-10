@@ -1,15 +1,12 @@
 #pragma once
 
+#include "core/config_types.h"
+
 #include <complex>
 #include <string>
 #include <vector>
 
 namespace fmcw {
-
-enum class FftBackendKind {
-  Cuda,
-  Fftw,
-};
 
 struct FftPlan {
   std::size_t length = 0;

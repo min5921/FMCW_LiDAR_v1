@@ -1,6 +1,13 @@
 set(FMCW_CORE_SOURCES
   core/app_version.cpp
+  core/config_document.cpp
+  core/config_manager.cpp
+  core/config_policy.cpp
+  core/config_profile.cpp
+  core/config_types.cpp
+  core/config_validation.cpp
   core/logging.cpp
+  core/operation_controller.cpp
   core/system_state.cpp
 )
 

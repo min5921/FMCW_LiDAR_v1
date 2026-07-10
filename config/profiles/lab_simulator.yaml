@@ -1,0 +1,17 @@
+profile:
+  id: lab-simulator
+  name: "Lab Simulator"
+  description: "Hardware-optional profile for UI and pipeline development"
+  modified_utc: "2026-07-10T00:00:00Z"
+processing:
+  fft_backend: fftw
+edfa:
+  mode: none
+  required_before_start: false
+storage:
+  raw_enabled: false
+  processed_enabled: false
+udp:
+  enabled: false
+mcu:
+  enabled: false

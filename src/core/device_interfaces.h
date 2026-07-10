@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core/config_types.h"
 #include "core/frame_types.h"
 
 #include <chrono>
@@ -7,8 +8,6 @@
 #include <string>
 
 namespace fmcw {
-
-struct SystemConfig;
 
 struct DeviceStatus {
   bool connected = false;
@@ -44,28 +43,6 @@ class IDigitizer {
   virtual FrameWaitResult waitForFrame(RawFrame& frame, std::chrono::milliseconds timeout, std::string& error) = 0;
   virtual bool abort(std::string& error) = 0;
   virtual bool stop(std::string& error) = 0;
-};
-
-enum class EdfaMode {
-  None,
-  Manual,
-  Controlled,
-};
-
-enum class EdfaControlMode {
-  Acc,
-  Apc,
-  Agc,
-};
-
-enum class OpticalPowerUnit {
-  Milliwatt,
-  Dbm,
-};
-
-struct OpticalPowerSetpoint {
-  double value = 0.0;
-  OpticalPowerUnit unit = OpticalPowerUnit::Dbm;
 };
 
 struct EdfaStatus {

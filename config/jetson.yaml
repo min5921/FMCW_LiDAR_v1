@@ -1,0 +1,11 @@
+profile:
+  description: "Jetson edge platform layer"
+processing:
+  fft_backend: cuda
+  queue_capacity: 16
+storage:
+  output_directory: "data/raw"
+  queue_capacity: 32
+ui:
+  plot_update_hz: 20
+  point_cloud_update_hz: 8

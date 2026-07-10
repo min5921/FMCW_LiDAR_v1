@@ -7,6 +7,7 @@ FMCW_LiDAR/
   docs/
   config/
     calibration/
+    profiles/
   data/
     raw/
     processed/
@@ -56,9 +57,10 @@ FMCW_LiDAR/
 
 - Windows profile
 - Jetson profile
-- laser profile
-- board setup profile
+- `profiles/`: 사용자/측정 profile
 - `calibration/`
+
+현재 계층은 `default.yaml` -> `windows.yaml` 또는 `jetson.yaml` -> `profiles/*.yaml` -> `calibration/*.yaml` 순서로 적용한다. 상세 규칙은 `configuration.md`에 있다.
 
 ### `data/`
 
