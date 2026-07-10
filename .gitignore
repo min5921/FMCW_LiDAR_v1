@@ -1,0 +1,51 @@
+# Build outputs
+Debug/
+Release/
+x64/
+Win32/
+build/
+out/
+
+# Visual Studio / MSBuild artifacts
+.vs/
+*.user
+*.suo
+*.obj
+*.pdb
+*.idb
+*.iobj
+*.ipdb
+*.tlog
+*.lastbuildstate
+*.recipe
+*.log
+*.cache
+*.deps
+
+# STM32 / embedded build artifacts
+*.o
+*.d
+*.su
+*.cyclo
+*.elf
+*.map
+*.list
+
+# Binary dependencies and vendor installers
+*.dll
+*.exe
+*.sys
+*.cat
+*.lib
+
+# Runtime data
+data/raw/*
+data/processed/*
+outputs/*
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+!outputs/.gitkeep
+
+# Local IDE settings
+.idea/
+.vscode/
