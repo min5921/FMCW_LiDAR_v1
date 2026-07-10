@@ -97,16 +97,41 @@ struct PointXYZI {
   float z = 0.0F;
   float intensity = 0.0F;
   float velocity = 0.0F;
+  bool valid = false;
+};
+
+enum class PeakTrackState : std::uint8_t {
+  Invalid,
+  Detected,
+  Tracked,
+  Reacquired,
+  HeldLast,
+  Lost,
+};
+
+struct PeakMeasurement {
+  std::int32_t discrete_bin = -1;
+  float interpolated_bin = -1.0F;
+  float magnitude_db = 0.0F;
+  PeakTrackState state = PeakTrackState::Invalid;
+  bool valid = false;
 };
 
 struct ProcessedFrame {
   std::uint64_t frame_id = 0;
+  std::uint64_t source_timestamp_ns = 0;
   std::uint64_t config_revision = 0;
+  std::uint64_t processing_config_revision = 0;
+  ScanPosition scan_position;
   std::vector<float> up_fft_magnitude_db;
   std::vector<float> down_fft_magnitude_db;
-  std::vector<float> distance_m;
-  std::vector<float> velocity_mps;
-  std::vector<PointXYZI> points;
+  PeakMeasurement up_peak;
+  PeakMeasurement down_peak;
+  float distance_m = 0.0F;
+  float velocity_mps = 0.0F;
+  PointXYZI point;
+  bool measurement_valid = false;
+  bool stop_requested = false;
   double processing_latency_ms = 0.0;
   std::string processing_note;
 };

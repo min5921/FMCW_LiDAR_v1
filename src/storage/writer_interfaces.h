@@ -24,7 +24,7 @@ struct SessionDescriptor {
   std::string profile_id;
   std::string platform;
   std::string application_version;
-  std::uint32_t config_schema_version = 1;
+  std::uint32_t config_schema_version = kConfigSchemaVersion;
   std::uint64_t start_timestamp_utc_ns = 0;
   std::string config_snapshot_json;
 };
@@ -45,6 +45,16 @@ struct WriterOpenOptions {
   RawStreamDescriptor raw_stream;
   bool raw_enabled = true;
   bool processed_enabled = false;
+  std::size_t queue_capacity = 64;
+  QueueOverflowPolicy overflow_policy = QueueOverflowPolicy::StopAcquisition;
+  double split_file_size_gb = 4.0;
+  std::uint32_t flush_interval_frames = 128;
+};
+
+struct WriterFinalizeOptions {
+  std::uint64_t end_timestamp_utc_ns = 0;
+  std::string stop_reason;
+  bool completed = true;
 };
 
 class IRawFrameWriter {
@@ -53,7 +63,7 @@ class IRawFrameWriter {
   virtual bool open(const WriterOpenOptions& options, std::string& error) = 0;
   virtual bool write(const RawFrame& frame, std::string& error) = 0;
   virtual bool flush(std::string& error) = 0;
-  virtual bool finalize(std::string& error) = 0;
+  virtual bool finalize(const WriterFinalizeOptions& options, std::string& error) = 0;
   virtual WriterStatus status() const = 0;
 };
 
@@ -63,7 +73,7 @@ class IProcessedFrameWriter {
   virtual bool open(const WriterOpenOptions& options, std::string& error) = 0;
   virtual bool write(const ProcessedFrame& frame, std::string& error) = 0;
   virtual bool flush(std::string& error) = 0;
-  virtual bool finalize(std::string& error) = 0;
+  virtual bool finalize(const WriterFinalizeOptions& options, std::string& error) = 0;
   virtual WriterStatus status() const = 0;
 };
 

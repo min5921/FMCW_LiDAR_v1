@@ -70,7 +70,24 @@ Verification:
 
 ## Phase 4: Processing and Storage Pipeline
 
-Status: pending
+Status: done
+
+- FFTW3f and CUDA/cuFFT implement the common real-to-complex FFT backend contract with reusable plans.
+- `SignalProcessor` extracts configured up/down segments, applies preprocessing/windowing, detects and tracks peaks, and produces calibrated distance, velocity, and XYZ results.
+- Peak tracking supports detected, tracked, reacquired, held-invalid, lost, and stop-requested behavior per scan line.
+- `ProcessingService` decouples acquisition enqueue from FFT work with a bounded worker queue and frame-boundary runtime settings.
+- Immutable waveform, FFT, scan-line, and X-by-B-scan Z snapshots are published without exposing acquisition buffers to the UI.
+- Raw full-period and processed binary writers run through a bounded asynchronous storage service with stop-on-overflow and writer-failure reporting.
+- JSON sidecars record session/config identity, stream description, file parts, frame count, completion state, and stop reason.
+- Raw replay restores the original frame contract, follows numbered split parts, and feeds the same signal processor used by live acquisition.
+
+Verification:
+
+- Windows MSVC Debug build enabled FFTW3f and CUDA 13.1/cuFFT through external SDK discovery.
+- `fmcw_phase4_tests` passed FFTW tone detection and the runtime-available CUDA/FFTW spectrum comparison.
+- Full-period UP/DOWN peak processing, hold-last invalid semantics, runtime revision application, scan-line/B-scan snapshots, async raw/processed writing, JSON metadata, split-part replay, processed callbacks, and forced processing/storage overflow are covered.
+- All four CTest targets passed and the Qt offscreen smoke test remained successful.
+- Sustained Alazar-to-NVMe throughput and long-run thermal/drop behavior remain hardware acceptance work for Phase 7.
 
 ## Phase 5: Qt UI MVP
 

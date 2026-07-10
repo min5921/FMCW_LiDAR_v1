@@ -18,6 +18,7 @@ FMCW LiDAR 시스템을 Windows와 Jetson에서 함께 운용하기 위한 v1 �
 - `docs/gui_runtime_requirements.md`: 승인된 GUI의 page ownership, global command, snapshot/thread 계약
 - `docs/folder_structure.md`: 폴더 구조와 파일 배치 기준
 - `docs/data_contract.md`: full-period raw frame과 metadata 규칙
+- `docs/processing_storage.md`: FFT/peak/B-scan 처리와 binary 저장/replay 계약
 - `docs/configuration.md`: YAML profile schema v2, validation, field presentation 및 pending 정책
 - `docs/device_protocols.md`: Alazar AutoDMA, MCU UART, EDFA binary protocol
 - `docs/hardware_acceptance.md`: Windows/Jetson 실제 장비 검증 절차

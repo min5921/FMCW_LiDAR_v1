@@ -56,6 +56,16 @@ The following CMake cache variables are used for dependency discovery:
 
 CUDA is discovered through the installed CMake CUDA toolkit support. EDFA/MCU serial support uses Win32 COM or POSIX tty directly; FTDI or USB-UART devices still require their operating system driver, but vendor control executables are not runtime dependencies.
 
+## Phase 4 FFT Backends
+
+The CPU backend requires the single-precision FFTW3 library (`fftw3f`). Point `FFTW_ROOT` at an installation prefix containing `include/fftw3.h` and the platform library.
+
+```powershell
+cmake --preset windows-msvc-debug -DFFTW_ROOT=C:\path\to\fftw-prefix
+```
+
+CUDA/cuFFT is enabled when `CUDAToolkit` is found. On Windows the build copies the discovered FFTW and cuFFT runtime DLLs next to the application and Phase 4 test executable. If a backend is not compiled or no CUDA device is available, the backend reports an actionable runtime error instead of silently selecting another backend.
+
 ## Current Workspace Check
 
 The ordinary PowerShell `PATH` on the current Windows machine resolves `qmake` to Qt 5.15.2 and does not expose `cl`. The installed MSVC 19.44 and Qt 6.11.0 MSVC x64 toolchain were found through their installation roots. After activating the Visual Studio x64 developer environment and selecting Qt 6 through `CMAKE_PREFIX_PATH`, the Windows Qt application built successfully, the core contract test passed, and the offscreen UI smoke test exited successfully.

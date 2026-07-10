@@ -1,0 +1,443 @@
+#include "drivers/simulator/fake_digitizer.h"
+#include "processing/fft_backends.h"
+#include "processing/processing_service.h"
+#include "processing/signal_processor.h"
+#include "storage/async_storage_service.h"
+#include "storage/binary_storage.h"
+
+#include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <cmath>
+#include <condition_variable>
+#include <cstdint>
+#include <filesystem>
+#include <fstream>
+#include <iostream>
+#include <memory>
+#include <mutex>
+#include <sstream>
+#include <string>
+#include <vector>
+
+namespace {
+
+int failures = 0;
+
+void expect(bool condition, const std::string& message) {
+  if (!condition) {
+    std::cerr << "FAIL: " << message << '\n';
+    ++failures;
+  }
+}
+
+void expectNear(double actual, double expected, double tolerance, const std::string& message) {
+  expect(std::abs(actual - expected) <= tolerance,
+         message + " actual=" + std::to_string(actual) + " expected=" + std::to_string(expected));
+}
+
+fmcw::SystemConfig testConfig() {
+  fmcw::SystemConfig config;
+  config.processing.fft_backend = fmcw::FftBackendKind::Fftw;
+  config.processing.peak_threshold_db = -60.0;
+  config.processing.queue_capacity = 16;
+  config.scan.x_pixel_count = 4;
+  config.scan.y_line_count = 2;
+  config.digitizer.a_scan_count = 4;
+  config.digitizer.b_scan_count = 2;
+  return config;
+}
+
+std::vector<fmcw::RawFramePtr> makeFakeFrames(const fmcw::SystemConfig& config, std::size_t count) {
+  fmcw::FakeDigitizer digitizer;
+  std::string error;
+  expect(digitizer.configure(config, error), "fake digitizer configures for Phase 4 tests");
+  expect(digitizer.connect(error), "fake digitizer connects for Phase 4 tests");
+  expect(digitizer.start(error), "fake digitizer starts for Phase 4 tests");
+  std::vector<fmcw::RawFramePtr> frames;
+  for (std::size_t index = 0; index < count; ++index) {
+    fmcw::RawFrame frame;
+    expect(digitizer.waitForFrame(frame, std::chrono::milliseconds(10), error) ==
+               fmcw::FrameWaitResult::FrameReady,
+           "fake digitizer produces a Phase 4 frame");
+    frame.metadata.config_revision = 1;
+    frames.push_back(std::make_shared<const fmcw::RawFrame>(std::move(frame)));
+  }
+  digitizer.abort(error);
+  digitizer.stop(error);
+  return frames;
+}
+
+void testFftBackends() {
+  fmcw::FftwBackend fftw;
+  std::string error;
+  const std::size_t length = 1024;
+  expect(fftw.prepare({length, 1}, error), "FFTW creates a reusable plan");
+  std::vector<float> input(length);
+  constexpr double pi = 3.14159265358979323846;
+  for (std::size_t index = 0; index < length; ++index) {
+    input[index] = static_cast<float>(std::sin(2.0 * pi * 29.0 * static_cast<double>(index) /
+                                               static_cast<double>(length)));
+  }
+  std::vector<std::complex<float>> fftw_output;
+  expect(fftw.execute(input, fftw_output, error), "FFTW executes the prepared plan");
+  const auto peak = std::max_element(fftw_output.begin(), fftw_output.end(),
+                                     [](const auto& left, const auto& right) {
+                                       return std::abs(left) < std::abs(right);
+                                     });
+  expect(std::distance(fftw_output.begin(), peak) == 29, "FFTW finds the synthetic tone bin");
+
+  if (fmcw::CudaFftBackend::available()) {
+    fmcw::CudaFftBackend cuda;
+    std::vector<std::complex<float>> cuda_output;
+    expect(cuda.prepare({length, 1}, error) && cuda.execute(input, cuda_output, error),
+           "CUDA backend executes when a GPU is available");
+    expect(cuda_output.size() == fftw_output.size(), "CUDA and FFTW output sizes match");
+    if (cuda_output.size() == fftw_output.size()) {
+      double max_error = 0.0;
+      for (std::size_t index = 0; index < cuda_output.size(); ++index) {
+        max_error = std::max(max_error, static_cast<double>(std::abs(cuda_output[index] - fftw_output[index])));
+      }
+      expect(max_error < 0.05, "CUDA and FFTW spectra agree within tolerance");
+    }
+  } else {
+    std::cout << "CUDA FFT comparison skipped: no runtime CUDA device.\n";
+  }
+}
+
+fmcw::ProcessedFrame testSignalProcessing(const fmcw::SystemConfig& config,
+                                          const std::vector<fmcw::RawFramePtr>& frames) {
+  fmcw::SignalProcessor processor(std::make_unique<fmcw::FftwBackend>());
+  std::string error;
+  expect(processor.configure(config, 1, error), "signal processor configures with FFTW");
+  fmcw::ProcessedFrame processed;
+  expect(processor.process(*frames.front(), processed, error), "full-period frame processes successfully");
+  const double up_expected = 37.0 * config.chirp_segmentation.segment_fft_length /
+      config.chirp_segmentation.up_segment.length();
+  const double down_expected = 43.0 * config.chirp_segmentation.segment_fft_length /
+      config.chirp_segmentation.down_segment.length();
+  expectNear(processed.up_peak.interpolated_bin, up_expected, 0.75, "up chirp peak is detected");
+  expectNear(processed.down_peak.interpolated_bin, down_expected, 0.75, "down chirp peak is detected");
+  expect(processed.measurement_valid && processed.point.valid, "valid paired peaks produce distance and XYZ");
+  expect(processed.distance_m > 0.0F, "paired peaks produce positive distance");
+  expect(processed.velocity_mps < 0.0F, "up/down peak difference preserves velocity sign");
+
+  auto hold_config = config.processing;
+  hold_config.peak_lost_policy = fmcw::PeakLostPolicy::HoldLast;
+  expect(processor.updateRuntimeConfig(hold_config, 2, error), "peak loss policy updates at a frame boundary");
+  fmcw::RawFrame silent = *frames.at(1);
+  std::fill(silent.samples.begin(), silent.samples.end(), 0);
+  fmcw::ProcessedFrame held;
+  expect(processor.process(silent, held, error), "silent frame is processed without crashing");
+  expect(!held.measurement_valid && held.up_peak.state == fmcw::PeakTrackState::HeldLast &&
+             held.down_peak.state == fmcw::PeakTrackState::HeldLast,
+         "hold-last preserves display bins while marking the measurement invalid");
+  expect(held.processing_config_revision == 2, "processed frame records the applied runtime revision");
+  return processed;
+}
+
+void testProcessingServiceSnapshots(const fmcw::SystemConfig& config,
+                                    const std::vector<fmcw::RawFramePtr>& frames) {
+  fmcw::ProcessingService service(std::make_unique<fmcw::FftwBackend>());
+  std::atomic<std::uint64_t> callback_count{0};
+  service.setProcessedFrameCallback([&callback_count](fmcw::ProcessedFramePtr) { ++callback_count; });
+  std::string error;
+  expect(service.configure(config, 3, error), "processing service configures");
+  expect(service.start(error), "processing worker starts");
+  auto runtime = config.processing;
+  runtime.peak_threshold_db = -55.0;
+  expect(service.updateRuntimeConfig(runtime, 4, error), "processing service accepts runtime peak settings");
+  for (const auto& frame : frames) {
+    expect(service.enqueue(frame, error) == fmcw::ProcessingEnqueueResult::Accepted,
+           "acquisition-side enqueue remains non-blocking");
+  }
+  service.requestStop("Phase 4 test complete");
+  expect(service.waitUntilStopped(error), "processing worker drains and stops");
+  const auto status = service.status();
+  expect(status.frames_processed == frames.size() && status.processing_config_revision == 4,
+         "processing worker reports processed frames and active revision");
+  expect(callback_count.load() == frames.size(), "processed callback receives each completed frame");
+  const auto waveform = service.snapshots().latestWaveform();
+  const auto fft = service.snapshots().latestFft();
+  const auto line = service.snapshots().latestScanLine();
+  const auto bscan = service.snapshots().latestBScan();
+  expect(waveform && waveform->normalized_samples.size() == config.digitizer.sample_point,
+         "waveform snapshot owns a UI-safe sample copy");
+  expect(fft && !fft->up_magnitude_db.empty(), "FFT snapshot is published");
+  expect(line && line->distance_m.size() == config.scan.x_pixel_count,
+         "completed scan line publishes peak and distance arrays");
+  expect(bscan && bscan->width == config.scan.x_pixel_count && bscan->height == config.scan.y_line_count &&
+             bscan->completed_lines == 1,
+         "completed line updates the X by B-scan Z matrix");
+}
+
+struct BlockingFftState {
+  std::mutex mutex;
+  std::condition_variable condition;
+  bool execute_started = false;
+  bool release = false;
+};
+
+class BlockingFftBackend final : public fmcw::IFftBackend {
+ public:
+  explicit BlockingFftBackend(std::shared_ptr<BlockingFftState> state) : state_(std::move(state)) {}
+
+  std::string name() const override { return "Blocking FFT test backend"; }
+  fmcw::FftBackendKind kind() const override { return fmcw::FftBackendKind::Fftw; }
+
+  bool prepare(const fmcw::FftPlan& plan, std::string& error) override {
+    length_ = plan.length;
+    error.clear();
+    return length_ > 1U && plan.batch == 1U;
+  }
+
+  bool execute(const std::vector<float>& input, std::vector<std::complex<float>>& output,
+               std::string& error) override {
+    {
+      std::unique_lock<std::mutex> lock(state_->mutex);
+      if (!state_->execute_started) {
+        state_->execute_started = true;
+        state_->condition.notify_all();
+        state_->condition.wait(lock, [this] { return state_->release; });
+      }
+    }
+    if (input.size() != length_) {
+      error = "Blocking FFT input length mismatch";
+      return false;
+    }
+    output.assign(length_ / 2U + 1U, {});
+    error.clear();
+    return true;
+  }
+
+ private:
+  std::shared_ptr<BlockingFftState> state_;
+  std::size_t length_ = 0U;
+};
+
+void testProcessingOverflow(fmcw::SystemConfig config, const std::vector<fmcw::RawFramePtr>& frames) {
+  config.processing.queue_capacity = 1;
+  auto state = std::make_shared<BlockingFftState>();
+  fmcw::ProcessingService service(std::make_unique<BlockingFftBackend>(state));
+  std::string error;
+  expect(service.configure(config, 5, error) && service.start(error),
+         "blocking processing service configures and starts");
+  expect(service.enqueue(frames.at(0), error) == fmcw::ProcessingEnqueueResult::Accepted,
+         "first frame reaches the blocking FFT backend");
+  {
+    std::unique_lock<std::mutex> lock(state->mutex);
+    expect(state->condition.wait_for(lock, std::chrono::seconds(2), [state] { return state->execute_started; }),
+           "blocking FFT begins its first execution");
+  }
+  expect(service.enqueue(frames.at(1), error) == fmcw::ProcessingEnqueueResult::Accepted,
+         "second frame occupies the bounded processing queue");
+  expect(service.enqueue(frames.at(2), error) == fmcw::ProcessingEnqueueResult::Overflow,
+         "third frame triggers processing stop-on-overflow");
+  expect(service.status().stop_requested, "processing overflow is exposed as a stop request");
+  {
+    std::lock_guard<std::mutex> lock(state->mutex);
+    state->release = true;
+    state->condition.notify_all();
+  }
+  expect(service.waitUntilStopped(error), "overflowed processing service drains accepted frames and stops");
+}
+
+std::filesystem::path uniqueTestDirectory() {
+  const auto suffix = std::chrono::steady_clock::now().time_since_epoch().count();
+  return std::filesystem::temp_directory_path() / ("fmcw_phase4_" + std::to_string(suffix));
+}
+
+void testBinaryStorageAndReplay(const fmcw::SystemConfig& config, fmcw::RawFramePtr raw,
+                                fmcw::RawFramePtr second_raw,
+                                const fmcw::ProcessedFrame& processed) {
+  const auto directory = uniqueTestDirectory();
+  fmcw::WriterOpenOptions options;
+  options.session_directory = directory;
+  options.file_stem = "session";
+  options.session.session_id = "phase4-test";
+  options.session.profile_id = config.profile.id;
+  options.session.platform = "Windows";
+  options.session.application_version = "test";
+  options.session.start_timestamp_utc_ns = 1;
+  options.session.config_snapshot_json = "{\"profile\":\"phase4-test\"}";
+  options.raw_stream.channel = raw->metadata.channel;
+  options.raw_stream.sample_format = raw->metadata.sample_format;
+  options.raw_stream.byte_order = raw->metadata.byte_order;
+  options.raw_stream.sample_rate_hz = raw->metadata.sample_rate_hz;
+  options.raw_stream.record_length = raw->metadata.record_length;
+  options.raw_enabled = true;
+  options.processed_enabled = true;
+  options.queue_capacity = 8;
+  options.flush_interval_frames = 1;
+  options.split_file_size_gb = 1.0e-6;
+
+  fmcw::AsyncStorageService storage;
+  std::string error;
+  expect(storage.start(options, error), "asynchronous binary storage starts");
+  expect(storage.enqueueRaw(raw, error) == fmcw::EnqueueResult::Accepted, "raw frame enters writer queue");
+  expect(storage.enqueueRaw(second_raw, error) == fmcw::EnqueueResult::Accepted,
+         "second raw frame enters the split writer queue");
+  expect(storage.enqueueProcessed(std::make_shared<const fmcw::ProcessedFrame>(processed), error) ==
+             fmcw::EnqueueResult::Accepted,
+         "processed frame enters writer queue");
+  storage.requestStop("unit-test stop");
+  expect(storage.waitUntilStopped(error), "storage drains and finalizes both streams");
+  const auto status = storage.status();
+  expect(status.raw_writer.frames_written == 2 && status.processed_writer.frames_written == 1,
+         "raw and processed writers report their accepted frames");
+
+  const auto raw_path = directory / "session.raw.0000.bin";
+  expect(std::filesystem::exists(raw_path) && std::filesystem::exists(directory / "session.raw.0001.bin") &&
+             std::filesystem::exists(directory / "session.raw.json") &&
+             std::filesystem::exists(directory / "session.processed.bin") &&
+             std::filesystem::exists(directory / "session.processed.json"),
+         "binary streams and JSON sidecars are created");
+  fmcw::RawReplayReader replay;
+  expect(replay.open(raw_path, error), "raw replay opens the stored stream");
+  fmcw::RawFrame replayed;
+  expect(replay.readNext(replayed, error) == fmcw::ReplayReadResult::FrameReady,
+         "raw replay reads the stored frame");
+  expect(replayed.samples == raw->samples && replayed.metadata.frame_id == raw->metadata.frame_id &&
+             replayed.metadata.up_segment.start_sample == raw->metadata.up_segment.start_sample,
+         "raw replay preserves samples and full-period metadata");
+  fmcw::SignalProcessor replay_processor(std::make_unique<fmcw::FftwBackend>());
+  fmcw::ProcessedFrame replay_processed;
+  expect(replay_processor.configure(config, 7, error) && replay_processor.process(replayed, replay_processed, error),
+         "replayed raw frame uses the same signal processing pipeline");
+  expect(replay_processed.up_peak.discrete_bin == processed.up_peak.discrete_bin &&
+             replay_processed.down_peak.discrete_bin == processed.down_peak.discrete_bin,
+         "replayed raw frame reproduces the detected peak bins");
+  expect(replay.readNext(replayed, error) == fmcw::ReplayReadResult::FrameReady &&
+             replayed.metadata.frame_id == second_raw->metadata.frame_id,
+         "raw replay automatically advances to the next split part");
+  expect(replay.readNext(replayed, error) == fmcw::ReplayReadResult::EndOfStream,
+         "raw replay reports end of stream");
+  replay.close();
+
+  std::ifstream metadata(directory / "session.raw.json", std::ios::binary);
+  std::ostringstream metadata_text;
+  metadata_text << metadata.rdbuf();
+  expect(metadata_text.str().find("unit-test stop") != std::string::npos &&
+             metadata_text.str().find("config_snapshot") != std::string::npos,
+         "raw JSON sidecar records stop reason and configuration snapshot");
+  metadata.close();
+  std::error_code remove_error;
+  std::filesystem::remove_all(directory, remove_error);
+  expect(!remove_error, "Phase 4 storage test directory is cleaned up");
+}
+
+struct BlockingWriterState {
+  std::mutex mutex;
+  std::condition_variable condition;
+  bool write_started = false;
+  bool release = false;
+};
+
+class BlockingRawWriter final : public fmcw::IRawFrameWriter {
+ public:
+  explicit BlockingRawWriter(std::shared_ptr<BlockingWriterState> state) : state_(std::move(state)) {}
+
+  bool open(const fmcw::WriterOpenOptions&, std::string& error) override {
+    status_.open = true;
+    status_.recording = true;
+    error.clear();
+    return true;
+  }
+
+  bool write(const fmcw::RawFrame&, std::string& error) override {
+    std::unique_lock<std::mutex> lock(state_->mutex);
+    state_->write_started = true;
+    state_->condition.notify_all();
+    state_->condition.wait(lock, [this] { return state_->release; });
+    ++status_.frames_written;
+    error.clear();
+    return true;
+  }
+
+  bool flush(std::string& error) override {
+    error.clear();
+    return true;
+  }
+
+  bool finalize(const fmcw::WriterFinalizeOptions&, std::string& error) override {
+    status_.open = false;
+    status_.recording = false;
+    error.clear();
+    return true;
+  }
+
+  fmcw::WriterStatus status() const override { return status_; }
+
+ private:
+  std::shared_ptr<BlockingWriterState> state_;
+  fmcw::WriterStatus status_;
+};
+
+void testStorageOverflow(fmcw::RawFramePtr raw) {
+  auto state = std::make_shared<BlockingWriterState>();
+  fmcw::AsyncStorageService storage(std::make_unique<BlockingRawWriter>(state),
+                                    std::make_unique<fmcw::BinaryProcessedFrameWriter>());
+  fmcw::WriterOpenOptions options;
+  options.session_directory = uniqueTestDirectory();
+  options.file_stem = "overflow";
+  options.raw_enabled = true;
+  options.processed_enabled = false;
+  options.queue_capacity = 1;
+  options.raw_stream.channel = raw->metadata.channel;
+  options.raw_stream.sample_format = raw->metadata.sample_format;
+  options.raw_stream.byte_order = raw->metadata.byte_order;
+  options.raw_stream.sample_rate_hz = raw->metadata.sample_rate_hz;
+  options.raw_stream.record_length = raw->metadata.record_length;
+  std::string error;
+  expect(storage.start(options, error), "blocking storage service starts");
+  expect(storage.enqueueRaw(raw, error) == fmcw::EnqueueResult::Accepted, "first frame reaches blocking writer");
+  {
+    std::unique_lock<std::mutex> lock(state->mutex);
+    expect(state->condition.wait_for(lock, std::chrono::seconds(2), [state] { return state->write_started; }),
+           "blocking writer begins its first write");
+  }
+  expect(storage.enqueueRaw(raw, error) == fmcw::EnqueueResult::Accepted,
+         "second frame occupies the bounded queue");
+  expect(storage.enqueueRaw(raw, error) == fmcw::EnqueueResult::Overflow,
+         "third frame triggers stop-on-overflow");
+  expect(storage.status().stop_requested, "overflow is exposed as a storage stop request");
+  {
+    std::lock_guard<std::mutex> lock(state->mutex);
+    state->release = true;
+    state->condition.notify_all();
+  }
+  expect(storage.waitUntilStopped(error), "overflowed storage drains accepted work and stops");
+  std::error_code remove_error;
+  std::filesystem::remove_all(options.session_directory, remove_error);
+}
+
+}  // namespace
+
+int main() {
+  if (!fmcw::FftwBackend::available()) {
+    std::cout << "Phase 4 FFT tests skipped: FFTW3f was not found at configure time.\n";
+    return 0;
+  }
+  std::cout << "[Phase4] FFT backends\n" << std::flush;
+  testFftBackends();
+  const auto config = testConfig();
+  std::cout << "[Phase4] Fake frames\n" << std::flush;
+  const auto frames = makeFakeFrames(config, config.scan.x_pixel_count);
+  if (frames.size() >= 2U) {
+    std::cout << "[Phase4] Signal processor\n" << std::flush;
+    const auto processed = testSignalProcessing(config, frames);
+    std::cout << "[Phase4] Processing service\n" << std::flush;
+    testProcessingServiceSnapshots(config, frames);
+    std::cout << "[Phase4] Processing overflow\n" << std::flush;
+    testProcessingOverflow(config, frames);
+    std::cout << "[Phase4] Binary storage and replay\n" << std::flush;
+    testBinaryStorageAndReplay(config, frames.front(), frames.at(1), processed);
+    std::cout << "[Phase4] Storage overflow\n" << std::flush;
+    testStorageOverflow(frames.front());
+  }
+
+  if (failures == 0) {
+    std::cout << "All Phase 4 processing and storage tests passed.\n";
+  }
+  return failures == 0 ? 0 : 1;
+}

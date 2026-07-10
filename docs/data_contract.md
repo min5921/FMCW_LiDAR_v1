@@ -40,6 +40,12 @@ Session-level strings and full configuration snapshots are written once in the s
 
 Configuration and optical-state history map each revision to the first and last affected frame IDs in the JSON metadata sidecar.
 
+## Processed Frame Unit
+
+One `ProcessedFrame` is the result of processing one full-period `RawFrame` at one scan position. It carries independent up/down FFT magnitude arrays, peak/tracking results, one distance/velocity measurement, and one XYZ point. Invalid or held peaks remain visible for diagnostics but do not produce a valid measurement.
+
+Scan-line and B-scan arrays are derived immutable snapshots. They are not embedded back into every processed frame.
+
 ## Timing And Scan Metadata
 
 - `host_timestamp_ns` is the host monotonic timestamp captured when the frame becomes available.
@@ -53,3 +59,6 @@ Configuration and optical-state history map each revision to the first and last 
 - Binary files declare format version, sample format, byte order, channel, sample rate, and record length.
 - JSON metadata stores the session descriptor, complete configuration snapshot, revision history, device versions, calibration identifiers, and stop reason.
 - Queue overflow or raw-writer failure requests an acquisition stop and records the responsible queue and last accepted frame ID.
+- Raw files use numbered parts named `<stem>.raw.0000.bin`, `<stem>.raw.0001.bin`, and so on.
+- Replay opened at part `0000` automatically continues through compatible numbered parts.
+- Processed binary and raw/processed JSON sidecars use the same session/config revision identity as the source raw frame.
