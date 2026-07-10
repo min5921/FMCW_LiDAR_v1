@@ -91,4 +91,28 @@ Verification:
 
 ## Phase 5: Qt UI MVP
 
-Status: pending
+Status: done
+
+- Windows와 Jetson entry point가 동일한 Qt Widgets `MainWindow`와 `ApplicationController`를 사용한다.
+- 좌측 8개 navigation과 Overview, Live View, 장비 설정, Processing, Storage/UDP, System Log 화면을 구현했다.
+- 상단의 단일 global START/STOP이 simulator digitizer, optional EDFA, optional MCU, processing, storage session을 함께 제어한다.
+- UI thread와 runtime worker를 분리했으며 acquisition, FFT, raw/processed writer는 UI thread에서 실행하지 않는다.
+- Live View는 Time Domain, FFT, Peak Analysis, Distance/Velocity, X-by-B-scan Z heatmap을 immutable snapshot으로 표시한다.
+- Live plot toolbar는 display freeze, auto/manual range, cursor readout, PNG 저장을 제공하며 acquisition은 계속 실행한다.
+- Peak Analysis는 FFT를 중복 표시하지 않고 peak index/value line 결과만 표시한다.
+- Processing 화면은 threshold, search range, tracking, lost policy와 frame-boundary runtime update를 제공한다.
+- Chirp segmentation은 live waveform이 아닌 사용자가 capture한 고정 full-period frame에 UP/DOWN/guard overlay를 표시한다.
+- Digitizer는 A 또는 B 단일 채널만 선택할 수 있고 A+B 동시 모드는 제공하지 않는다.
+- EDFA none/manual/controlled 설정과 controlled EDFA output의 독립 safety on/off를 제공한다.
+- raw/processed binary recording은 기존 bounded asynchronous writer에 연결된다.
+- Phase 5의 UDP 화면은 endpoint/profile configuration만 소유하며 실제 sender와 3D renderer는 Phase 6에서 활성화한다.
+
+Verification:
+
+- Windows MSVC Debug Qt application이 FFTW3f와 CUDA/cuFFT를 활성화한 구성에서 빌드됐다.
+- 기존 4개 CTest target이 모두 통과했다.
+- Qt simulator demo가 global START 후 정상 종료했으며 full-period Time Domain plot을 생성했다.
+- 512 A-scan의 첫 line이 완료된 뒤 B-scan 화면에 `1 / 25 lines`와 유효 Z range가 표시됐다.
+- frame 174의 segmentation snapshot에서 UP, DOWN, 양쪽 guard overlay가 고정 표시됐다.
+- `--smoke-test`, `--demo-run`, `--page`, `--live-tab`, `--capture-segmentation`, `--screenshot` 검증 옵션이 Windows와 Jetson entry point에 공통으로 제공된다.
+- 실제 Alazar DMA, MCU/EDFA serial hardware, sustained NVMe recording은 Phase 7 hardware acceptance가 필요하다.

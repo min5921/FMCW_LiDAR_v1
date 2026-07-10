@@ -152,8 +152,12 @@ if(FMCW_BUILD_QT_APPS)
   qt_standard_project_setup()
 
   add_library(fmcw_qt_common STATIC
+    apps/common/application_controller.cpp
+    apps/common/application_controller.h
     apps/common/main_window.cpp
     apps/common/main_window.h
+    apps/common/plot_widgets.cpp
+    apps/common/plot_widgets.h
   )
   target_link_libraries(fmcw_qt_common
     PUBLIC
