@@ -131,6 +131,7 @@ DMA buffer는 acquisition, processing, raw storage 사이의 기본 운반 단�
 - A deterministic device-order test verifies MCU stop, digitizer abort/stop, and controlled EDFA off in that exact sequence.
 - Packaged simulator runtime delivered 141 batches and 9,024 records with processing queue 0/32, DMA drops 0, and trigger misses 0 in the GUI smoke run.
 - Remaining Phase 7.2 acceptance: connect ATS9371 and complete the 10-minute DMA, locked-page, handle, STOP, and overflow checks. Status remains `in_progress` until that hardware evidence exists.
+- Software implementation commit: `3cfcea3`
 
 ## 7. Phase 7.3A: FFTW Batch Processing
 
