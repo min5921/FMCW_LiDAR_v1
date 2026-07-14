@@ -106,6 +106,8 @@ Waveform/FFT는 processed frame마다 교체한다. Scan line과 B-scan은 모�
 
 ## 8. Binary Storage
 
+Phase 7.2 changes the `ProcessingService` queue item to an immutable `RawFrameBatch`. The worker currently processes every record in order with the existing single-record `SignalProcessor`; Phase 7.3A replaces those repeated FFT calls with one FFTW plan-many batch while preserving identical per-record peak and point results. Queue capacity and high-water telemetry are measured in DMA batches. The compatibility `enqueue(RawFramePtr)` entry point remains only for existing tests and narrow callers.
+
 기본 파일:
 
 - `<stem>.raw.0000.bin`, `<stem>.raw.0001.bin`, ...

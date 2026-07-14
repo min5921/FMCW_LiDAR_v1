@@ -232,10 +232,10 @@ MainWindow::MainWindow(QString platform_name, QWidget* parent)
   sidebar_layout->setSpacing(6);
   auto* brand = new QLabel("FMCW LiDAR", sidebar);
   brand->setObjectName("brand");
-  auto* platform = new QLabel(QString("%1  |  SIMULATOR").arg(platform_name_.toUpper()), sidebar);
-  platform->setObjectName("platform");
+  runtime_source_badge_ = new QLabel(QString("%1  |  SIMULATOR").arg(platform_name_.toUpper()), sidebar);
+  runtime_source_badge_->setObjectName("platform");
   sidebar_layout->addWidget(brand);
-  sidebar_layout->addWidget(platform);
+  sidebar_layout->addWidget(runtime_source_badge_);
   sidebar_layout->addSpacing(18);
 
   navigation_ = new QListWidget(sidebar);
@@ -336,7 +336,7 @@ MainWindow::MainWindow(QString platform_name, QWidget* parent)
   runtime_state_label_ = new QLabel("DISCONNECTED", this);
   runtime_state_label_->setProperty("statusKind", "neutral");
   statusBar()->addWidget(runtime_state_label_);
-  statusBar()->showMessage("Simulator runtime | Up-chirp trigger | Full-period acquisition", 0);
+  statusBar()->showMessage("Simulator | Up-chirp trigger | Full-period DMA batch", 0);
 
   controller_ = new ApplicationController(platform_name_, this);
   loadConfigToControls(config_);
@@ -609,9 +609,25 @@ QWidget* MainWindow::buildDigitizerPage() {
   auto* layout = new QGridLayout(content);
   layout->setContentsMargins(0, 0, 0, 0);
   layout->setSpacing(12);
-  auto* board = groupBox("Alazar Board Setup", content);
+  auto* board = groupBox("Acquisition Source / Board", content);
   auto* board_form = new QFormLayout(board);
   tuneForm(board_form);
+  acquisition_source_ = new QComboBox(board);
+  acquisition_source_->addItem("Simulator", static_cast<int>(AcquisitionSource::Simulator));
+  acquisition_source_->addItem("Alazar ATS9371", static_cast<int>(AcquisitionSource::Alazar));
+  acquisition_source_->addItem("Raw Replay", static_cast<int>(AcquisitionSource::Replay));
+  replay_file_ = new QLineEdit(board);
+  replay_file_->setPlaceholderText("Select *.raw.0000.bin");
+  replay_browse_ = new QToolButton(board);
+  replay_browse_->setIcon(style()->standardIcon(QStyle::SP_DialogOpenButton));
+  replay_browse_->setToolTip("Select raw replay file");
+  auto* replay_path = new QWidget(board);
+  auto* replay_path_layout = new QHBoxLayout(replay_path);
+  replay_path_layout->setContentsMargins(0, 0, 0, 0);
+  replay_path_layout->setSpacing(6);
+  replay_path_layout->addWidget(replay_file_, 1);
+  replay_path_layout->addWidget(replay_browse_);
+  replay_loop_ = new QCheckBox("Loop at end", board);
   board_profile_ = new QComboBox(board);
   for (const auto& capability : digitizerBoardCapabilities()) {
     board_profile_->addItem(QString::fromStdString(capability.display_name),
@@ -631,6 +647,9 @@ QWidget* MainWindow::buildDigitizerPage() {
   coupling_->addItem("DC");
   digitizer_lock_state_ = new QLabel("STOPPED | settings can be applied", board);
   digitizer_lock_state_->setProperty("statusKind", "neutral");
+  board_form->addRow("Runtime source", acquisition_source_);
+  board_form->addRow("Replay file", replay_path);
+  board_form->addRow("Replay mode", replay_loop_);
   board_form->addRow("Board model", board_profile_);
   board_form->addRow("Board address", board_address_);
   board_form->addRow("Input channel", digitizer_channel_);
@@ -689,7 +708,8 @@ QWidget* MainWindow::buildDigitizerPage() {
   layout->setColumnStretch(0, 1);
   layout->setColumnStretch(1, 1);
   layout->setRowStretch(1, 1);
-  restart_required_controls_.append(QList<QWidget*>{board_profile_, digitizer_channel_, sample_rate_, sample_point_,
+  restart_required_controls_.append(QList<QWidget*>{acquisition_source_, replay_file_, replay_browse_, replay_loop_,
+      board_profile_, digitizer_channel_, sample_rate_, sample_point_,
       input_range_, impedance_, coupling_, records_per_buffer_, dma_buffer_count_, trigger_slope_, trigger_level_,
       trigger_delay_, pre_trigger_});
   return wrapInScrollArea(content);
@@ -1188,7 +1208,8 @@ void MainWindow::connectUi() {
           });
 
   const QList<QObject*> config_controls = {
-      board_profile_, digitizer_channel_, sample_rate_, sample_point_, records_per_buffer_, dma_buffer_count_,
+      acquisition_source_, replay_file_, replay_loop_, board_profile_, digitizer_channel_, sample_rate_,
+      sample_point_, records_per_buffer_, dma_buffer_count_,
       input_range_, impedance_, coupling_, trigger_slope_, trigger_level_, trigger_delay_, pre_trigger_,
       wavelength_, sweep_bandwidth_, sweep_rate_, chirp_period_, laser_power_, edfa_mode_, edfa_port_,
       edfa_control_mode_, edfa_setpoint_, edfa_warmup_, x_start_, x_end_, y_start_, y_end_, y_lines_,
@@ -1200,6 +1221,16 @@ void MainWindow::connectUi() {
   const QList<QObject*> runtime_controls = {dc_removal_, peak_threshold_, peak_start_, peak_end_};
   connect(board_profile_, &QComboBox::currentIndexChanged, this, [this] {
     populateDigitizerCapabilities(board_profile_->currentData().toString(), 0.0, 0.0, 0U);
+  });
+  connect(acquisition_source_, &QComboBox::currentIndexChanged,
+          this, [this] { updateRuntimeSourceControls(); });
+  connect(replay_browse_, &QToolButton::clicked, this, [this] {
+    const auto path = QFileDialog::getOpenFileName(
+        this, "Select raw replay", replay_file_->text(),
+        "FMCW raw recording (*.raw.*.bin *.bin)");
+    if (!path.isEmpty()) {
+      replay_file_->setText(path);
+    }
   });
   connect(records_per_buffer_, &QSpinBox::valueChanged, this, [this] { updateDerivedAcquisitionLabels(); });
   connect(y_lines_, &QSpinBox::valueChanged, this, [this] { updateDerivedAcquisitionLabels(); });
@@ -1349,6 +1380,10 @@ void MainWindow::showValidationDetails() {
 SystemConfig MainWindow::configFromControls() const {
   auto config = config_;
   config.profile.name = profile_combo_->currentText().toStdString();
+  config.runtime.acquisition_source =
+      static_cast<AcquisitionSource>(acquisition_source_->currentData().toInt());
+  config.runtime.replay_file = replay_file_->text().trimmed().toStdString();
+  config.runtime.replay_loop = replay_loop_->isChecked();
   config.digitizer.board_profile = board_profile_->currentData().toString().toStdString();
   config.digitizer.system_id = kAlazarSystemId;
   config.digitizer.board_id = kAlazarBoardId;
@@ -1530,6 +1565,12 @@ void MainWindow::loadConfigToControls(const SystemConfig& config, bool mark_pend
   config_ = config;
   profile_combo_->clear();
   profile_combo_->addItem(QString::fromStdString(config.profile.name));
+  const auto source_index = acquisition_source_->findData(
+      static_cast<int>(config.runtime.acquisition_source));
+  acquisition_source_->setCurrentIndex(source_index >= 0 ? source_index : 0);
+  replay_file_->setText(QString::fromStdString(config.runtime.replay_file));
+  replay_loop_->setChecked(config.runtime.replay_loop);
+  updateRuntimeSourceControls();
   const auto profile_index = board_profile_->findData(QString::fromStdString(config.digitizer.board_profile));
   board_profile_->setCurrentIndex(profile_index >= 0 ? profile_index : 0);
   populateDigitizerCapabilities(board_profile_->currentData().toString(), config.digitizer.sample_rate_hz,
@@ -1609,6 +1650,17 @@ void MainWindow::loadConfigToControls(const SystemConfig& config, bool mark_pend
   validateControls();
 }
 
+void MainWindow::updateRuntimeSourceControls() {
+  const auto source = static_cast<AcquisitionSource>(acquisition_source_->currentData().toInt());
+  const bool replay = source == AcquisitionSource::Replay;
+  replay_file_->setEnabled(replay && !runtime_status_.running);
+  replay_browse_->setEnabled(replay && !runtime_status_.running);
+  replay_loop_->setEnabled(replay && !runtime_status_.running);
+  board_address_->setText(source == AcquisitionSource::Alazar
+      ? "System 1 / Board 1 | fixed"
+      : source == AcquisitionSource::Replay ? "Recorded DMA stream" : "Generated signal batches");
+}
+
 void MainWindow::applyProfile() {
   if (!validateControls(true)) {
     return;
@@ -1658,6 +1710,11 @@ void MainWindow::updateStatus(RuntimeStatus status) {
   runtime_state_label_->setProperty("statusKind", runtime_status_.state == OperationState::Error ? "error"
       : runtime_status_.running ? "ready" : runtime_status_.connected ? "ready" : "neutral");
   repolish(runtime_state_label_);
+  const auto source_name = runtime_status_.source_name.isEmpty()
+      ? QString::fromStdString(toString(config_.runtime.acquisition_source)).toUpper()
+      : runtime_status_.source_name.toUpper();
+  runtime_source_badge_->setText(QString("%1  |  %2").arg(platform_name_.toUpper(), source_name));
+  statusBar()->showMessage(QString("%1 | Up-chirp trigger | Full-period DMA batch").arg(source_name), 0);
   connect_button_->setText(runtime_status_.connected ? "Disconnect" : "Connect");
   start_stop_button_->setText(runtime_status_.running ? "STOP" : "START");
   start_stop_button_->setProperty("runState", runtime_status_.running ? "stop" : "start");
@@ -1669,6 +1726,7 @@ void MainWindow::updateStatus(RuntimeStatus status) {
   for (auto* control : restart_required_controls_) {
     control->setEnabled(!runtime_status_.running);
   }
+  updateRuntimeSourceControls();
   if (runtime_status_.running) {
     digitizer_lock_state_->setText("LOCKED | press STOP before setup changes");
     digitizer_lock_state_->setProperty("statusKind", "warn");
@@ -1681,7 +1739,9 @@ void MainWindow::updateStatus(RuntimeStatus status) {
   }
   repolish(digitizer_lock_state_);
 
-  overview_digitizer_->setText(runtime_status_.digitizer_ready ? "READY\nSingle channel" : "NOT READY");
+  overview_digitizer_->setText(runtime_status_.digitizer_ready
+      ? QString("READY\n%1").arg(source_name)
+      : QString("NOT READY\n%1").arg(source_name));
   overview_edfa_->setText(runtime_status_.edfa_bypassed ? "BYPASS\nNo EDFA" :
                           runtime_status_.edfa_output_enabled ? "OUTPUT ON" : "READY\nOutput off");
   overview_mcu_->setText(runtime_status_.mcu_bypassed ? "BYPASS\nMCU disabled" :
@@ -1689,9 +1749,9 @@ void MainWindow::updateStatus(RuntimeStatus status) {
                              ? QString("READY\n%1 points").arg(runtime_status_.mcu_waveform_points)
                              : "WAITING\nNo waveform");
   overview_processing_->setText(runtime_status_.backend_name.isEmpty() ? "NOT CONFIGURED" : runtime_status_.backend_name);
-  overview_frames_->setText(QString("%1 received\n%2 processed")
+  overview_frames_->setText(QString("%1 received\n%2 DMA batches")
                                 .arg(runtime_status_.frames_received)
-                                .arg(runtime_status_.frames_processed));
+                                .arg(runtime_status_.acquisition_batches_delivered));
   overview_queues_->setText(QString("FFT %1 / %2\nWriter %3 / %4")
                                 .arg(runtime_status_.processing_queue_size)
                                 .arg(runtime_status_.processing_queue_capacity)
@@ -1725,9 +1785,11 @@ void MainWindow::updateStatus(RuntimeStatus status) {
   }
   repolish(udp_indicator_);
   repolish(udp_status_);
-  overview_detail_->setText(QString("%1 | Config revision %2 | %3")
+  overview_detail_->setText(QString("%1 | Config revision %2 | DMA drop %3 | Trigger miss %4 | %5")
                                 .arg(state)
                                 .arg(runtime_status_.config_revision)
+                                .arg(runtime_status_.dma_buffer_drops)
+                                .arg(runtime_status_.trigger_misses)
                                 .arg(runtime_status_.detail));
   setStatusText(mcu_waveform_state_, runtime_status_.mcu_bypassed ? "MCU bypass active" :
                 runtime_status_.mcu_waveform_loaded

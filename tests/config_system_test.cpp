@@ -46,6 +46,9 @@ void testDefaultsAndRoundTrip() {
   expect(decoded.config.profile.schema_version == 4, "round trip uses the full-frame scan schema version");
   expect(decoded.config.digitizer.board_profile == "ats9371",
          "round trip preserves the digitizer capability profile");
+  expect(decoded.config.runtime.acquisition_source == fmcw::AcquisitionSource::Simulator &&
+             decoded.config.runtime.replay_file.empty() && !decoded.config.runtime.replay_loop,
+         "round trip preserves the simulator runtime source defaults");
   expect(fmcw::alazarTriggerLevelCode(defaults.digitizer.trigger_level_percent) == 150,
          "legacy +17.3 percent trigger threshold maps to ATS code 150");
   expect(fmcw::derivedAScanCount(defaults) == defaults.digitizer.records_per_buffer,
@@ -136,6 +139,9 @@ void testPresentationAndChangePolicy() {
          "sampling rate is shown in the Digitizer page details");
   expect(fmcw::policyFor("digitizer.sample_rate_hz").change_policy == fmcw::ChangePolicy::RestartRequired,
          "sampling rate requires restart");
+  expect(fmcw::policyFor("runtime.acquisition_source").change_policy ==
+             fmcw::ChangePolicy::RestartRequired,
+         "runtime acquisition source changes require restart");
   expect(fmcw::policyFor("processing.peak_threshold_db").change_policy == fmcw::ChangePolicy::Runtime,
          "peak threshold applies at runtime");
   expect(fmcw::policyFor("processing.peak_search_end_bin").change_policy == fmcw::ChangePolicy::Runtime,
@@ -163,6 +169,12 @@ void testSchemaAndBoardCapabilityValidation() {
   invalid.digitizer.sample_rate_hz = 750.0e6;
   const auto validation = fmcw::ConfigValidator::validate(invalid);
   expect(validation.hasErrors(), "unsupported board sampling rate is rejected");
+
+  fmcw::SystemConfig missing_replay_file;
+  missing_replay_file.runtime.acquisition_source = fmcw::AcquisitionSource::Replay;
+  expect(hasIssue(fmcw::ConfigValidator::validate(missing_replay_file),
+                  fmcw::ValidationSeverity::Error, "runtime.replay_file"),
+         "replay source requires a raw v1 input file");
 
   fmcw::SystemConfig wrong_address;
   wrong_address.digitizer.board_id = 2;

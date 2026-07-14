@@ -57,6 +57,7 @@ class MainWindow final : public QMainWindow {
   void loadConfigToControls(const SystemConfig& config, bool mark_pending = false);
   void populateDigitizerCapabilities(QString profile_id, double preferred_rate_hz,
                                      double preferred_range_volts, std::uint32_t preferred_impedance);
+  void updateRuntimeSourceControls();
   void updateDerivedAcquisitionLabels();
   void applyProfile();
   void loadProfile();
@@ -82,6 +83,7 @@ class MainWindow final : public QMainWindow {
   QComboBox* profile_combo_ = nullptr;
   QPushButton* validation_button_ = nullptr;
   QLabel* runtime_state_label_ = nullptr;
+  QLabel* runtime_source_badge_ = nullptr;
   QLabel* raw_indicator_ = nullptr;
   QLabel* udp_indicator_ = nullptr;
   QPushButton* connect_button_ = nullptr;
@@ -118,6 +120,10 @@ class MainWindow final : public QMainWindow {
   QLabel* segmentation_state_ = nullptr;
 
   QComboBox* digitizer_channel_ = nullptr;
+  QComboBox* acquisition_source_ = nullptr;
+  QLineEdit* replay_file_ = nullptr;
+  QToolButton* replay_browse_ = nullptr;
+  QCheckBox* replay_loop_ = nullptr;
   QComboBox* board_profile_ = nullptr;
   QLabel* board_address_ = nullptr;
   QComboBox* sample_rate_ = nullptr;

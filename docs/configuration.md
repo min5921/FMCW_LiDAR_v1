@@ -66,6 +66,10 @@ Scan 계산에서 A-scans/B-scan은 별도 입력값이 아니라 `digitizer.rec
 
 ## Single UI And Field Presentation
 
+### Runtime Acquisition Source
+
+The `runtime` profile group selects `simulator`, `alazar`, or `replay`. Source changes are restart-required settings and are available directly on the Digitizer page. `alazar` creates the real ATS9371, MCU serial, and EDFA serial adapters; `simulator` creates deterministic fake adapters; `replay` reads raw format v1 through the same acquisition and processing pipeline. Replay requires `runtime.replay_file`, while `runtime.replay_loop` controls end-of-stream looping. Normal operation uses the GUI and saved profiles rather than command-line source options.
+
 전역 Basic/Advanced mode는 schema version 2부터 사용하지 않는다. 모든 설정 페이지는 항상 접근 가능하며, field policy의 `primary`는 페이지에 바로 표시하고 `detailed`는 같은 페이지의 `Details` 영역에 표시한다. 이 구분은 접근 권한이나 별도 운용 mode가 아니다.
 
 Processing group은 `peak_threshold_db`, `peak_search_start_bin`, `peak_search_end_bin`만 runtime peak 설정으로 저장한다. 각 A-scan은 이전 결과를 추적하지 않고 search range 안의 threshold 이상 최대 peak를 독립적으로 검출한다.

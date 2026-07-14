@@ -44,6 +44,25 @@ void stampScanPosition(const SystemConfig& config, RawFrame& frame) {
   frame.metadata.scan_position.valid = true;
 }
 
+bool validateAndStampFrame(const SystemConfig& config, std::uint64_t config_revision,
+                           const EdfaStatus& edfa_status, RawFrame& frame, std::string& error) {
+  if (frame.metadata.frame_kind != FrameKind::FullChirpPeriod ||
+      frame.metadata.channel != config.digitizer.channel ||
+      frame.samples.size() != config.digitizer.sample_point ||
+      !frame.metadata.up_segment.validFor(config.digitizer.sample_point) ||
+      !frame.metadata.down_segment.validFor(config.digitizer.sample_point)) {
+    error = "Digitizer returned a frame that violates the full-period single-channel contract";
+    return false;
+  }
+  frame.metadata.config_revision = config_revision;
+  frame.metadata.optical_state.edfa_used = config.edfa.mode != EdfaMode::None;
+  frame.metadata.optical_state.edfa_output_enabled = edfa_status.output_enabled;
+  frame.metadata.optical_state.laser_enabled = true;
+  frame.metadata.optical_state.revision = config_revision;
+  stampScanPosition(config, frame);
+  return true;
+}
+
 }  // namespace
 
 AcquisitionSession::AcquisitionSession(IDigitizer& digitizer, IEdfaController& edfa, IMcuController& mcu)
@@ -56,7 +75,7 @@ AcquisitionSession::~AcquisitionSession() {
 }
 
 bool AcquisitionSession::configure(const SystemConfig& config, std::uint64_t config_revision, std::string& error) {
-  if (running_) {
+  if (running_.load()) {
     error = "Cannot configure devices while acquisition is running";
     return false;
   }
@@ -75,18 +94,18 @@ bool AcquisitionSession::configure(const SystemConfig& config, std::uint64_t con
     return false;
   }
   config_ = config;
-  config_revision_ = config_revision;
-  configured_ = true;
+  config_revision_.store(config_revision);
+  configured_.store(true);
   error.clear();
   return true;
 }
 
 bool AcquisitionSession::connect(std::string& error) {
-  if (!configured_) {
+  if (!configured_.load()) {
     error = "Configure the acquisition session before connecting devices";
     return false;
   }
-  if (connected_) {
+  if (connected_.load()) {
     return true;
   }
   if (!digitizer_.connect(error)) {
@@ -101,24 +120,24 @@ bool AcquisitionSession::connect(std::string& error) {
     digitizer_.disconnect();
     return false;
   }
-  connected_ = true;
+  connected_.store(true);
   error.clear();
   return true;
 }
 
 void AcquisitionSession::disconnect() {
-  if (running_) {
+  if (running_.load()) {
     std::string ignored;
     stopDevices(true, ignored);
   }
   mcu_.disconnect();
   edfa_.disconnect();
   digitizer_.disconnect();
-  connected_ = false;
+  connected_.store(false);
 }
 
 bool AcquisitionSession::start(std::string& error) {
-  if (!configured_ || !connected_ || running_) {
+  if (!configured_.load() || !connected_.load() || running_.load()) {
     error = "Acquisition session is not configured and connected, or is already running";
     return false;
   }
@@ -149,40 +168,70 @@ bool AcquisitionSession::start(std::string& error) {
     return false;
   }
 
-  running_ = true;
+  running_.store(true);
   error.clear();
   return true;
 }
 
 FrameWaitResult AcquisitionSession::waitForFrame(RawFrame& frame, std::chrono::milliseconds timeout,
                                                   std::string& error) {
-  if (!running_) {
+  if (!running_.load()) {
     error = "Acquisition is not running";
     return FrameWaitResult::Stopped;
   }
   const auto result = digitizer_.waitForFrame(frame, timeout, error);
   if (result != FrameWaitResult::FrameReady) {
     if (result == FrameWaitResult::Stopped) {
-      running_ = false;
+      running_.store(false);
     }
     return result;
   }
-  if (frame.metadata.frame_kind != FrameKind::FullChirpPeriod ||
-      frame.metadata.channel != config_.digitizer.channel ||
-      frame.samples.size() != config_.digitizer.sample_point ||
-      !frame.metadata.up_segment.validFor(config_.digitizer.sample_point) ||
-      !frame.metadata.down_segment.validFor(config_.digitizer.sample_point)) {
-    error = "Digitizer returned a frame that violates the full-period single-channel contract";
+  if (!validateAndStampFrame(config_, config_revision_.load(), edfa_.status(), frame, error)) {
+    return FrameWaitResult::Error;
+  }
+  error.clear();
+  return FrameWaitResult::FrameReady;
+}
+
+FrameWaitResult AcquisitionSession::waitForBatch(RawFrameBatchPtr& batch,
+                                                 std::chrono::milliseconds timeout,
+                                                 std::string& error) {
+  batch.reset();
+  if (!running_.load()) {
+    error = "Acquisition is not running";
+    return FrameWaitResult::Stopped;
+  }
+
+  MutableRawFrameBatchPtr mutable_batch;
+  const auto result = digitizer_.waitForBatch(mutable_batch, timeout, error);
+  if (result != FrameWaitResult::FrameReady) {
+    if (result == FrameWaitResult::Stopped) {
+      running_.store(false);
+    }
+    return result;
+  }
+  if (!mutable_batch || mutable_batch->records.empty() ||
+      mutable_batch->metadata.record_count != mutable_batch->records.size() ||
+      mutable_batch->metadata.record_length != config_.digitizer.sample_point) {
+    error = "Digitizer returned an invalid or empty DMA batch";
     return FrameWaitResult::Error;
   }
 
+  const auto record_count = static_cast<std::uint32_t>(mutable_batch->records.size());
   const auto edfa_status = edfa_.status();
-  frame.metadata.config_revision = config_revision_;
-  frame.metadata.optical_state.edfa_used = config_.edfa.mode != EdfaMode::None;
-  frame.metadata.optical_state.edfa_output_enabled = edfa_status.output_enabled;
-  frame.metadata.optical_state.laser_enabled = true;
-  frame.metadata.optical_state.revision = config_revision_;
-  stampScanPosition(config_, frame);
+  for (std::uint32_t index = 0; index < record_count; ++index) {
+    auto& frame = mutable_batch->records[index];
+    if (frame.metadata.dma_buffer_sequence != mutable_batch->metadata.sequence ||
+        frame.metadata.record_index_in_buffer != index ||
+        frame.metadata.records_in_buffer != record_count ||
+        !validateAndStampFrame(config_, config_revision_.load(), edfa_status, frame, error)) {
+      if (error.empty()) {
+        error = "Digitizer DMA batch record metadata is inconsistent";
+      }
+      return FrameWaitResult::Error;
+    }
+  }
+  batch = std::move(mutable_batch);
   error.clear();
   return FrameWaitResult::FrameReady;
 }
@@ -195,19 +244,19 @@ bool AcquisitionSession::emergencyStop(std::string& error) {
   return stopDevices(true, error);
 }
 
-bool AcquisitionSession::configured() const { return configured_; }
+bool AcquisitionSession::configured() const { return configured_.load(); }
 
-bool AcquisitionSession::connected() const { return connected_; }
+bool AcquisitionSession::connected() const { return connected_.load(); }
 
-bool AcquisitionSession::running() const { return running_; }
+bool AcquisitionSession::running() const { return running_.load(); }
 
 AcquisitionTelemetrySnapshot AcquisitionSession::telemetry() const {
   AcquisitionTelemetrySnapshot snapshot;
   snapshot.timestamp_ns = nowNs();
-  snapshot.config_revision = config_revision_;
-  snapshot.configured = configured_;
-  snapshot.connected = connected_;
-  snapshot.running = running_;
+  snapshot.config_revision = config_revision_.load();
+  snapshot.configured = configured_.load();
+  snapshot.connected = connected_.load();
+  snapshot.running = running_.load();
   snapshot.digitizer = digitizer_.telemetry();
   snapshot.edfa = edfa_.status();
   snapshot.mcu = mcu_.status();
@@ -227,7 +276,7 @@ bool AcquisitionSession::stopDevices(bool emergency, std::string& error) {
       success = false;
     }
   }
-  if (running_ || digitizer_.telemetry().device.running) {
+  if (running_.load() || digitizer_.telemetry().device.running) {
     device_error.clear();
     if (!digitizer_.abort(device_error)) {
       appendError(error, "digitizer abort", device_error);
@@ -247,7 +296,7 @@ bool AcquisitionSession::stopDevices(bool emergency, std::string& error) {
       success = false;
     }
   }
-  running_ = false;
+  running_.store(false);
   if (success) {
     error.clear();
   }

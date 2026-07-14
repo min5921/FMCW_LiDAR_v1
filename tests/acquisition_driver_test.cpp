@@ -1,10 +1,13 @@
 #include "core/acquisition_session.h"
+#include "core/continuous_acquisition_worker.h"
+#include "core/raw_frame_batch_pool.h"
 #include "drivers/alazar/alazar_digitizer.h"
 #include "drivers/alazar/alazar_sample_conversion.h"
 #include "drivers/edfa/edfa_protocol.h"
 #include "drivers/edfa/edfa_serial_controller.h"
 #include "drivers/mcu/mcu_protocol.h"
 #include "drivers/mcu/mcu_serial_controller.h"
+#include "drivers/runtime_adapter_factory.h"
 #include "drivers/serial/serial_transport.h"
 #include "drivers/simulator/fake_digitizer.h"
 #include "drivers/simulator/fake_edfa.h"
@@ -12,10 +15,12 @@
 
 #include <algorithm>
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <deque>
 #include <iostream>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -144,6 +149,157 @@ class ScriptedSerialTransport final : public fmcw::ISerialTransport {
   std::deque<std::string> lines_;
 };
 
+class OrderedDigitizer final : public fmcw::IDigitizer {
+ public:
+  explicit OrderedDigitizer(std::vector<std::string>& events) : events_(events) {}
+
+  std::string name() const override { return "ordered digitizer"; }
+  fmcw::DigitizerTelemetry telemetry() const override { return telemetry_; }
+  bool configure(const fmcw::SystemConfig&, std::string& error) override {
+    error.clear();
+    return true;
+  }
+  bool connect(std::string& error) override {
+    telemetry_.device.connected = true;
+    telemetry_.device.ready = true;
+    error.clear();
+    return true;
+  }
+  void disconnect() override { telemetry_.device = {}; }
+  bool start(std::string& error) override {
+    events_.push_back("digitizer.start");
+    telemetry_.device.running = true;
+    error.clear();
+    return true;
+  }
+  fmcw::FrameWaitResult waitForBatch(fmcw::MutableRawFrameBatchPtr&,
+                                     std::chrono::milliseconds,
+                                     std::string& error) override {
+    error.clear();
+    return fmcw::FrameWaitResult::Timeout;
+  }
+  fmcw::FrameWaitResult waitForFrame(fmcw::RawFrame&, std::chrono::milliseconds,
+                                     std::string& error) override {
+    error.clear();
+    return fmcw::FrameWaitResult::Timeout;
+  }
+  bool abort(std::string& error) override {
+    events_.push_back("digitizer.abort");
+    telemetry_.device.running = false;
+    error.clear();
+    return true;
+  }
+  bool stop(std::string& error) override {
+    events_.push_back("digitizer.stop");
+    telemetry_.device.running = false;
+    error.clear();
+    return true;
+  }
+
+ private:
+  std::vector<std::string>& events_;
+  fmcw::DigitizerTelemetry telemetry_;
+};
+
+class OrderedEdfa final : public fmcw::IEdfaController {
+ public:
+  explicit OrderedEdfa(std::vector<std::string>& events) : events_(events) {}
+
+  std::string name() const override { return "ordered EDFA"; }
+  fmcw::EdfaStatus status() const override { return status_; }
+  bool configure(const fmcw::SystemConfig& config, std::string& error) override {
+    status_.mode = config.edfa.mode;
+    status_.bypassed = config.edfa.mode == fmcw::EdfaMode::None;
+    error.clear();
+    return true;
+  }
+  bool connect(std::string& error) override {
+    status_.device.connected = true;
+    status_.device.ready = true;
+    error.clear();
+    return true;
+  }
+  void disconnect() override { status_.device = {}; }
+  bool setControlMode(fmcw::EdfaControlMode mode, std::string& error) override {
+    status_.control_mode = mode;
+    error.clear();
+    return true;
+  }
+  bool setOutputSetpoint(const fmcw::OpticalPowerSetpoint& setpoint,
+                         std::string& error) override {
+    status_.setpoint = setpoint;
+    error.clear();
+    return true;
+  }
+  bool setOutputEnabled(bool enabled, std::string& error) override {
+    events_.push_back(enabled ? "edfa.on" : "edfa.off");
+    status_.output_enabled = enabled;
+    error.clear();
+    return true;
+  }
+  bool resetAlarm(std::string& error) override {
+    error.clear();
+    return true;
+  }
+  bool emergencyOff(std::string& error) override {
+    events_.push_back("edfa.emergency_off");
+    status_.output_enabled = false;
+    error.clear();
+    return true;
+  }
+
+ private:
+  std::vector<std::string>& events_;
+  fmcw::EdfaStatus status_;
+};
+
+class OrderedMcu final : public fmcw::IMcuController {
+ public:
+  explicit OrderedMcu(std::vector<std::string>& events) : events_(events) {}
+
+  std::string name() const override { return "ordered MCU"; }
+  fmcw::McuStatus status() const override { return status_; }
+  bool configure(const fmcw::SystemConfig&, std::string& error) override {
+    error.clear();
+    return true;
+  }
+  bool connect(std::string& error) override {
+    status_.device.connected = true;
+    status_.device.ready = true;
+    error.clear();
+    return true;
+  }
+  void disconnect() override { status_.device = {}; }
+  bool uploadWaveform(const std::vector<fmcw::McuWaveformFrame>& frames,
+                      std::string& error) override {
+    status_.waveform_points = static_cast<std::uint32_t>(frames.size());
+    error.clear();
+    return true;
+  }
+  bool startScan(std::string& error) override {
+    events_.push_back("mcu.start");
+    status_.scan_enabled = true;
+    error.clear();
+    return true;
+  }
+  bool stopScan(std::string& error) override {
+    events_.push_back("mcu.stop");
+    status_.scan_enabled = false;
+    error.clear();
+    return true;
+  }
+  bool emergencyStop(std::string& error) override {
+    events_.push_back("mcu.emergency_stop");
+    status_.scan_enabled = false;
+    error.clear();
+    return true;
+  }
+
+ private:
+  std::vector<std::string>& events_;
+  fmcw::McuStatus status_;
+};
+
 void testMcuProtocol() {
   const fmcw::McuWaveformFrame frame{1, 2, 3, 4, true};
   expect(fmcw::McuProtocol::clearCommand() == "CLR\n", "MCU clear command matches firmware");
@@ -262,10 +418,148 @@ void testFakeFullPeriodSession() {
          "fake up-chirp segment contains deterministic signal data");
 
   const auto telemetry = session.telemetry();
-  expect(telemetry.digitizer.frames_received == 1, "core telemetry exposes digitizer frame count");
+  expect(telemetry.digitizer.frames_received == config.digitizer.records_per_buffer &&
+             telemetry.digitizer.dma_buffers_received == 1,
+         "legacy frame access still reports the full DMA batch received from the digitizer");
   expect(telemetry.edfa.bypassed && telemetry.edfa.device.ready, "core telemetry exposes EDFA bypass");
   expect(!telemetry.mcu.device.connected && telemetry.mcu.device.ready, "core telemetry exposes optional MCU bypass");
   expect(session.stop(error), "fake session stops cleanly");
+}
+
+void testFakeDmaBatchSession() {
+  fmcw::FakeDigitizer digitizer;
+  fmcw::FakeEdfaController edfa;
+  fmcw::FakeMcuController mcu;
+  fmcw::AcquisitionSession session(digitizer, edfa, mcu);
+  fmcw::SystemConfig config;
+  config.digitizer.records_per_buffer = 4;
+  config.digitizer.a_scan_count = 4;
+  config.scan.x_pixel_count = 4;
+  std::string error;
+
+  expect(session.configure(config, 18, error) && session.connect(error) && session.start(error),
+         "batch session configures, connects, and starts");
+  fmcw::RawFrameBatchPtr batch;
+  expect(session.waitForBatch(batch, std::chrono::milliseconds(20), error) ==
+             fmcw::FrameWaitResult::FrameReady,
+         "fake digitizer returns one complete DMA batch");
+  expect(batch && batch->records.size() == 4U && batch->metadata.record_count == 4U &&
+             batch->metadata.record_length == config.digitizer.sample_point,
+         "DMA batch owns all configured records and record-length metadata");
+  bool metadata_consistent = batch != nullptr;
+  for (std::size_t index = 0; batch && index < batch->records.size(); ++index) {
+    const auto frame = fmcw::rawFrameAt(batch, index);
+    metadata_consistent = metadata_consistent && frame &&
+        frame->metadata.dma_buffer_sequence == batch->metadata.sequence &&
+        frame->metadata.record_index_in_buffer == index &&
+        frame->metadata.records_in_buffer == batch->records.size() &&
+        frame->metadata.config_revision == 18;
+  }
+  expect(metadata_consistent, "all records retain immutable batch and session metadata");
+  expect(session.stop(error), "batch session stops cleanly");
+}
+
+void testGlobalStopDeviceOrder() {
+  std::vector<std::string> events;
+  OrderedDigitizer digitizer(events);
+  OrderedEdfa edfa(events);
+  OrderedMcu mcu(events);
+  fmcw::AcquisitionSession session(digitizer, edfa, mcu);
+  fmcw::SystemConfig config;
+  config.edfa.mode = fmcw::EdfaMode::Controlled;
+  config.edfa.port = "ORDERED";
+  config.edfa.warmup_delay_ms = 0;
+  config.mcu.enabled = true;
+  config.mcu.port = "ORDERED";
+  std::string error;
+  expect(session.configure(config, 20, error) && session.connect(error) && session.start(error),
+         "ordered hardware session configures, connects, and starts");
+  events.clear();
+  expect(session.stop(error), "ordered hardware session stops cleanly");
+  const std::vector<std::string> expected{
+      "mcu.stop", "digitizer.abort", "digitizer.stop", "edfa.off"};
+  expect(events == expected,
+         "global Stop removes the MCU trigger, aborts and stops DMA, then disables EDFA output");
+}
+
+void testRawFrameBatchPoolLifetime() {
+  fmcw::RawFrameBatchPool pool(1);
+  auto mutable_batch = pool.acquire();
+  auto* original_address = mutable_batch.get();
+  mutable_batch->records.resize(1);
+  mutable_batch->records.front().samples.resize(4096);
+  const auto original_capacity = mutable_batch->records.front().samples.capacity();
+  fmcw::RawFrameBatchPtr batch = mutable_batch;
+  auto frame = fmcw::rawFrameAt(batch, 0);
+  mutable_batch.reset();
+  batch.reset();
+  expect(pool.cachedBatchCount() == 0U,
+         "an aliased record keeps its pooled DMA batch alive");
+  frame.reset();
+  expect(pool.cachedBatchCount() == 1U,
+         "DMA batch returns to the pool after the final record reference is released");
+  auto reused = pool.acquire();
+  expect(reused.get() == original_address && reused->records.front().samples.capacity() == original_capacity,
+         "batch pool reuses the batch object and retained sample allocation");
+}
+
+void testContinuousAcquisitionWorker() {
+  fmcw::FakeDigitizer digitizer;
+  fmcw::FakeEdfaController edfa;
+  fmcw::FakeMcuController mcu;
+  fmcw::AcquisitionSession session(digitizer, edfa, mcu);
+  fmcw::SystemConfig config;
+  config.digitizer.acquisition_mode = fmcw::AcquisitionMode::Finite;
+  config.digitizer.finite_frame_count = 5;
+  config.digitizer.records_per_buffer = 4;
+  config.digitizer.a_scan_count = 4;
+  config.scan.x_pixel_count = 4;
+  std::string error;
+  expect(session.configure(config, 19, error) && session.connect(error) && session.start(error),
+         "finite session starts for continuous worker test");
+
+  fmcw::ContinuousAcquisitionWorker worker(session);
+  std::mutex mutex;
+  std::condition_variable condition;
+  bool exited = false;
+  bool failed = true;
+  std::uint64_t records = 0;
+  expect(worker.start(
+      [&](fmcw::RawFrameBatchPtr batch, std::string&) {
+        std::lock_guard<std::mutex> lock(mutex);
+        records += batch->records.size();
+        return true;
+      },
+      [&](bool worker_failed, std::string) {
+        std::lock_guard<std::mutex> lock(mutex);
+        failed = worker_failed;
+        exited = true;
+        condition.notify_all();
+      },
+      error), "continuous acquisition worker starts");
+  {
+    std::unique_lock<std::mutex> lock(mutex);
+    expect(condition.wait_for(lock, std::chrono::seconds(2), [&] { return exited; }),
+           "continuous worker reports finite source completion");
+  }
+  expect(worker.waitUntilStopped(error), "continuous worker joins without an acquisition failure");
+  const auto status = worker.status();
+  expect(!failed && records == 5U && status.batches_delivered == 2U &&
+             status.records_delivered == 5U,
+         "continuous worker delivers a full and partial final batch without polling");
+  expect(session.stop(error), "finite worker session finalizes cleanly");
+}
+
+void testRuntimeAdapterFactory() {
+  const auto simulator = fmcw::createRuntimeAdapters(fmcw::AcquisitionSource::Simulator);
+  const auto replay = fmcw::createRuntimeAdapters(fmcw::AcquisitionSource::Replay);
+  const auto hardware = fmcw::createRuntimeAdapters(fmcw::AcquisitionSource::Alazar);
+  expect(simulator && simulator.digitizer->name().find("Fake") != std::string::npos,
+         "simulator source creates fake device adapters");
+  expect(replay && replay.digitizer->name().find("replay") != std::string::npos,
+         "replay source creates the raw replay adapter");
+  expect(hardware && hardware.digitizer->name().find("AlazarTech") != std::string::npos,
+         "hardware source creates the real Alazar adapter");
 }
 
 void testOptionalControlledDevicesAndChannelB() {
@@ -382,6 +676,11 @@ int main() {
   testEdfaProtocol();
   testSerialControllers();
   testFakeFullPeriodSession();
+  testFakeDmaBatchSession();
+  testGlobalStopDeviceOrder();
+  testRawFrameBatchPoolLifetime();
+  testContinuousAcquisitionWorker();
+  testRuntimeAdapterFactory();
   testOptionalControlledDevicesAndChannelB();
   testScannerStartFailureRollsBackArmedDevices();
   testFiniteFakeAcquisition();

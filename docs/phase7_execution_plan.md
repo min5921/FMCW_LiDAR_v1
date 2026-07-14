@@ -53,7 +53,7 @@ DMA buffer는 acquisition, processing, raw storage 사이의 기본 운반 단�
 | Subphase | Status | Main result | Hardware required |
 | --- | --- | --- | --- |
 | 7.1 ADC and configuration correctness | done | 정확한 ATS9371 sample과 일관된 chirp profile | 최종 capture 비교 시 필요 |
-| 7.2 Hardware runtime and DMA batch | pending (next) | EXE에서 실제 ATS9371 연결 및 지속 DMA 수집 | Windows ATS9371 acceptance 필요 |
+| 7.2 Hardware runtime and DMA batch | in_progress | EXE에서 실제 ATS9371 연결 및 지속 DMA 수집 | Windows ATS9371 acceptance 필요 |
 | 7.3A FFTW batch processing | pending | CPU batch 거리/B-scan/3D | reference raw로 검증 가능 |
 | 7.3B CUDA full pipeline | pending | GPU batch 전처리부터 peak/point까지 처리 | local RTX, 이후 Jetson 필요 |
 | 7.4 High-speed raw storage | pending | DMA-block recording과 replay | NVMe sustained test 필요 |
@@ -119,6 +119,18 @@ DMA buffer는 acquisition, processing, raw storage 사이의 기본 운반 단�
 
 - 명령행 설정 없이 EXE에서 실제 ATS9371을 연결하고 START/STOP할 수 있다.
 - UI에서 실제 DMA rate, period, buffer/trigger 상태를 확인할 수 있다.
+
+### Phase 7.2 Software Verification Record (2026-07-14)
+
+- GUI/profile runtime selection now supports Simulator, Alazar ATS9371, and Raw Replay without command-line source options.
+- The packaged EXE creates real `AlazarDigitizer`, `McuSerialController`, and `EdfaSerialController` adapters for the hardware source.
+- `ContinuousAcquisitionWorker` replaces Qt acquisition polling; the Qt timer is now limited to telemetry and snapshot publication.
+- One pool-backed immutable `RawFrameBatch` owns every record from one DMA completion. Raw storage uses aliasing frame references and processing queues the complete batch.
+- The Alazar path waits once, copies/converts every record, and reposts the SDK buffer immediately after the ownership copy.
+- Windows MSVC Release built with ATS-SDK 25.1.0, FFTW, and CUDA/cuFFT enabled; CTest passed 5/5.
+- A deterministic device-order test verifies MCU stop, digitizer abort/stop, and controlled EDFA off in that exact sequence.
+- Packaged simulator runtime delivered 141 batches and 9,024 records with processing queue 0/32, DMA drops 0, and trigger misses 0 in the GUI smoke run.
+- Remaining Phase 7.2 acceptance: connect ATS9371 and complete the 10-minute DMA, locked-page, handle, STOP, and overflow checks. Status remains `in_progress` until that hardware evidence exists.
 
 ## 7. Phase 7.3A: FFTW Batch Processing
 

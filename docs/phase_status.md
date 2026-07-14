@@ -139,3 +139,16 @@ Phase 7.1 verification:
 - Windows MSVC Release built with ATS-SDK, FFTW, and CUDA/cuFFT enabled.
 - All five CTest targets passed.
 - Implementation commit: `82b8369`
+
+Phase 7.2 software verification:
+
+- Runtime source selection is available in the Digitizer UI and YAML profile for Simulator, Alazar ATS9371, and Raw Replay.
+- The application runtime factory now selects real Alazar/MCU/EDFA adapters for hardware operation.
+- A dedicated continuous acquisition thread consumes one complete pool-backed DMA batch at a time; the UI timer no longer polls records.
+- Alazar repost occurs immediately after all records are copied from the completed SDK buffer.
+- Processing queue capacity is batch based, while raw format v1 storage safely retains aliasing per-record references.
+- Release CTest passed 5/5, including batch lifetime, finite worker shutdown, adapter factory, replay batch, and processing batch tests.
+- The global STOP regression test fixes the safety order as MCU trigger off, digitizer abort/stop, then controlled EDFA output off.
+- The packaged GUI simulator delivered 141 DMA batches / 9,024 records with queue 0/32 and no DMA drop or trigger miss.
+- `build/package/FMCW_LiDAR/FMCW_LiDAR.exe` matches the Release build SHA-256 `7ADB64661441A87C748D6D7B8D48EF36204588DB8791766D5895A08303DB2BB6`.
+- ATS9371 was not connected, so the 10-minute hardware acceptance remains pending and Phase 7.2 stays in progress.

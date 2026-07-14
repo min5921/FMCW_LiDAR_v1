@@ -6,6 +6,10 @@ profile:
   author: "FMCW LiDAR Team"
   created_utc: "2026-07-10T00:00:00Z"
   modified_utc: "2026-07-10T00:00:00Z"
+runtime:
+  acquisition_source: simulator
+  replay_file: ""
+  replay_loop: false
 digitizer:
   system_id: 1
   board_id: 1

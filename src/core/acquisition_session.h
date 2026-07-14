@@ -3,6 +3,7 @@
 #include "core/device_interfaces.h"
 #include "core/system_telemetry.h"
 
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <string>
@@ -18,6 +19,8 @@ class AcquisitionSession {
   bool connect(std::string& error);
   void disconnect();
   bool start(std::string& error);
+  FrameWaitResult waitForBatch(RawFrameBatchPtr& batch, std::chrono::milliseconds timeout,
+                               std::string& error);
   FrameWaitResult waitForFrame(RawFrame& frame, std::chrono::milliseconds timeout, std::string& error);
   bool stop(std::string& error);
   bool emergencyStop(std::string& error);
@@ -34,10 +37,10 @@ class AcquisitionSession {
   IEdfaController& edfa_;
   IMcuController& mcu_;
   SystemConfig config_;
-  std::uint64_t config_revision_ = 0;
-  bool configured_ = false;
-  bool connected_ = false;
-  bool running_ = false;
+  std::atomic_uint64_t config_revision_{0};
+  std::atomic_bool configured_{false};
+  std::atomic_bool connected_{false};
+  std::atomic_bool running_{false};
 };
 
 }  // namespace fmcw

@@ -22,7 +22,7 @@ struct ProcessingService::Impl {
 
   void workerLoop() {
     while (true) {
-      RawFramePtr raw;
+      RawFrameBatchPtr batch;
       std::optional<PendingRuntimeConfig> runtime_update;
       ProcessedFrameCallback current_callback;
       {
@@ -31,7 +31,7 @@ struct ProcessingService::Impl {
         if (queue.empty() && !accepting) {
           break;
         }
-        raw = std::move(queue.front());
+        batch = std::move(queue.front());
         queue.pop_front();
         runtime_update = std::move(pending_runtime_config);
         pending_runtime_config.reset();
@@ -48,34 +48,47 @@ struct ProcessingService::Impl {
         queue.clear();
         break;
       }
-      auto processed = std::make_shared<ProcessedFrame>();
-      if (!processor.process(*raw, *processed, error)) {
-        std::lock_guard<std::mutex> lock(mutex);
-        worker_error = error;
-        stop_reason = "Signal processing failed";
-        stop_requested = true;
-        accepting = false;
-        queue.clear();
-        break;
-      }
-      snapshots.publish(*raw, *processed);
-      {
-        std::lock_guard<std::mutex> lock(mutex);
-        ++frames_processed;
-        last_processed_frame_id = processed->frame_id;
-        latency_total_ms += processed->processing_latency_ms;
-        processing_config_revision = processed->processing_config_revision;
-        if (processed->stop_requested) {
+      bool batch_complete = true;
+      for (std::size_t record_index = 0; record_index < batch->records.size(); ++record_index) {
+        const auto raw = rawFrameAt(batch, record_index);
+        auto processed = std::make_shared<ProcessedFrame>();
+        if (!raw || !processor.process(*raw, *processed, error)) {
+          std::lock_guard<std::mutex> lock(mutex);
+          worker_error = error.empty() ? "DMA batch contains an invalid raw frame" : error;
+          stop_reason = "Signal processing failed";
           stop_requested = true;
-          stop_reason = "Processing requested acquisition stop";
           accepting = false;
           queue.clear();
+          batch_complete = false;
+          break;
+        }
+        snapshots.publish(*raw, *processed);
+        {
+          std::lock_guard<std::mutex> lock(mutex);
+          ++frames_processed;
+          last_processed_frame_id = processed->frame_id;
+          latency_total_ms += processed->processing_latency_ms;
+          processing_config_revision = processed->processing_config_revision;
+          if (processed->stop_requested) {
+            stop_requested = true;
+            stop_reason = "Processing requested acquisition stop";
+            accepting = false;
+            queue.clear();
+          }
+        }
+        if (current_callback) {
+          current_callback(processed);
+        }
+        if (processed->stop_requested) {
+          batch_complete = false;
+          break;
         }
       }
-      if (current_callback) {
-        current_callback(processed);
+      if (batch_complete) {
+        std::lock_guard<std::mutex> lock(mutex);
+        ++batches_processed;
       }
-      if (processed->stop_requested) {
+      if (!batch_complete) {
         break;
       }
     }
@@ -85,7 +98,7 @@ struct ProcessingService::Impl {
 
   mutable std::mutex mutex;
   std::condition_variable condition;
-  std::deque<RawFramePtr> queue;
+  std::deque<RawFrameBatchPtr> queue;
   std::thread worker;
   SignalProcessor processor;
   ProcessingSnapshotStore snapshots;
@@ -94,6 +107,7 @@ struct ProcessingService::Impl {
   ProcessedFrameCallback callback;
   std::size_t queue_capacity = 0;
   std::size_t queue_high_water_mark = 0;
+  std::uint64_t batches_processed = 0;
   std::uint64_t frames_processed = 0;
   std::uint64_t last_processed_frame_id = 0;
   std::uint64_t processing_config_revision = 0;
@@ -142,6 +156,7 @@ bool ProcessingService::start(std::string& error) {
   }
   impl_->queue.clear();
   impl_->queue_high_water_mark = 0;
+  impl_->batches_processed = 0;
   impl_->frames_processed = 0;
   impl_->last_processed_frame_id = 0;
   impl_->latency_total_ms = 0.0;
@@ -155,9 +170,9 @@ bool ProcessingService::start(std::string& error) {
   return true;
 }
 
-ProcessingEnqueueResult ProcessingService::enqueue(RawFramePtr frame, std::string& error) {
-  if (!frame) {
-    error = "Cannot enqueue a null raw frame";
+ProcessingEnqueueResult ProcessingService::enqueueBatch(RawFrameBatchPtr batch, std::string& error) {
+  if (!batch || batch->records.empty()) {
+    error = "Cannot enqueue a null or empty raw DMA batch";
     return ProcessingEnqueueResult::Error;
   }
   std::lock_guard<std::mutex> lock(impl_->mutex);
@@ -173,11 +188,25 @@ ProcessingEnqueueResult ProcessingService::enqueue(RawFramePtr frame, std::strin
     error = impl_->stop_reason;
     return ProcessingEnqueueResult::Overflow;
   }
-  impl_->queue.push_back(std::move(frame));
+  impl_->queue.push_back(std::move(batch));
   impl_->queue_high_water_mark = std::max(impl_->queue_high_water_mark, impl_->queue.size());
   impl_->condition.notify_one();
   error.clear();
   return ProcessingEnqueueResult::Accepted;
+}
+
+ProcessingEnqueueResult ProcessingService::enqueue(RawFramePtr frame, std::string& error) {
+  if (!frame) {
+    error = "Cannot enqueue a null raw frame";
+    return ProcessingEnqueueResult::Error;
+  }
+  auto batch = std::make_shared<RawFrameBatch>();
+  batch->metadata.sequence = frame->metadata.dma_buffer_sequence;
+  batch->metadata.completion_timestamp_ns = frame->metadata.host_timestamp_ns;
+  batch->metadata.record_count = 1;
+  batch->metadata.record_length = frame->metadata.record_length;
+  batch->records.push_back(*frame);
+  return enqueueBatch(std::move(batch), error);
 }
 
 bool ProcessingService::updateRuntimeConfig(const ProcessingConfig& config,
@@ -244,6 +273,7 @@ ProcessingServiceStatus ProcessingService::status() const {
   status.queue_size = impl_->queue.size();
   status.queue_capacity = impl_->queue_capacity;
   status.queue_high_water_mark = impl_->queue_high_water_mark;
+  status.batches_processed = impl_->batches_processed;
   status.frames_processed = impl_->frames_processed;
   status.last_processed_frame_id = impl_->last_processed_frame_id;
   status.processing_config_revision = impl_->processing_config_revision;

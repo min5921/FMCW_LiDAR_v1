@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -8,6 +9,7 @@
 namespace fmcw {
 
 inline constexpr std::uint32_t kRawFrameFormatVersion = 1;
+inline constexpr std::uint32_t kRawFrameBatchFormatVersion = 1;
 
 enum class FrameKind {
   FullChirpPeriod,
@@ -93,6 +95,31 @@ struct RawFrame {
 };
 
 using RawFramePtr = std::shared_ptr<const RawFrame>;
+
+struct DmaBufferMetadata {
+  std::uint32_t format_version = kRawFrameBatchFormatVersion;
+  std::uint64_t sequence = 0;
+  std::uint64_t completion_timestamp_ns = 0;
+  std::uint32_t record_count = 0;
+  std::uint32_t record_length = 0;
+  std::uint64_t dropped_buffer_count = 0;
+  std::uint64_t missed_trigger_count = 0;
+};
+
+struct RawFrameBatch {
+  DmaBufferMetadata metadata;
+  std::vector<RawFrame> records;
+};
+
+using MutableRawFrameBatchPtr = std::shared_ptr<RawFrameBatch>;
+using RawFrameBatchPtr = std::shared_ptr<const RawFrameBatch>;
+
+inline RawFramePtr rawFrameAt(const RawFrameBatchPtr& batch, std::size_t index) {
+  if (!batch || index >= batch->records.size()) {
+    return {};
+  }
+  return RawFramePtr(batch, &batch->records[index]);
+}
 
 struct PointXYZI {
   float x = 0.0F;

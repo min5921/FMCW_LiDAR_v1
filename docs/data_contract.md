@@ -19,7 +19,9 @@ Runtime metadata also carries `dma_buffer_sequence`, zero-based `record_index_in
 
 The v1 acquisition UI exposes only the `up_chirp_only` trigger mode. Legacy up/down trigger pairs may be imported by replay or migration tools, but are not an active hardware profile option.
 
-After a digitizer adapter produces a frame, the acquisition controller publishes it as immutable shared ownership to bounded processing and storage queues. Consumers must not modify sample or metadata memory. UI rendering receives a downsampled snapshot rather than owning the acquisition buffer.
+After a digitizer adapter completes one DMA buffer, it copies every record into a pool-backed `RawFrameBatch` and releases or reposts the vendor DMA buffer immediately. The session validates and stamps the complete batch before publishing immutable shared ownership to processing and storage. Individual `RawFramePtr` values are aliasing references into that batch, so the pooled allocation is returned only after every consumer releases its final reference. Consumers must not modify sample or metadata memory. UI rendering receives snapshots rather than owning an acquisition buffer.
+
+`DmaBufferMetadata` records the DMA sequence, completion timestamp, record count and length, cumulative dropped-buffer count, and cumulative missed-trigger count. Processing queue capacity is counted in DMA batches. Raw format v1 storage remains record based until the DMA-block format introduced in Phase 7.4.
 
 ## Segment Convention
 

@@ -3,6 +3,8 @@ profile:
   name: "Lab Simulator"
   description: "Hardware-optional profile for UI and pipeline development"
   modified_utc: "2026-07-10T00:00:00Z"
+runtime:
+  acquisition_source: simulator
 processing:
   fft_backend: fftw
 edfa:

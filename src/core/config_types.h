@@ -31,6 +31,12 @@ enum class AcquisitionMode {
   Finite,
 };
 
+enum class AcquisitionSource {
+  Simulator,
+  Alazar,
+  Replay,
+};
+
 enum class ChirpTriggerMode {
   UpChirpOnly,
 };
@@ -98,6 +104,12 @@ struct ProfileMetadata {
   std::string author = "FMCW LiDAR Team";
   std::string created_utc = "2026-07-10T00:00:00Z";
   std::string modified_utc = "2026-07-10T00:00:00Z";
+};
+
+struct RuntimeConfig {
+  AcquisitionSource acquisition_source = AcquisitionSource::Simulator;
+  std::string replay_file;
+  bool replay_loop = false;
 };
 
 struct DigitizerConfig {
@@ -238,6 +250,7 @@ struct McuConfig {
 
 struct SystemConfig {
   ProfileMetadata profile;
+  RuntimeConfig runtime;
   DigitizerConfig digitizer;
   LaserConfig laser;
   EdfaConfig edfa;
@@ -260,6 +273,7 @@ std::string toString(Coupling value);
 std::string toString(TriggerSource value);
 std::string toString(TriggerSlope value);
 std::string toString(AcquisitionMode value);
+std::string toString(AcquisitionSource value);
 std::string toString(ChirpTriggerMode value);
 std::string toString(WindowFunction value);
 std::string toString(SegmentPolarity value);
@@ -276,6 +290,7 @@ bool fromString(std::string_view text, Coupling& value);
 bool fromString(std::string_view text, TriggerSource& value);
 bool fromString(std::string_view text, TriggerSlope& value);
 bool fromString(std::string_view text, AcquisitionMode& value);
+bool fromString(std::string_view text, AcquisitionSource& value);
 bool fromString(std::string_view text, ChirpTriggerMode& value);
 bool fromString(std::string_view text, WindowFunction& value);
 bool fromString(std::string_view text, SegmentPolarity& value);

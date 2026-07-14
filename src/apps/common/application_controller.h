@@ -35,7 +35,10 @@ struct RuntimeStatus {
   bool mcu_waveform_loaded = false;
   std::uint32_t mcu_waveform_points = 0;
   double mcu_frame_time_ms = 0.0;
+  std::uint64_t acquisition_batches_delivered = 0;
   std::uint64_t dma_buffers_received = 0;
+  std::uint64_t dma_buffer_drops = 0;
+  std::uint64_t trigger_misses = 0;
   double dma_bscan_rate_hz = 0.0;
   double dma_bscan_period_ms = 0.0;
   std::uint64_t config_revision = 0;
@@ -56,6 +59,7 @@ struct RuntimeStatus {
   std::size_t udp_queue_size = 0;
   std::size_t udp_queue_capacity = 0;
   double udp_send_fps = 0.0;
+  QString source_name;
   QString backend_name;
   QString detail;
 };

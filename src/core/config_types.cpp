@@ -44,6 +44,15 @@ std::string toString(AcquisitionMode value) {
   return "continuous";
 }
 
+std::string toString(AcquisitionSource value) {
+  switch (value) {
+    case AcquisitionSource::Simulator: return "simulator";
+    case AcquisitionSource::Alazar: return "alazar";
+    case AcquisitionSource::Replay: return "replay";
+  }
+  return "simulator";
+}
+
 std::string toString(ChirpTriggerMode) { return "up_chirp_only"; }
 
 std::string toString(WindowFunction value) {
@@ -121,6 +130,12 @@ bool fromString(std::string_view text, AcquisitionMode& value) {
   return parseEnum(text, value, {{"single", AcquisitionMode::Single},
                                  {"continuous", AcquisitionMode::Continuous},
                                  {"finite", AcquisitionMode::Finite}});
+}
+
+bool fromString(std::string_view text, AcquisitionSource& value) {
+  return parseEnum(text, value, {{"simulator", AcquisitionSource::Simulator},
+                                 {"alazar", AcquisitionSource::Alazar},
+                                 {"replay", AcquisitionSource::Replay}});
 }
 
 bool fromString(std::string_view text, ChirpTriggerMode& value) {

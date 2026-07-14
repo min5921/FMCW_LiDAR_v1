@@ -3,10 +3,9 @@
 #include "core/acquisition_session.h"
 #include "core/app_version.h"
 #include "core/config_profile.h"
+#include "core/continuous_acquisition_worker.h"
 #include "drivers/mcu/mcu_protocol.h"
-#include "drivers/simulator/fake_digitizer.h"
-#include "drivers/simulator/fake_edfa.h"
-#include "drivers/simulator/fake_mcu.h"
+#include "drivers/runtime_adapter_factory.h"
 #include "network/udp_sender_service.h"
 #include "processing/fft_backends.h"
 #include "processing/processing_service.h"
@@ -19,6 +18,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <filesystem>
 #include <utility>
 #include <vector>
@@ -38,20 +38,24 @@ QString qString(const std::string& value) {
 }  // namespace
 
 class RuntimeWorker final : public QObject {
-  Q_OBJECT
+ Q_OBJECT
 
  public:
-  explicit RuntimeWorker(QString platform_name)
-      : platform_name_(std::move(platform_name)), session_(digitizer_, edfa_, mcu_) {}
+  explicit RuntimeWorker(QString platform_name) : platform_name_(std::move(platform_name)) {}
 
  public slots:
   void initialize() {
-    acquisition_timer_ = new QTimer(this);
-    acquisition_timer_->setTimerType(Qt::PreciseTimer);
-    acquisition_timer_->setInterval(8);
-    connect(acquisition_timer_, &QTimer::timeout, this, &RuntimeWorker::acquireOne);
-    emitLog("INFO", "Runtime", "Simulator runtime worker ready");
-    publishStatus("Disconnected. Apply a profile or connect the simulator.");
+    ui_timer_ = new QTimer(this);
+    ui_timer_->setTimerType(Qt::PreciseTimer);
+    ui_timer_->setInterval(33);
+    connect(ui_timer_, &QTimer::timeout, this, &RuntimeWorker::publishPeriodic);
+    QString error;
+    if (!selectRuntimeAdapters(AcquisitionSource::Simulator, error)) {
+      fail("Runtime initialization", error);
+      return;
+    }
+    emitLog("INFO", "Runtime", "Runtime adapter factory ready");
+    publishStatus("Disconnected. Apply a profile or connect a source.");
   }
 
   void configure(SystemConfig config) {
@@ -70,22 +74,24 @@ class RuntimeWorker final : public QObject {
       return;
     }
     std::string core_error;
-    if (!session_.connect(core_error)) {
+    if (session_ == nullptr || !session_->connect(core_error)) {
       fail("Connect", qString(core_error));
       return;
     }
     connected_ = true;
     state_ = OperationState::Ready;
-    emitLog("INFO", "Device", "Digitizer, EDFA, and MCU simulator adapters connected");
-    publishStatus("Simulator connected and ready");
-    emit commandCompleted("Connect", "Simulator devices are ready");
+    emitLog("INFO", "Device", qString(adapters_.display_name) + " adapters connected");
+    publishStatus(qString(adapters_.display_name) + " connected and ready");
+    emit commandCompleted("Connect", qString(adapters_.display_name) + " is ready");
   }
 
   void disconnectRuntime() {
     if (running_) {
       stopRuntime(false, "Disconnected by operator");
     }
-    session_.disconnect();
+    if (session_ != nullptr) {
+      session_->disconnect();
+    }
     connected_ = false;
     state_ = configured_ ? OperationState::Configured : OperationState::Disconnected;
     emitLog("INFO", "Device", "Runtime devices disconnected");
@@ -106,7 +112,7 @@ class RuntimeWorker final : public QObject {
     }
     if (!connected_) {
       std::string core_error;
-      if (!session_.connect(core_error)) {
+      if (session_ == nullptr || !session_->connect(core_error)) {
         fail("Start", qString(core_error));
         return;
       }
@@ -179,7 +185,7 @@ class RuntimeWorker final : public QObject {
 
     state_ = OperationState::Preview;
     publishStatus("Starting devices in EDFA, digitizer, MCU order...");
-    if (!session_.start(core_error)) {
+    if (session_ == nullptr || !session_->start(core_error)) {
       const auto start_error = core_error;
       processing_->requestStop("Device start failed");
       processing_->waitUntilStopped(core_error);
@@ -192,10 +198,40 @@ class RuntimeWorker final : public QObject {
     running_ = true;
     recording_ = config_.storage.raw_enabled || config_.storage.processed_enabled;
     storage_failure_pending_ = false;
-    snapshot_divider_ = 0;
+    acquisition_accepting_.store(true);
+    acquisition_worker_ = std::make_unique<ContinuousAcquisitionWorker>(*session_);
+    if (!acquisition_worker_->start(
+            [this](RawFrameBatchPtr batch, std::string& batch_error) {
+              return consumeBatch(std::move(batch), batch_error);
+            },
+            [this](bool failed, std::string reason) {
+              QMetaObject::invokeMethod(this,
+                  [this, failed, reason = std::move(reason)] {
+                    if (running_) {
+                      stopRuntime(false, qString(reason), failed);
+                    }
+                  },
+                  Qt::QueuedConnection);
+            },
+            core_error)) {
+      const auto worker_error = core_error;
+      acquisition_accepting_.store(false);
+      running_ = false;
+      std::string stop_error;
+      session_->stop(stop_error);
+      stopProcessing("Acquisition worker failed to start");
+      stopUdp();
+      stopStorage("Acquisition worker failed to start");
+      acquisition_worker_.reset();
+      fail("Start", qString(worker_error));
+      return;
+    }
     state_ = recording_ ? OperationState::Recording : OperationState::Acquiring;
-    acquisition_timer_->start();
-    emitLog("INFO", "Acquisition", "Global START completed; full-period up-triggered frames are active");
+    ui_timer_->setInterval(std::max(
+        16, static_cast<int>(std::lround(1000.0 / std::clamp(config_.ui.plot_update_hz, 1.0, 60.0)))));
+    ui_timer_->start();
+    emitLog("INFO", "Acquisition",
+            "Global START completed; continuous full-period DMA batches are active");
     if (udp_ != nullptr) {
       emitLog("INFO", "UDP", QString("Sending point frames to %1:%2")
                                  .arg(qString(config_.udp.target_ip))
@@ -216,11 +252,18 @@ class RuntimeWorker final : public QObject {
   }
 
   void emergencyStopRuntime() {
-    if (acquisition_timer_ != nullptr) {
-      acquisition_timer_->stop();
+    if (ui_timer_ != nullptr) {
+      ui_timer_->stop();
+    }
+    acquisition_accepting_.store(false);
+    if (acquisition_worker_ != nullptr) {
+      acquisition_worker_->requestStop();
     }
     std::string error;
-    session_.emergencyStop(error);
+    if (session_ != nullptr) {
+      session_->emergencyStop(error);
+    }
+    waitForAcquisitionWorker();
     stopProcessing("Emergency stop");
     stopUdp();
     stopStorage("Emergency stop");
@@ -263,7 +306,7 @@ class RuntimeWorker final : public QObject {
 
   void setEdfaOutputRuntime(bool enabled) {
     std::string error;
-    if (!edfa_.setOutputEnabled(enabled, error)) {
+    if (adapters_.edfa == nullptr || !adapters_.edfa->setOutputEnabled(enabled, error)) {
       reject("EDFA output", qString(error));
       return;
     }
@@ -291,7 +334,7 @@ class RuntimeWorker final : public QObject {
       reject("MCU waveform", qString(error));
       return;
     }
-    if (!mcu_.uploadWaveform(frames, error)) {
+    if (adapters_.mcu == nullptr || !adapters_.mcu->uploadWaveform(frames, error)) {
       reject("MCU waveform", qString(error));
       return;
     }
@@ -321,7 +364,9 @@ class RuntimeWorker final : public QObject {
     if (running_) {
       stopRuntime(true, "Application shutdown");
     }
-    session_.disconnect();
+    if (session_ != nullptr) {
+      session_->disconnect();
+    }
     connected_ = false;
   }
 
@@ -338,6 +383,27 @@ class RuntimeWorker final : public QObject {
   void commandCompleted(QString command, QString message);
 
  private:
+  bool selectRuntimeAdapters(AcquisitionSource source, QString& error) {
+    if (session_ != nullptr && active_source_ == source) {
+      return true;
+    }
+    if (acquisition_worker_ != nullptr) {
+      error = "Stop the acquisition worker before changing runtime source";
+      return false;
+    }
+    session_.reset();
+    adapters_ = createRuntimeAdapters(source);
+    if (!adapters_) {
+      error = "Runtime adapter factory could not create the selected source";
+      return false;
+    }
+    session_ = std::make_unique<AcquisitionSession>(
+        *adapters_.digitizer, *adapters_.edfa, *adapters_.mcu);
+    active_source_ = source;
+    error.clear();
+    return true;
+  }
+
   bool configureRuntime(const SystemConfig& config, QString& error) {
     if (running_) {
       error = "Stop acquisition before applying hardware or FFT backend changes";
@@ -346,8 +412,13 @@ class RuntimeWorker final : public QObject {
 
     const bool reconnect = connected_;
     if (reconnect) {
-      session_.disconnect();
+      if (session_ != nullptr) {
+        session_->disconnect();
+      }
       connected_ = false;
+    }
+    if (!selectRuntimeAdapters(config.runtime.acquisition_source, error)) {
+      return false;
     }
     processing_.reset();
     storage_.reset();
@@ -363,7 +434,7 @@ class RuntimeWorker final : public QObject {
     }
     selected_record_index_ = std::min(selected_record_index_, config.digitizer.records_per_buffer - 1U);
     processing_->setSelectedRecordIndex(selected_record_index_);
-    if (!session_.configure(config, next_revision, core_error)) {
+    if (session_ == nullptr || !session_->configure(config, next_revision, core_error)) {
       processing_.reset();
       error = qString(core_error);
       return false;
@@ -376,7 +447,7 @@ class RuntimeWorker final : public QObject {
     state_ = OperationState::Configured;
 
     if (reconnect) {
-      if (!session_.connect(core_error)) {
+      if (!session_->connect(core_error)) {
         error = qString(core_error);
         return false;
       }
@@ -392,56 +463,57 @@ class RuntimeWorker final : public QObject {
     return true;
   }
 
-  void acquireOne() {
+  bool consumeBatch(RawFrameBatchPtr batch, std::string& error) {
+    if (!acquisition_accepting_.load() || processing_ == nullptr || !batch) {
+      error = "Runtime is no longer accepting DMA batches";
+      return false;
+    }
+    if (storage_ != nullptr && config_.storage.raw_enabled) {
+      for (std::size_t index = 0; index < batch->records.size(); ++index) {
+        const auto frame = rawFrameAt(batch, index);
+        const auto storage_result = storage_->enqueueRaw(frame, error);
+        if (storage_result != EnqueueResult::Accepted) {
+          if (error.empty()) {
+            error = "Raw storage queue stopped";
+          }
+          return false;
+        }
+      }
+    }
+    const auto processing_result = processing_->enqueueBatch(std::move(batch), error);
+    if (processing_result != ProcessingEnqueueResult::Accepted) {
+      if (error.empty()) {
+        error = "Processing batch queue stopped";
+      }
+      return false;
+    }
+    if (storage_failure_pending_.load()) {
+      error = "Processed storage queue stopped";
+      return false;
+    }
+    error.clear();
+    return true;
+  }
+
+  void publishPeriodic() {
     if (!running_ || processing_ == nullptr) {
       return;
     }
-    RawFrame frame;
-    std::string error;
-    const auto wait_result = session_.waitForFrame(frame, std::chrono::milliseconds(1), error);
-    if (wait_result == FrameWaitResult::Timeout) {
-      publishStatus("Waiting for trigger");
-      return;
-    }
-    if (wait_result != FrameWaitResult::FrameReady) {
-      stopRuntime(false, error.empty() ? QStringLiteral("Acquisition stopped") : qString(error));
-      return;
-    }
-
-    auto shared_frame = std::make_shared<const RawFrame>(std::move(frame));
-    if (storage_ != nullptr && config_.storage.raw_enabled) {
-      const auto storage_result = storage_->enqueueRaw(shared_frame, error);
-      if (storage_result != EnqueueResult::Accepted) {
-        stopRuntime(false, error.empty() ? QStringLiteral("Raw storage queue stopped") : qString(error));
-        return;
-      }
-    }
-    const auto processing_result = processing_->enqueue(shared_frame, error);
-    if (processing_result != ProcessingEnqueueResult::Accepted) {
-      stopRuntime(false, error.empty() ? QStringLiteral("Processing queue stopped") : qString(error));
-      return;
-    }
-
-    if (storage_failure_pending_) {
-      stopRuntime(false, "Processed storage queue stopped");
+    if (storage_failure_pending_.load()) {
+      stopRuntime(false, "Processed storage queue stopped", true);
       return;
     }
     const auto processing_status = processing_->status();
     if (processing_status.stop_requested) {
-      stopRuntime(false, qString(processing_status.stop_reason));
+      stopRuntime(false, qString(processing_status.stop_reason), true);
       return;
     }
     if (storage_ != nullptr && storage_->status().stop_requested) {
-      stopRuntime(false, qString(storage_->status().stop_reason));
+      stopRuntime(false, qString(storage_->status().stop_reason), true);
       return;
     }
-
-    ++snapshot_divider_;
-    const auto divisor = std::max(1, static_cast<int>(125.0 / std::clamp(config_.ui.plot_update_hz, 1.0, 60.0)));
-    if ((snapshot_divider_ % divisor) == 0) {
-      publishSnapshots();
-      publishStatus(recording_ ? "Acquiring and recording" : "Acquiring");
-    }
+    publishSnapshots();
+    publishStatus(recording_ ? "Acquiring DMA batches and recording" : "Acquiring DMA batches");
   }
 
   void publishSnapshots() {
@@ -467,28 +539,50 @@ class RuntimeWorker final : public QObject {
     }
   }
 
-  void stopRuntime(bool emergency, const QString& reason) {
-    if (acquisition_timer_ != nullptr) {
-      acquisition_timer_->stop();
+  void stopRuntime(bool emergency, const QString& reason, bool error_state = false) {
+    if (ui_timer_ != nullptr) {
+      ui_timer_->stop();
+    }
+    acquisition_accepting_.store(false);
+    if (acquisition_worker_ != nullptr) {
+      acquisition_worker_->requestStop();
     }
     state_ = OperationState::Stopping;
     publishStatus("Stopping MCU trigger, digitizer, processing, storage, and EDFA...");
     std::string error;
-    if (emergency) {
-      session_.emergencyStop(error);
-    } else {
-      session_.stop(error);
+    if (session_ != nullptr) {
+      if (emergency) {
+        session_->emergencyStop(error);
+      } else {
+        session_->stop(error);
+      }
     }
+    waitForAcquisitionWorker();
     stopProcessing(reason);
     stopUdp();
     stopStorage(reason);
     running_ = false;
     recording_ = false;
-    state_ = connected_ ? OperationState::Ready : OperationState::Configured;
+    state_ = error_state || !error.empty()
+        ? OperationState::Error
+        : connected_ ? OperationState::Ready : OperationState::Configured;
     emitLog(error.empty() ? "INFO" : "ERROR", "Acquisition",
             error.empty() ? QString("Stopped: %1").arg(reason) : qString(error));
     publishSnapshots();
     publishStatus(error.empty() ? reason : qString(error));
+  }
+
+  void waitForAcquisitionWorker() {
+    if (acquisition_worker_ == nullptr) {
+      return;
+    }
+    std::string worker_error;
+    acquisition_worker_->waitUntilStopped(worker_error);
+    acquisition_status_ = acquisition_worker_->status();
+    if (!worker_error.empty()) {
+      emitLog("ERROR", "Acquisition worker", qString(worker_error));
+    }
+    acquisition_worker_.reset();
   }
 
   void stopProcessing(const QString& reason) {
@@ -533,7 +627,15 @@ class RuntimeWorker final : public QObject {
     status.config_revision = config_revision_;
     status.processing_revision = processing_revision_;
     status.detail = detail;
-    const auto telemetry = session_.telemetry();
+    status.source_name = qString(toString(active_source_));
+    AcquisitionTelemetrySnapshot telemetry;
+    if (session_ != nullptr) {
+      telemetry = session_->telemetry();
+    }
+    const auto acquisition_status = acquisition_worker_ != nullptr
+        ? acquisition_worker_->status()
+        : acquisition_status_;
+    status.acquisition_batches_delivered = acquisition_status.batches_delivered;
     status.digitizer_ready = telemetry.digitizer.device.ready;
     status.edfa_ready = telemetry.edfa.device.ready;
     status.edfa_bypassed = telemetry.edfa.bypassed;
@@ -547,6 +649,8 @@ class RuntimeWorker final : public QObject {
         : static_cast<double>(telemetry.mcu.waveform_points) * 1000.0 / config_.scan.scanner_sample_rate_hz;
     status.frames_received = telemetry.digitizer.frames_received;
     status.dma_buffers_received = telemetry.digitizer.dma_buffers_received;
+    status.dma_buffer_drops = telemetry.digitizer.dma_buffer_drops;
+    status.trigger_misses = telemetry.digitizer.trigger_misses;
     status.dma_bscan_rate_hz = telemetry.digitizer.dma_buffer_rate_hz;
     status.dma_bscan_period_ms = telemetry.digitizer.dma_buffer_period_ms;
     if (processing_ != nullptr) {
@@ -598,11 +702,10 @@ class RuntimeWorker final : public QObject {
   }
 
   QString platform_name_;
-  QTimer* acquisition_timer_ = nullptr;
-  FakeDigitizer digitizer_;
-  FakeEdfaController edfa_;
-  FakeMcuController mcu_;
-  AcquisitionSession session_;
+  QTimer* ui_timer_ = nullptr;
+  RuntimeAdapters adapters_;
+  std::unique_ptr<AcquisitionSession> session_;
+  std::unique_ptr<ContinuousAcquisitionWorker> acquisition_worker_;
   std::unique_ptr<ProcessingService> processing_;
   std::unique_ptr<AsyncStorageService> storage_;
   std::unique_ptr<UdpSenderService> udp_;
@@ -611,11 +714,13 @@ class RuntimeWorker final : public QObject {
   std::uint64_t config_revision_ = 0;
   std::uint64_t processing_revision_ = 0;
   std::uint32_t selected_record_index_ = 0;
-  int snapshot_divider_ = 0;
+  AcquisitionSource active_source_ = AcquisitionSource::Simulator;
+  ContinuousAcquisitionStatus acquisition_status_;
   bool configured_ = false;
   bool connected_ = false;
   bool running_ = false;
   bool recording_ = false;
+  std::atomic_bool acquisition_accepting_{false};
   std::atomic_bool storage_failure_pending_{false};
 };
 

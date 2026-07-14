@@ -7,6 +7,7 @@
 
 #include "core/config_validation.h"
 #include "core/digitizer_capabilities.h"
+#include "core/raw_frame_batch_pool.h"
 #include "drivers/alazar/alazar_sample_conversion.h"
 
 #include <algorithm>
@@ -94,8 +95,9 @@ struct AlazarDigitizer::Impl {
   U32 bytes_per_buffer = 0;
   U32 records_per_buffer = 0;
   U32 active_buffer = 0;
-  U32 active_record = 0;
-  bool buffer_ready = false;
+  RawFrameBatchPool batch_pool;
+  MutableRawFrameBatchPtr compatibility_batch;
+  std::size_t compatibility_record_index = 0;
   bool async_prepared = false;
   std::uint64_t next_frame_id = 1;
   std::uint64_t current_buffer_timestamp_ns = 0;
@@ -260,8 +262,8 @@ bool AlazarDigitizer::start(std::string& error) {
     return false;
   }
   impl_->active_buffer = 0;
-  impl_->active_record = 0;
-  impl_->buffer_ready = false;
+  impl_->compatibility_batch.reset();
+  impl_->compatibility_record_index = 0;
   impl_->next_frame_id = 1;
   telemetry_.frames_received = 0;
   telemetry_.dma_buffers_received = 0;
@@ -282,9 +284,11 @@ bool AlazarDigitizer::start(std::string& error) {
 #endif
 }
 
-FrameWaitResult AlazarDigitizer::waitForFrame(RawFrame& frame, std::chrono::milliseconds timeout,
+FrameWaitResult AlazarDigitizer::waitForBatch(MutableRawFrameBatchPtr& batch,
+                                              std::chrono::milliseconds timeout,
                                               std::string& error) {
   std::lock_guard<std::mutex> lock(mutex_);
+  batch.reset();
 #if FMCW_HAS_ALAZAR_SDK
   if (!telemetry_.device.running || !impl_->async_prepared) {
     error.clear();
@@ -297,84 +301,127 @@ FrameWaitResult AlazarDigitizer::waitForFrame(RawFrame& frame, std::chrono::mill
     return FrameWaitResult::Stopped;
   }
   auto* buffer = impl_->buffers[impl_->active_buffer];
-  if (!impl_->buffer_ready) {
-    const auto wait_ms = static_cast<U32>(std::clamp<std::int64_t>(timeout.count(), 0, std::numeric_limits<U32>::max()));
-    const auto result = AlazarWaitAsyncBufferComplete(impl_->board, buffer, wait_ms);
-    if (result == ApiWaitTimeout) {
-      error.clear();
-      return FrameWaitResult::Timeout;
+  const auto wait_ms = static_cast<U32>(
+      std::clamp<std::int64_t>(timeout.count(), 0, std::numeric_limits<U32>::max()));
+  const auto result = AlazarWaitAsyncBufferComplete(impl_->board, buffer, wait_ms);
+  if (result == ApiWaitTimeout) {
+    error.clear();
+    return FrameWaitResult::Timeout;
+  }
+  if (result == ApiBufferOverflow) {
+    ++telemetry_.dma_buffer_drops;
+  }
+  if (!check(result, "AlazarWaitAsyncBufferComplete", error)) {
+    telemetry_.device.detail = error;
+    return FrameWaitResult::Error;
+  }
+
+  impl_->current_buffer_timestamp_ns = nowNs();
+  if (impl_->previous_buffer_timestamp_ns != 0U &&
+      impl_->current_buffer_timestamp_ns > impl_->previous_buffer_timestamp_ns) {
+    const auto period_ms = static_cast<double>(impl_->current_buffer_timestamp_ns -
+        impl_->previous_buffer_timestamp_ns) * 1.0e-6;
+    constexpr double kTelemetryAlpha = 0.2;
+    impl_->buffer_period_ema_ms = impl_->buffer_period_ema_ms > 0.0
+        ? kTelemetryAlpha * period_ms + (1.0 - kTelemetryAlpha) * impl_->buffer_period_ema_ms
+        : period_ms;
+    telemetry_.dma_buffer_period_ms = impl_->buffer_period_ema_ms;
+    telemetry_.dma_buffer_rate_hz = 1000.0 / impl_->buffer_period_ema_ms;
+  }
+  impl_->previous_buffer_timestamp_ns = impl_->current_buffer_timestamp_ns;
+
+  auto mutable_batch = impl_->batch_pool.acquire();
+  mutable_batch->records.resize(impl_->records_per_buffer);
+  const auto batch_sequence = telemetry_.dma_buffers_received;
+  for (U32 record_index = 0; record_index < impl_->records_per_buffer; ++record_index) {
+    auto& frame = mutable_batch->records[record_index];
+    frame.metadata = {};
+    frame.samples.resize(config_.digitizer.sample_point);
+    const auto offset = static_cast<std::size_t>(record_index) * config_.digitizer.sample_point;
+    for (std::size_t sample_index = 0; sample_index < frame.samples.size(); ++sample_index) {
+      frame.samples[sample_index] = alazarLeftAlignedSampleToSignedInt16(
+          buffer[offset + sample_index], impl_->bits_per_sample);
     }
-    if (result == ApiBufferOverflow) {
-      ++telemetry_.dma_buffer_drops;
-    }
-    if (!check(result, "AlazarWaitAsyncBufferComplete", error)) {
-      telemetry_.device.detail = error;
+
+    const auto frame_id = impl_->next_frame_id++;
+    frame.metadata.frame_kind = FrameKind::FullChirpPeriod;
+    frame.metadata.frame_id = frame_id;
+    frame.metadata.dma_buffer_sequence = batch_sequence;
+    frame.metadata.record_index_in_buffer = record_index;
+    frame.metadata.records_in_buffer = impl_->records_per_buffer;
+    frame.metadata.host_timestamp_ns = impl_->current_buffer_timestamp_ns;
+    frame.metadata.trigger.sequence = frame_id;
+    frame.metadata.trigger.timestamp_ns = frame.metadata.host_timestamp_ns;
+    frame.metadata.trigger.valid = true;
+    frame.metadata.channel = config_.digitizer.channel;
+    frame.metadata.sample_rate_hz = config_.digitizer.sample_rate_hz;
+    frame.metadata.record_length = config_.digitizer.sample_point;
+    frame.metadata.pre_trigger_samples = config_.digitizer.pre_trigger_samples;
+    frame.metadata.post_trigger_samples = config_.digitizer.post_trigger_samples;
+    frame.metadata.up_segment = config_.chirp_segmentation.up_segment;
+    frame.metadata.down_segment = config_.chirp_segmentation.down_segment;
+  }
+  mutable_batch->metadata.sequence = batch_sequence;
+  mutable_batch->metadata.completion_timestamp_ns = impl_->current_buffer_timestamp_ns;
+  mutable_batch->metadata.record_count = impl_->records_per_buffer;
+  mutable_batch->metadata.record_length = config_.digitizer.sample_point;
+  mutable_batch->metadata.dropped_buffer_count = telemetry_.dma_buffer_drops;
+  mutable_batch->metadata.missed_trigger_count = telemetry_.trigger_misses;
+
+  telemetry_.frames_received += impl_->records_per_buffer;
+  ++telemetry_.dma_buffers_received;
+  const bool finite_complete = config_.digitizer.acquisition_mode == AcquisitionMode::Finite &&
+                               telemetry_.frames_received >= config_.digitizer.finite_frame_count;
+  if (!finite_complete) {
+    if (!check(AlazarPostAsyncBuffer(impl_->board, buffer, impl_->bytes_per_buffer),
+               "AlazarPostAsyncBuffer(repost)", error)) {
       return FrameWaitResult::Error;
     }
-    impl_->current_buffer_timestamp_ns = nowNs();
-    ++telemetry_.dma_buffers_received;
-    if (impl_->previous_buffer_timestamp_ns != 0U &&
-        impl_->current_buffer_timestamp_ns > impl_->previous_buffer_timestamp_ns) {
-      const auto period_ms = static_cast<double>(impl_->current_buffer_timestamp_ns -
-          impl_->previous_buffer_timestamp_ns) * 1.0e-6;
-      constexpr double kTelemetryAlpha = 0.2;
-      impl_->buffer_period_ema_ms = impl_->buffer_period_ema_ms > 0.0
-          ? kTelemetryAlpha * period_ms + (1.0 - kTelemetryAlpha) * impl_->buffer_period_ema_ms
-          : period_ms;
-      telemetry_.dma_buffer_period_ms = impl_->buffer_period_ema_ms;
-      telemetry_.dma_buffer_rate_hz = 1000.0 / impl_->buffer_period_ema_ms;
-    }
-    impl_->previous_buffer_timestamp_ns = impl_->current_buffer_timestamp_ns;
-    impl_->buffer_ready = true;
-    impl_->active_record = 0;
+    impl_->active_buffer = (impl_->active_buffer + 1U) % static_cast<U32>(impl_->buffers.size());
   }
-
-  frame = {};
-  frame.samples.resize(config_.digitizer.sample_point);
-  const auto offset = static_cast<std::size_t>(impl_->active_record) * config_.digitizer.sample_point;
-  for (std::size_t index = 0; index < frame.samples.size(); ++index) {
-    frame.samples[index] = alazarLeftAlignedSampleToSignedInt16(
-        buffer[offset + index], impl_->bits_per_sample);
-  }
-
-  const auto frame_id = impl_->next_frame_id++;
-  frame.metadata.frame_kind = FrameKind::FullChirpPeriod;
-  frame.metadata.frame_id = frame_id;
-  frame.metadata.dma_buffer_sequence = telemetry_.dma_buffers_received - 1U;
-  frame.metadata.record_index_in_buffer = impl_->active_record;
-  frame.metadata.records_in_buffer = impl_->records_per_buffer;
-  frame.metadata.host_timestamp_ns = impl_->current_buffer_timestamp_ns;
-  frame.metadata.trigger.sequence = frame_id;
-  frame.metadata.trigger.timestamp_ns = frame.metadata.host_timestamp_ns;
-  frame.metadata.trigger.valid = true;
-  frame.metadata.channel = config_.digitizer.channel;
-  frame.metadata.sample_rate_hz = config_.digitizer.sample_rate_hz;
-  frame.metadata.record_length = config_.digitizer.sample_point;
-  frame.metadata.pre_trigger_samples = config_.digitizer.pre_trigger_samples;
-  frame.metadata.post_trigger_samples = config_.digitizer.post_trigger_samples;
-  frame.metadata.up_segment = config_.chirp_segmentation.up_segment;
-  frame.metadata.down_segment = config_.chirp_segmentation.down_segment;
-
-  ++telemetry_.frames_received;
-  ++impl_->active_record;
-  if (impl_->active_record >= impl_->records_per_buffer) {
-    const bool finite_complete = config_.digitizer.acquisition_mode == AcquisitionMode::Finite &&
-                                 telemetry_.frames_received >= config_.digitizer.finite_frame_count;
-    if (!finite_complete) {
-      if (!check(AlazarPostAsyncBuffer(impl_->board, buffer, impl_->bytes_per_buffer),
-                 "AlazarPostAsyncBuffer(repost)", error)) {
-        return FrameWaitResult::Error;
-      }
-      impl_->active_buffer = (impl_->active_buffer + 1U) % static_cast<U32>(impl_->buffers.size());
-    }
-    impl_->buffer_ready = false;
-  }
+  batch = std::move(mutable_batch);
   error.clear();
   return FrameWaitResult::FrameReady;
 #else
-  static_cast<void>(frame);
   static_cast<void>(timeout);
   error = "Alazar SDK support is not built";
+  return FrameWaitResult::Error;
+#endif
+}
+
+FrameWaitResult AlazarDigitizer::waitForFrame(RawFrame& frame, std::chrono::milliseconds timeout,
+                                              std::string& error) {
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+#if FMCW_HAS_ALAZAR_SDK
+    if (impl_->compatibility_batch &&
+        impl_->compatibility_record_index < impl_->compatibility_batch->records.size()) {
+      frame = impl_->compatibility_batch->records[impl_->compatibility_record_index++];
+      if (impl_->compatibility_record_index >= impl_->compatibility_batch->records.size()) {
+        impl_->compatibility_batch.reset();
+      }
+      error.clear();
+      return FrameWaitResult::FrameReady;
+    }
+#endif
+  }
+
+  MutableRawFrameBatchPtr batch;
+  const auto result = waitForBatch(batch, timeout, error);
+  if (result != FrameWaitResult::FrameReady || !batch || batch->records.empty()) {
+    return result;
+  }
+  std::lock_guard<std::mutex> lock(mutex_);
+#if FMCW_HAS_ALAZAR_SDK
+  impl_->compatibility_batch = std::move(batch);
+  impl_->compatibility_record_index = 1;
+  frame = impl_->compatibility_batch->records.front();
+  if (impl_->compatibility_record_index >= impl_->compatibility_batch->records.size()) {
+    impl_->compatibility_batch.reset();
+  }
+  return FrameWaitResult::FrameReady;
+#else
+  static_cast<void>(frame);
   return FrameWaitResult::Error;
 #endif
 }
@@ -457,6 +504,8 @@ bool AlazarDigitizer::configureBoard(std::string& error) {
 
 void AlazarDigitizer::releaseBuffers() {
 #if FMCW_HAS_ALAZAR_SDK
+  impl_->compatibility_batch.reset();
+  impl_->compatibility_record_index = 0;
   for (auto*& buffer : impl_->buffers) {
     if (buffer != nullptr && impl_->board != nullptr) {
       AlazarFreeBufferU16(impl_->board, buffer);
@@ -464,7 +513,6 @@ void AlazarDigitizer::releaseBuffers() {
     }
   }
   impl_->buffers.clear();
-  impl_->buffer_ready = false;
 #endif
 }
 

@@ -1,4 +1,5 @@
 #include "drivers/simulator/fake_digitizer.h"
+#include "drivers/replay/replay_digitizer.h"
 #include "processing/fft_backends.h"
 #include "processing/processing_service.h"
 #include "processing/signal_processor.h"
@@ -173,6 +174,29 @@ void testProcessingServiceSnapshots(const fmcw::SystemConfig& config,
          "completed line updates the X by B-scan Z matrix");
 }
 
+void testProcessingServiceBatch(const fmcw::SystemConfig& config,
+                                const std::vector<fmcw::RawFramePtr>& frames) {
+  fmcw::ProcessingService service(std::make_unique<fmcw::FftwBackend>());
+  std::string error;
+  expect(service.configure(config, 5, error) && service.start(error),
+         "batch processing service configures and starts");
+  auto mutable_batch = std::make_shared<fmcw::RawFrameBatch>();
+  for (const auto& frame : frames) {
+    mutable_batch->records.push_back(*frame);
+  }
+  mutable_batch->metadata.sequence = 12;
+  mutable_batch->metadata.record_count = static_cast<std::uint32_t>(mutable_batch->records.size());
+  mutable_batch->metadata.record_length = config.digitizer.sample_point;
+  fmcw::RawFrameBatchPtr batch = mutable_batch;
+  expect(service.enqueueBatch(std::move(batch), error) == fmcw::ProcessingEnqueueResult::Accepted,
+         "one immutable DMA batch enters the processing queue");
+  service.requestStop("Phase 7.2 batch test complete");
+  expect(service.waitUntilStopped(error), "batch processing service drains and stops");
+  const auto status = service.status();
+  expect(status.batches_processed == 1U && status.frames_processed == frames.size(),
+         "processing service accounts for one batch and every record in it");
+}
+
 struct BlockingFftState {
   std::mutex mutex;
   std::condition_variable condition;
@@ -315,6 +339,30 @@ void testBinaryStorageAndReplay(const fmcw::SystemConfig& config, fmcw::RawFrame
   expect(replay.readNext(replayed, error) == fmcw::ReplayReadResult::EndOfStream,
          "raw replay reports end of stream");
   replay.close();
+
+  auto replay_config = config;
+  replay_config.runtime.acquisition_source = fmcw::AcquisitionSource::Replay;
+  replay_config.runtime.replay_file = raw_path.string();
+  replay_config.runtime.replay_loop = false;
+  fmcw::ReplayDigitizer replay_digitizer;
+  expect(replay_digitizer.configure(replay_config, error) && replay_digitizer.connect(error) &&
+             replay_digitizer.start(error),
+         "runtime replay digitizer opens the stored raw stream");
+  fmcw::MutableRawFrameBatchPtr replay_batch;
+  expect(replay_digitizer.waitForBatch(replay_batch, std::chrono::milliseconds(100), error) ==
+             fmcw::FrameWaitResult::FrameReady,
+         "runtime replay digitizer publishes a DMA batch");
+  expect(replay_batch && replay_batch->records.size() == 2U &&
+             replay_batch->metadata.record_count == 2U &&
+             replay_batch->records.front().samples == raw->samples &&
+             replay_batch->records.back().samples == second_raw->samples,
+         "runtime replay batch preserves both split-file records");
+  replay_batch.reset();
+  expect(replay_digitizer.waitForBatch(replay_batch, std::chrono::milliseconds(100), error) ==
+             fmcw::FrameWaitResult::Stopped,
+         "runtime replay digitizer reports finite stream completion");
+  expect(replay_digitizer.stop(error), "runtime replay digitizer stops cleanly");
+  replay_digitizer.disconnect();
 
   std::ifstream metadata(directory / "session.raw.json", std::ios::binary);
   std::ostringstream metadata_text;
@@ -501,6 +549,8 @@ int main() {
     const auto processed = testSignalProcessing(config, frames);
     std::cout << "[Phase4] Processing service\n" << std::flush;
     testProcessingServiceSnapshots(config, frames);
+    std::cout << "[Phase7.2] Processing DMA batch\n" << std::flush;
+    testProcessingServiceBatch(config, frames);
     std::cout << "[Phase4] Processing overflow\n" << std::flush;
     testProcessingOverflow(config, frames);
     std::cout << "[Phase4] Binary storage and replay\n" << std::flush;

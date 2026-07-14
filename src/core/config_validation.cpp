@@ -85,6 +85,13 @@ ValidationResult ConfigValidator::validate(const SystemConfig& config) {
         "Set both profile.id and profile.name");
   }
 
+  if (config.runtime.acquisition_source == AcquisitionSource::Replay &&
+      config.runtime.replay_file.empty()) {
+    add(result, ValidationSeverity::Error, "runtime.replay_file",
+        "Replay source requires a raw recording file",
+        "Select a *.raw.0000.bin file in the Digitizer page");
+  }
+
   if (digitizer.system_id != kAlazarSystemId || digitizer.board_id != kAlazarBoardId) {
     add(result, ValidationSeverity::Error, "digitizer", "This application uses Alazar System 1 / Board 1",
         "Set system_id and board_id to 1");

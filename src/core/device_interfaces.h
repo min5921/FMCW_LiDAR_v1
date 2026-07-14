@@ -44,6 +44,9 @@ class IDigitizer {
   virtual void disconnect() = 0;
   virtual bool configure(const SystemConfig& config, std::string& error) = 0;
   virtual bool start(std::string& error) = 0;
+  virtual FrameWaitResult waitForBatch(MutableRawFrameBatchPtr& batch,
+                                       std::chrono::milliseconds timeout,
+                                       std::string& error) = 0;
   virtual FrameWaitResult waitForFrame(RawFrame& frame, std::chrono::milliseconds timeout, std::string& error) = 0;
   virtual bool abort(std::string& error) = 0;
   virtual bool stop(std::string& error) = 0;

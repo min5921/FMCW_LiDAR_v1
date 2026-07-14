@@ -27,6 +27,7 @@ struct ProcessingServiceStatus {
   std::size_t queue_size = 0;
   std::size_t queue_capacity = 0;
   std::size_t queue_high_water_mark = 0;
+  std::uint64_t batches_processed = 0;
   std::uint64_t frames_processed = 0;
   std::uint64_t last_processed_frame_id = 0;
   std::uint64_t processing_config_revision = 0;
@@ -47,6 +48,7 @@ class ProcessingService {
 
   bool configure(const SystemConfig& config, std::uint64_t processing_config_revision, std::string& error);
   bool start(std::string& error);
+  ProcessingEnqueueResult enqueueBatch(RawFrameBatchPtr batch, std::string& error);
   ProcessingEnqueueResult enqueue(RawFramePtr frame, std::string& error);
   bool updateRuntimeConfig(const ProcessingConfig& config, std::uint64_t processing_config_revision,
                            std::string& error);

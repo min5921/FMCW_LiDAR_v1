@@ -23,6 +23,9 @@ class AlazarDigitizer final : public IDigitizer {
   void disconnect() override;
   bool configure(const SystemConfig& config, std::string& error) override;
   bool start(std::string& error) override;
+  FrameWaitResult waitForBatch(MutableRawFrameBatchPtr& batch,
+                               std::chrono::milliseconds timeout,
+                               std::string& error) override;
   FrameWaitResult waitForFrame(RawFrame& frame, std::chrono::milliseconds timeout, std::string& error) override;
   bool abort(std::string& error) override;
   bool stop(std::string& error) override;

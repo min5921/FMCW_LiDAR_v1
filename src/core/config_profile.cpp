@@ -164,6 +164,10 @@ ConfigDocument ConfigProfileCodec::encode(const SystemConfig& config) {
   document.setString("profile.created_utc", config.profile.created_utc);
   document.setString("profile.modified_utc", config.profile.modified_utc);
 
+  document.setString("runtime.acquisition_source", toString(config.runtime.acquisition_source));
+  document.setString("runtime.replay_file", config.runtime.replay_file);
+  document.setBoolean("runtime.replay_loop", config.runtime.replay_loop);
+
   setUnsigned(document, "digitizer.system_id", config.digitizer.system_id);
   setUnsigned(document, "digitizer.board_id", config.digitizer.board_id);
   document.setString("digitizer.board_profile", config.digitizer.board_profile);
@@ -297,6 +301,10 @@ bool ConfigProfileCodec::decode(const ConfigDocument& document, SystemConfig& co
   readString(document, "profile.author", config.profile.author, issues, source);
   readString(document, "profile.created_utc", config.profile.created_utc, issues, source);
   readString(document, "profile.modified_utc", config.profile.modified_utc, issues, source);
+
+  readEnum(document, "runtime.acquisition_source", config.runtime.acquisition_source, issues, source);
+  readString(document, "runtime.replay_file", config.runtime.replay_file, issues, source);
+  readBool(document, "runtime.replay_loop", config.runtime.replay_loop, issues, source);
 
   readInteger(document, "digitizer.system_id", config.digitizer.system_id, issues, source);
   readInteger(document, "digitizer.board_id", config.digitizer.board_id, issues, source);

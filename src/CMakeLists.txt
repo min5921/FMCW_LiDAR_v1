@@ -20,9 +20,11 @@ set(FMCW_CORE_SOURCES
   core/config_profile.cpp
   core/config_types.cpp
   core/config_validation.cpp
+  core/continuous_acquisition_worker.cpp
   core/digitizer_capabilities.cpp
   core/logging.cpp
   core/operation_controller.cpp
+  core/raw_frame_batch_pool.cpp
   core/system_state.cpp
   drivers/alazar/alazar_digitizer.cpp
   drivers/alazar/alazar_sample_conversion.cpp
@@ -30,6 +32,8 @@ set(FMCW_CORE_SOURCES
   drivers/edfa/edfa_serial_controller.cpp
   drivers/mcu/mcu_protocol.cpp
   drivers/mcu/mcu_serial_controller.cpp
+  drivers/replay/replay_digitizer.cpp
+  drivers/runtime_adapter_factory.cpp
   drivers/serial/serial_transport.cpp
   drivers/simulator/fake_digitizer.cpp
   drivers/simulator/fake_edfa.cpp

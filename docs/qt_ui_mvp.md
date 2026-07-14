@@ -31,6 +31,8 @@ STOP은 MCU trigger, digitizer abort/stop, processing drain, storage finalize, c
 
 ## 3. Page Ownership
 
+Phase 7.2 replaces timer-driven acquisition polling with `ContinuousAcquisitionWorker`. The worker blocks on one complete DMA buffer, publishes one immutable `RawFrameBatch`, and lets the Alazar adapter repost the vendor buffer immediately after the ownership copy. The Qt timer only publishes telemetry and the latest UI snapshots. The Digitizer page owns the Simulator, Alazar ATS9371, and Raw Replay source selector and replay file controls.
+
 | Page | Runtime ownership |
 |---|---|
 | Overview | readiness, revision, queue, frame, latency, recording status |
