@@ -154,10 +154,10 @@ QString darkStyleSheet() {
     QTabBar::tab { background: #141c20; color: #8fa0a6; border-color: #303c41; }
     QTabBar::tab:hover { background: #202b30; color: #dce5e7; }
     QTabBar::tab:selected { background: #192226; color: #62d0c2; border-top: 2px solid #35b2a3; }
-    QLabel[statusKind="ready"] { background: #153a2b; color: #79d9ad; border-color: #286a50; }
-    QLabel[statusKind="warn"] { background: #473619; color: #f2c873; border-color: #80632d; }
-    QLabel[statusKind="error"] { background: #452125; color: #f0959c; border-color: #7b3940; }
-    QLabel[statusKind="neutral"] { background: #263137; color: #afbdc1; border-color: #46555b; }
+    QLabel[statusKind="ready"], QPushButton#validationButton[statusKind="ready"] { background: #153a2b; color: #79d9ad; border-color: #286a50; }
+    QLabel[statusKind="warn"], QPushButton#validationButton[statusKind="warn"] { background: #473619; color: #f2c873; border-color: #80632d; }
+    QLabel[statusKind="error"], QPushButton#validationButton[statusKind="error"] { background: #452125; color: #f0959c; border-color: #7b3940; }
+    QLabel[statusKind="neutral"], QPushButton#validationButton[statusKind="neutral"] { background: #263137; color: #afbdc1; border-color: #46555b; }
     QPlainTextEdit { background: #0c1114; color: #d5e0e2; border-color: #303c41; }
     QScrollArea, QScrollArea > QWidget > QWidget { background: #11171a; }
     QScrollBar:vertical { background: #11171a; width: 11px; margin: 0; }
@@ -209,10 +209,11 @@ MainWindow::MainWindow(QString platform_name, QWidget* parent)
     QTabWidget::pane { border: 1px solid #d9e1e3; background: #ffffff; }
     QTabBar::tab { min-width: 106px; height: 31px; padding: 0 10px; background: #e8edef; color: #56656b; border: 1px solid #d8e0e2; }
     QTabBar::tab:selected { background: #ffffff; color: #176f68; border-top: 2px solid #25988d; }
-    QLabel[statusKind="ready"] { background: #dff2e8; color: #12613f; border: 1px solid #a9d7bf; border-radius: 3px; padding: 3px 7px; font-weight: 600; }
-    QLabel[statusKind="warn"] { background: #fff1d8; color: #8a5814; border: 1px solid #e6c37e; border-radius: 3px; padding: 3px 7px; font-weight: 600; }
-    QLabel[statusKind="error"] { background: #f9e2e4; color: #932c34; border: 1px solid #dda4a9; border-radius: 3px; padding: 3px 7px; font-weight: 600; }
-    QLabel[statusKind="neutral"] { background: #e8edef; color: #536168; border: 1px solid #ccd5d8; border-radius: 3px; padding: 3px 7px; font-weight: 600; }
+    QLabel[statusKind="ready"], QPushButton#validationButton[statusKind="ready"] { background: #dff2e8; color: #12613f; border: 1px solid #a9d7bf; border-radius: 3px; padding: 3px 7px; font-weight: 600; }
+    QLabel[statusKind="warn"], QPushButton#validationButton[statusKind="warn"] { background: #fff1d8; color: #8a5814; border: 1px solid #e6c37e; border-radius: 3px; padding: 3px 7px; font-weight: 600; }
+    QLabel[statusKind="error"], QPushButton#validationButton[statusKind="error"] { background: #f9e2e4; color: #932c34; border: 1px solid #dda4a9; border-radius: 3px; padding: 3px 7px; font-weight: 600; }
+    QLabel[statusKind="neutral"], QPushButton#validationButton[statusKind="neutral"] { background: #e8edef; color: #536168; border: 1px solid #ccd5d8; border-radius: 3px; padding: 3px 7px; font-weight: 600; }
+    QPushButton#validationButton { min-height: 28px; padding: 0 9px; }
     QPlainTextEdit { background: #11191d; color: #d5e0e2; border: 1px solid #2d3b41; font-family: Consolas; font-size: 9pt; }
     QStatusBar { background: #ffffff; color: #536168; border-top: 1px solid #d8e0e2; }
   )");
@@ -281,8 +282,11 @@ MainWindow::MainWindow(QString platform_name, QWidget* parent)
   save_button_->setToolTip("Save profile");
   apply_button_ = new QPushButton("Apply Setup", command_bar);
   apply_button_->setObjectName("applyButton");
-  validation_label_ = new QLabel("CHECKING", command_bar);
-  validation_label_->setProperty("statusKind", "neutral");
+  validation_button_ = new QPushButton("CHECKING", command_bar);
+  validation_button_->setObjectName("validationButton");
+  validation_button_->setProperty("statusKind", "neutral");
+  validation_button_->setCursor(Qt::PointingHandCursor);
+  validation_button_->setToolTip("Click to view validation details");
   raw_indicator_ = new QLabel("RAW OFF", command_bar);
   raw_indicator_->setProperty("statusKind", "neutral");
   udp_indicator_ = new QLabel("UDP OFF", command_bar);
@@ -299,7 +303,7 @@ MainWindow::MainWindow(QString platform_name, QWidget* parent)
   command_layout->addWidget(load_button_);
   command_layout->addWidget(save_button_);
   command_layout->addWidget(apply_button_);
-  command_layout->addWidget(validation_label_);
+  command_layout->addWidget(validation_button_);
   command_layout->addWidget(raw_indicator_);
   command_layout->addWidget(udp_indicator_);
   command_layout->addStretch(1);
@@ -1035,6 +1039,7 @@ void MainWindow::connectUi() {
   connect(load_button_, &QToolButton::clicked, this, &MainWindow::loadProfile);
   connect(save_button_, &QToolButton::clicked, this, &MainWindow::saveProfile);
   connect(apply_button_, &QPushButton::clicked, this, &MainWindow::applyProfile);
+  connect(validation_button_, &QPushButton::clicked, this, &MainWindow::showValidationDetails);
   connect(connect_button_, &QPushButton::clicked, this, [this] {
     if (runtime_status_.connected) {
       controller_->disconnectSystem();
@@ -1269,24 +1274,72 @@ bool MainWindow::validateControls(bool show_dialog) {
     }
   }
   if (errors > 0) {
-    validation_label_->setText(QString("%1 ERROR").arg(errors));
-    validation_label_->setProperty("statusKind", "error");
+    validation_button_->setText(QString("%1 ERROR").arg(errors));
+    validation_button_->setIcon(style()->standardIcon(QStyle::SP_MessageBoxCritical));
+    validation_button_->setProperty("statusKind", "error");
   } else if (warnings > 0) {
-    validation_label_->setText(config_dirty_ ? QString("VALID | %1 WARN | APPLY").arg(warnings)
-                                             : QString("VALID | %1 WARN").arg(warnings));
-    validation_label_->setProperty("statusKind", "warn");
+    validation_button_->setText(config_dirty_ ? QString("VALID | %1 WARN | APPLY").arg(warnings)
+                                              : QString("VALID | %1 WARN").arg(warnings));
+    validation_button_->setIcon(style()->standardIcon(QStyle::SP_MessageBoxWarning));
+    validation_button_->setProperty("statusKind", "warn");
   } else {
-    validation_label_->setText(config_dirty_ ? "VALID | APPLY" : "VALID");
-    validation_label_->setProperty("statusKind", "ready");
+    validation_button_->setText(config_dirty_ ? "VALID | APPLY" : "VALID");
+    validation_button_->setIcon(style()->standardIcon(QStyle::SP_DialogApplyButton));
+    validation_button_->setProperty("statusKind", "ready");
   }
-  validation_label_->setToolTip(tooltip);
-  repolish(validation_label_);
+  validation_button_->setToolTip(tooltip.isEmpty()
+      ? "Configuration is valid. Click to view validation details."
+      : QString("Click to view validation details.\n\n%1").arg(tooltip));
+  repolish(validation_button_);
   start_stop_button_->setEnabled(runtime_status_.running || (errors == 0 && !config_dirty_));
   apply_button_->setEnabled(!runtime_status_.running && errors == 0);
   if (show_dialog && errors > 0) {
     QMessageBox::warning(this, "Configuration validation", tooltip);
   }
   return errors == 0;
+}
+
+void MainWindow::showValidationDetails() {
+  const auto result = ConfigValidator::validate(configFromControls());
+  int errors = 0;
+  int warnings = 0;
+  QString details;
+
+  for (const auto& issue : result.issues) {
+    if (issue.severity == ValidationSeverity::Error) {
+      ++errors;
+    } else if (issue.severity == ValidationSeverity::Warning) {
+      ++warnings;
+    }
+
+    const auto severity = QString::fromStdString(toString(issue.severity)).toUpper().toHtmlEscaped();
+    const auto path = QString::fromStdString(issue.path).toHtmlEscaped();
+    const auto message = QString::fromStdString(issue.message).toHtmlEscaped();
+    const auto action = QString::fromStdString(issue.action).toHtmlEscaped();
+    details += QString("<p><b>%1</b><br>Field: <code>%2</code><br>Issue: %3<br>Action: %4</p>")
+                   .arg(severity, path, message, action);
+  }
+
+  QMessageBox dialog(this);
+  dialog.setWindowTitle("Setup validation");
+  dialog.setTextFormat(Qt::RichText);
+  dialog.setStandardButtons(QMessageBox::Ok);
+  dialog.setStyleSheet("QLabel#qt_msgbox_informativelabel { min-width: 620px; }");
+
+  if (errors > 0) {
+    dialog.setIcon(QMessageBox::Critical);
+    dialog.setText(QString("<b>%1 configuration error(s) block Apply, Connect, and START.</b>").arg(errors));
+  } else if (warnings > 0) {
+    dialog.setIcon(QMessageBox::Warning);
+    dialog.setText(QString("<b>Configuration is valid with %1 warning(s).</b><br>Warnings do not block START, but should be reviewed before operation.").arg(warnings));
+  } else {
+    dialog.setIcon(QMessageBox::Information);
+    dialog.setText("<b>Configuration is valid.</b>");
+    details = "No warnings or errors were found.";
+  }
+
+  dialog.setInformativeText(details);
+  dialog.exec();
 }
 
 SystemConfig MainWindow::configFromControls() const {

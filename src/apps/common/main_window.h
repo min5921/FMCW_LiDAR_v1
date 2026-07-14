@@ -52,6 +52,7 @@ class MainWindow final : public QMainWindow {
   void markDirty();
   void markRestartDirty();
   bool validateControls(bool show_dialog = false);
+  void showValidationDetails();
   SystemConfig configFromControls() const;
   void loadConfigToControls(const SystemConfig& config, bool mark_pending = false);
   void populateDigitizerCapabilities(QString profile_id, double preferred_rate_hz,
@@ -79,7 +80,7 @@ class MainWindow final : public QMainWindow {
   QListWidget* navigation_ = nullptr;
   QStackedWidget* pages_ = nullptr;
   QComboBox* profile_combo_ = nullptr;
-  QLabel* validation_label_ = nullptr;
+  QPushButton* validation_button_ = nullptr;
   QLabel* runtime_state_label_ = nullptr;
   QLabel* raw_indicator_ = nullptr;
   QLabel* udp_indicator_ = nullptr;
