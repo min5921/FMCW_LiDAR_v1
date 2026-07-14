@@ -121,5 +121,8 @@ Verification:
 
 Status: next
 
+- Execution source of truth: [`phase7_execution_plan.md`](phase7_execution_plan.md)
+- Current next subphase: 7.1 ADC and configuration correctness
+- Audit findings P7-001 through P7-008 must be closed before Phase 7 completion.
 - Replace the simulator runtime selection with the compiled Alazar/MCU/EDFA adapters.
 - Validate sustained ATS9371 DMA, NVMe raw recording, UDP throughput, and Jetson UI/thermal behavior on hardware.

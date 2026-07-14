@@ -1065,14 +1065,22 @@ FMCW_LiDAR/
 - UDP 송신 실패가 acquisition thread를 막지 않는다.
 - 장비 없이 UI demo/replay/simulator가 실행된다.
 
-### Phase 7: Jetson Integration and Release Hardening
+### Phase 7: Hardware Integration and Release Hardening
+
+상세 subphase 순서, audit finding 추적, 완료 조건과 commit/push 기준은 `docs/phase7_execution_plan.md`를 단일 실행 기준으로 사용한다.
 
 목표:
 
-- Jetson에서도 같은 Qt UI와 core pipeline을 사용해 현장 운용 가능한 형태로 만든다.
+- Windows 실제 장비 pipeline을 완성하고 Jetson에서도 같은 Qt UI와 core pipeline을 사용해 현장 운용 가능한 형태로 만든다.
 
 작업:
 
+- ATS9371 ADC sample alignment와 chirp profile 일관성 수정
+- packaged EXE의 simulator 고정 runtime을 Alazar/MCU/EDFA hardware runtime으로 교체
+- DMA buffer 단위 acquisition, FFTW batch, CUDA full pipeline 구현
+- DMA-block high-speed raw recording과 replay 구현
+- laser timing, MCU waveform, scan geometry calibration 정합
+- Windows hardware acceptance와 release package 완성
 - Jetson Qt UI packaging
 - Jetson AlazarTech SDK/driver 설치 절차 문서화
 - Jetson CUDA/cuFFT 동작 확인
@@ -1086,6 +1094,8 @@ FMCW_LiDAR/
 
 완료 조건:
 
+- Windows에서 실제 ATS9371 acquisition, FFTW/CUDA processing, raw recording이 장시간 검증된다.
+- audit finding `P7-001`부터 `P7-008`까지 모두 닫힌다.
 - Jetson에서 Qt UI가 실행된다.
 - Jetson에서 Alazar acquisition path가 검증된다.
 - 장시간 운용 시 drop, memory growth, handle leak을 측정할 수 있다.

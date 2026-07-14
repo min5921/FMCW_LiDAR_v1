@@ -26,6 +26,7 @@ FMCW LiDAR 시스템을 Windows와 Jetson에서 함께 운용하기 위한 v1 �
 - `docs/device_protocols.md`: Alazar AutoDMA, MCU UART, EDFA binary protocol
 - `docs/hardware_acceptance.md`: Windows/Jetson 실제 장비 검증 절차
 - `docs/build_setup.md`: Windows/Jetson 빌드 준비와 외부 SDK 경로
+- `docs/phase7_execution_plan.md`: Phase 7 subphase 순서, 완료 조건, audit finding 추적 및 commit/push 기준
 
 ## Phase Policy
 
@@ -38,7 +39,7 @@ Phase별로 구현 단위를 나누고, 각 Phase가 끝날 때 commit/push한�
 - Phase 4: Processing and storage pipeline
 - Phase 5: Qt UI MVP
 - Phase 6: 3D, UDP, and simulator expansion
-- Phase 7: Jetson integration and release hardening
+- Phase 7: Hardware integration and release hardening
 
 ## Windows Application
 
