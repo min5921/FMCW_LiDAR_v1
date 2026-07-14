@@ -147,19 +147,20 @@ UI 선택 기준:
 
 UI에서 다음 항목을 설정할 수 있어야 한다.
 
-- Board select
+- Board model: `ATS9371`로 고정하고 SDK 연결 시 실제 board kind를 검증
+- System ID / Board ID: `1 / 1`로 고정하며 UI 입력에서 제외
 - Channel select: A 또는 B
 - Sampling rate
 - Sample point
 - Records per buffer
-- A-scan count
-- B-scan count
+- A-scan count: `Records per buffer`에서 파생
+- B-scan count: 한 프레임의 Y line 수와 B-scan matrix 높이를 위해 사용자가 설정
 - Input range
-- Coupling: AC/DC
+- Coupling: ATS9371 analog input은 DC로 고정
 - Impedance
-- Trigger source
+- Trigger source: `TRIG IN`, External TTL, DC coupling으로 고정
 - Trigger slope
-- Trigger level
+- Trigger threshold: signed full-scale percent와 ATS SDK code를 함께 표시
 - Trigger delay
 - Laser trigger mode: `up_chirp_only`로 고정
 - Full-period acquisition: 항상 enable
@@ -182,7 +183,9 @@ UI에서 다음 항목을 설정할 수 있어야 한다.
 - up/down segment 범위는 record 내부에 있어야 하며 서로 겹치지 않아야 한다.
 - up/down segment 길이는 같은 FFT length를 사용하거나 padding/resampling 정책이 명확해야 한다.
 - `B-scan count`는 scan setup의 Y line count와 일치해야 한다.
-- sampling rate 선택값은 실제 Alazar 보드가 지원하는 값으로 제한한다.
+- A-scan count는 `records_per_buffer`와 항상 같아야 하며 별도 입력값으로 관리하지 않는다.
+- sampling rate 선택값은 ATS9371 internal clock이 지원하는 discrete 값으로 제한한다.
+- ATS9371 record/pre-trigger alignment는 128 samples, single-channel trigger delay alignment는 16 samples를 사용한다.
 - 초기 버전에서는 A+B 동시 수집을 지원하지 않는다.
 - 선택 가능한 채널은 단일 채널 A 또는 단일 채널 B로 제한한다.
 - selected channel이 바뀌면 buffer size, FFT batch, 저장 포맷을 다시 계산한다.
@@ -192,9 +195,10 @@ UI에서 다음 항목을 설정할 수 있어야 한다.
 
 실행 중 변경 정책:
 
-- 실행 중 변경 가능: peak threshold, plot range, save enable, UDP enable, color map, segment overlay 표시
+- 실행 중 변경 가능: peak threshold/search range, DC removal, plot range, color map, segment overlay 표시
 - Preview 중 변경 가능: up/down segment start/end, guard samples
-- 재시작 필요: sampling rate, sample point, channel, record count, chirp period samples, DMA buffer count
+- 재시작 필요: board capability, sampling rate, sample point, channel, record count, chirp period samples, DMA buffer count, FFT backend/length, raw/processed save 조건, UDP endpoint
+- 재시작 필요 설정은 Running 중 잠그고, STOP 후 `Apply Setup`으로 disconnect/configure/reconnect한다. 자동 START는 하지 않는다.
 
 현재 코드 기준 관련 항목:
 
@@ -288,9 +292,11 @@ legacy 참고:
 - Y end angle
 - Scan direction
 - Bidirectional scan enable
-- X pixel count
-- Y line count
-- Line time
+- A-scan count: Digitizer의 `Records per buffer`에서 읽기 전용으로 표시
+- B-scans / frame: 사용자가 직접 설정
+- Positions / frame: `records_per_buffer * B-scans_per_frame`으로 계산하여 읽기 전용 표시
+- DMA B-scan rate/period: Alazar DMA buffer 완료 timestamp 간격에서 실측하여 읽기 전용 표시
+- Measured frame time: `DMA buffer period * B-scans_per_frame`으로 계산하여 읽기 전용 표시
 - Trigger shift
 - Scanner port
 - Scanner sample rate
@@ -301,6 +307,11 @@ legacy 참고:
 - scanner 연결 상태와 응답 상태를 구분해서 표시한다.
 - Scan / MCU 페이지에는 별도 Start/Stop을 두지 않고 global START/STOP과 연동 상태만 표시한다.
 - Start acquisition 전에 scanner ready, digitizer ready, trigger ready를 모두 확인한다.
+- 현재 MCU firmware의 TIM6 point rate는 100 kHz이며 MCU cycle time은 `full_frame_waveform_points / 100 kHz`로 계산한다.
+- MCU에는 `A-scans_per_B-scan * B-scans_per_frame` 크기의 한 프레임 전체 파형을 업로드한다.
+- legacy waveform과 동일하게 각 B-scan 시작점에서만 marker를 출력하고, 모든 waveform point에서 marker를 켜지 않는다.
+- MCU cycle time은 scanner 파형 검증값이며 Alazar DMA B-scan 속도를 대신하지 않는다.
+- 실측 DMA frame time과 MCU waveform cycle time 차이가 5%를 넘으면 UI에 timing mismatch warning을 표시한다.
 - 스캔 패턴 preview를 2D로 표시한다.
 - bidirectional scan일 때 짝수/홀수 line의 X 방향 반전을 UI에 표시한다.
 - Stop 순서는 scanner stop, digitizer abort, buffer flush 순서로 안정화한다.
@@ -327,17 +338,16 @@ legacy 참고:
 1. Raw full-period ADC buffer 입력
 2. Trigger timestamp와 chirp period 검증
 3. Up/down segment extraction
-4. DC removal 또는 normalization
+4. 고정 ADC full-scale 변환과 optional DC removal
 5. Window 적용
 6. FFT
 7. Magnitude dB 변환
 8. Peak detection
-9. Peak index tracking, loss detection, reacquire
-10. Extracted up/down chirp matching
-11. Distance calculation
-12. Velocity calculation
-13. XYZ point 변환
-14. Heatmap/point cloud 갱신
+9. UP/DOWN independent peak validity 판정
+10. Distance calculation
+11. Velocity calculation
+12. XYZ point 변환
+13. Heatmap/point cloud 갱신
 
 ### 3.5.1 Chirp Segmentation
 
@@ -394,9 +404,9 @@ CPU FFT 요구사항:
 - GPU FFT 실패 시 기본 정책은 acquisition stop으로 한다.
 - FFTW fallback은 디버그/검증 모드에서만 수동 선택한다.
 - processing queue 길이, 처리 지연, drop count를 실시간 표시한다.
-- peak detection threshold, search range, tracking delta, reacquire width, lost policy는 실행 중 변경 가능해야 한다.
-- v1 peak tracking은 한 B-scan line 안의 연속 A-scan continuity를 기준으로 up/down chirp에 각각 적용한다.
-- held peak는 표시할 수 있지만 invalid 결과로 기록하며 거리/속도/UDP 유효값으로 사용하지 않는다.
+- peak detection threshold와 search range는 실행 중 변경 가능해야 한다.
+- 각 A-scan의 UP/DOWN peak는 이전 A-scan과 독립적으로 search range 안의 최대값을 검출한다.
+- threshold 이상 peak가 없으면 이전 값을 유지하지 않고 해당 결과를 invalid로 기록한다.
 - 설정 변경이 처리 결과에 반영된 frame 번호를 기록한다.
 - raw replay 모드에서도 동일한 processing pipeline을 사용한다.
 - GPU FFT와 CPU FFT 결과 차이를 검증하는 regression test를 제공한다.
@@ -987,7 +997,7 @@ FMCW_LiDAR/
 - CUDA/cuFFT backend 정리
 - CPU FFTW backend 구현
 - GPU FFT와 CPU FFT 결과 비교 테스트 작성
-- DC removal, window, FFT, peak detection/tracking, distance/velocity 처리 구현
+- ADC full-scale 변환, DC removal, window, FFT, independent peak detection, distance/velocity 처리 구현
 - scan line accumulator와 B-scan matrix 구현
 - UI용 immutable waveform/FFT/peak/B-scan snapshot publisher 구현
 - full-period raw buffer에서 up/down segment extraction 적용
@@ -1096,7 +1106,7 @@ FMCW_LiDAR/
 9. v1 hardware acquisition trigger는 up chirp 시작 1회만 사용하며, trigger마다 full up+down period를 저장한 뒤 software에서 두 구간을 분리한다.
 10. acquisition과 scanner는 한 개 global START/STOP으로 운용하며 digitizer를 먼저 arm하고 MCU trigger를 마지막에 시작한다.
 11. chirp segmentation 설정 graph는 연속 실시간 plot이 아니라 요청 시 고정되는 full-period snapshot이다.
-12. FFT spectrum은 Live View FFT 탭만 소유하며 Peak Analysis는 peak index/value와 tracking 상태만 표시한다.
+12. FFT spectrum은 Live View FFT 탭만 소유하며 Peak Analysis는 peak index/value와 validity만 표시한다.
 
 ## 8. Recommended First Implementation Target
 

@@ -6,10 +6,11 @@ Phase 3의 장비 adapter는 `IDigitizer`, `IEdfaController`, `IMcuController` �
 
 공통 `AlazarDigitizer`가 Windows의 `ATSApi.lib`와 Linux의 `libATSApi.so`를 CMake에서 선택한다. ATS-SDK가 없으면 simulator를 포함한 전체 앱은 계속 빌드되고, 실제 adapter의 Connect만 명확한 오류를 반환한다.
 
-초기 hardware adapter 지원 범위:
+현재 hardware adapter 지원 범위:
 
-- internal clock 1 GS/s
-- 입력 범위 +/-400 mV, 50 ohm, AC 또는 DC coupling
+- ATS9371, System 1 / Board 1 고정 및 `AlazarGetBoardKind` 검증
+- internal clock discrete sample rates: 1 kS/s, 2 kS/s, 5 kS/s, 10 kS/s, 20 kS/s, 50 kS/s, 100 kS/s, 200 kS/s, 500 kS/s, 1 MS/s, 2 MS/s, 5 MS/s, 10 MS/s, 20 MS/s, 50 MS/s, 100 MS/s, 200 MS/s, 500 MS/s, 800 MS/s, 1 GS/s
+- 입력 범위 +/-400 mV, 50 ohm, DC coupling
 - external TTL trigger, rising 또는 falling slope
 - channel A 또는 channel B 중 하나만 사용
 - `ADMA_NPT | ADMA_EXTERNAL_STARTCAPTURE`
@@ -46,6 +47,8 @@ legacy STM32 firmware의 line protocol을 유지한다.
 - `STOP` -> `ACK:STOP`
 - 오류 -> `ERR:<code>`
 - firmware 최대 point 수: 15000
+
+Marker가 켜진 waveform point의 `m` 값은 firmware의 `m >= 200` 조건을 만족하도록 `255`를 전송한다. 한 MCU upload는 `A-scans/B-scan * B-scans/frame` 크기의 전체 raster frame이며 각 B-scan 시작점에서만 marker를 켠다. MCU TIM6의 100 kHz point rate는 전체 waveform cycle time 계산에 사용하고, 실제 B-scan rate는 Alazar DMA buffer 완료 timestamp에서 측정한다.
 
 `McuSerialController`는 Windows COM과 Jetson tty에서 같은 protocol codec을 사용한다. upload는 buffer clear, DATA 전송, loaded count 확인 순서로 수행한다. ACK가 필요한 profile에서는 count가 다르면 Ready로 전환하지 않는다. emergency stop의 ACK가 오지 않으면 serial port를 닫고 연결 오류 상태를 남긴다.
 

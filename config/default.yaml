@@ -1,5 +1,5 @@
 profile:
-  schema_version: 2
+  schema_version: 4
   id: default
   name: "Default FMCW LiDAR"
   description: "Safe default full-period acquisition profile"
@@ -9,21 +9,22 @@ profile:
 digitizer:
   system_id: 1
   board_id: 1
+  board_profile: ats9371
   channel: a
   sample_rate_hz: 1000000000
   sample_point: 4096
   records_per_buffer: 64
-  a_scan_count: 512
+  a_scan_count: 64
   b_scan_count: 25
   input_range_volts: 0.4
   coupling: dc
   impedance_ohms: 50
   trigger_source: external
   trigger_slope: rising
-  trigger_level_percent: 50
-  trigger_delay_samples: 0
-  pre_trigger_samples: 128
-  post_trigger_samples: 3968
+  trigger_level_percent: 17.3
+  trigger_delay_samples: 400
+  pre_trigger_samples: 0
+  post_trigger_samples: 4096
   timeout_ms: 1000
   dma_buffer_count: 8
   fifo_only_streaming: true
@@ -60,9 +61,8 @@ scan:
   y_start_deg: -9
   y_end_deg: 9
   bidirectional: false
-  x_pixel_count: 512
+  x_pixel_count: 64
   y_line_count: 25
-  line_time_ms: 1
   trigger_shift_samples: 0
   scanner_sample_rate_hz: 100000
 chirp_segmentation:
@@ -82,14 +82,9 @@ chirp_segmentation:
 processing:
   fft_backend: fftw
   dc_removal: true
-  normalize: false
   peak_threshold_db: -45
   peak_search_start_bin: 2
   peak_search_end_bin: 900
-  peak_tracking_enabled: true
-  peak_tracking_max_delta_bins: 12
-  peak_reacquire_width_bins: 64
-  peak_lost_policy: reacquire
   queue_capacity: 32
   overflow_policy: stop_acquisition
 udp:

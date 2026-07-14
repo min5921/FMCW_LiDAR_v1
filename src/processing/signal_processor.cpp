@@ -17,11 +17,6 @@ namespace {
 constexpr double kSpeedOfLightMps = 299792458.0;
 constexpr double kPi = 3.14159265358979323846;
 
-struct TrackerState {
-  bool has_last = false;
-  float last_bin = -1.0F;
-};
-
 std::vector<float> makeWindow(WindowFunction function, std::size_t length) {
   std::vector<float> window(length, 1.0F);
   if (function == WindowFunction::Rectangular || length < 2U) {
@@ -67,18 +62,15 @@ bool preprocessSegment(const RawFrame& raw, SegmentRange range, const Processing
     }
     mean /= static_cast<double>(range.length());
   }
-  float max_abs = 0.0F;
   for (std::size_t local = 0; local < range.length(); ++local) {
     float value = static_cast<float>(static_cast<double>(raw.samples[range.start_sample + local]) / 32768.0 - mean);
     if (down_segment && polarity == SegmentPolarity::InvertDown) {
       value = -value;
     }
     output[local] = value;
-    max_abs = std::max(max_abs, std::abs(value));
   }
-  const float normalization = processing.normalize && max_abs > 0.0F ? 1.0F / max_abs : 1.0F;
   for (std::size_t local = 0; local < range.length(); ++local) {
-    output[local] *= normalization * window[local];
+    output[local] *= window[local];
   }
   error.clear();
   return true;
@@ -132,59 +124,6 @@ PeakMeasurement detectPeak(const std::vector<float>& magnitude, std::uint32_t st
   return result;
 }
 
-PeakMeasurement applyTracking(const std::vector<float>& magnitude, const ProcessingConfig& config,
-                              TrackerState& tracker, bool& stop_requested) {
-  auto candidate = detectPeak(magnitude, config.peak_search_start_bin, config.peak_search_end_bin,
-                              config.peak_threshold_db);
-  if (!config.peak_tracking_enabled) {
-    return candidate;
-  }
-  if (!tracker.has_last) {
-    if (candidate.valid) {
-      tracker.has_last = true;
-      tracker.last_bin = candidate.interpolated_bin;
-    }
-    return candidate;
-  }
-  if (candidate.valid && std::abs(candidate.interpolated_bin - tracker.last_bin) <=
-                             static_cast<float>(config.peak_tracking_max_delta_bins)) {
-    candidate.state = PeakTrackState::Tracked;
-    tracker.last_bin = candidate.interpolated_bin;
-    return candidate;
-  }
-  if (config.peak_lost_policy == PeakLostPolicy::Reacquire) {
-    const auto center = static_cast<std::int32_t>(std::lround(tracker.last_bin));
-    const auto width = static_cast<std::int32_t>(config.peak_reacquire_width_bins);
-    const auto local_start = static_cast<std::uint32_t>(std::max<std::int32_t>(
-        static_cast<std::int32_t>(config.peak_search_start_bin), center - width));
-    const auto local_end = static_cast<std::uint32_t>(std::min<std::int32_t>(
-        static_cast<std::int32_t>(config.peak_search_end_bin), center + width));
-    auto reacquired = detectPeak(magnitude, local_start, local_end, config.peak_threshold_db);
-    if (!reacquired.valid) {
-      reacquired = candidate;
-    }
-    if (reacquired.valid) {
-      reacquired.state = PeakTrackState::Reacquired;
-      tracker.last_bin = reacquired.interpolated_bin;
-      return reacquired;
-    }
-  } else if (config.peak_lost_policy == PeakLostPolicy::HoldLast) {
-    PeakMeasurement held;
-    held.discrete_bin = static_cast<std::int32_t>(std::lround(tracker.last_bin));
-    held.interpolated_bin = tracker.last_bin;
-    if (held.discrete_bin >= 0 && static_cast<std::size_t>(held.discrete_bin) < magnitude.size()) {
-      held.magnitude_db = magnitude[static_cast<std::size_t>(held.discrete_bin)];
-    }
-    held.state = PeakTrackState::HeldLast;
-    return held;
-  } else {
-    stop_requested = true;
-  }
-  candidate.valid = false;
-  candidate.state = PeakTrackState::Lost;
-  return candidate;
-}
-
 PointXYZI toPoint(float distance_m, float velocity_mps, float intensity_db, const ScanPosition& position) {
   PointXYZI point;
   if (!position.valid || !std::isfinite(distance_m) || !std::isfinite(velocity_mps)) {
@@ -213,10 +152,6 @@ struct SignalProcessor::Impl {
   std::vector<float> down_window;
   float up_window_sum = 1.0F;
   float down_window_sum = 1.0F;
-  TrackerState up_tracker;
-  TrackerState down_tracker;
-  std::uint32_t previous_y = 0;
-  bool has_previous_y = false;
   bool configured = false;
 };
 
@@ -250,7 +185,6 @@ bool SignalProcessor::configure(const SystemConfig& config, std::uint64_t proces
   impl_->up_window_sum = windowSum(impl_->up_window);
   impl_->down_window_sum = windowSum(impl_->down_window);
   impl_->configured = true;
-  resetTracking();
   error.clear();
   return true;
 }
@@ -295,13 +229,6 @@ bool SignalProcessor::process(const RawFrame& raw, ProcessedFrame& processed, st
     return false;
   }
   const auto started = std::chrono::steady_clock::now();
-  if (raw.metadata.scan_position.valid &&
-      (!impl_->has_previous_y || raw.metadata.scan_position.y_index != impl_->previous_y)) {
-    resetTracking();
-    impl_->previous_y = raw.metadata.scan_position.y_index;
-    impl_->has_previous_y = true;
-  }
-
   std::vector<float> up_input;
   std::vector<float> down_input;
   if (!preprocessSegment(raw, raw.metadata.up_segment, impl_->config.processing,
@@ -327,10 +254,14 @@ bool SignalProcessor::process(const RawFrame& raw, ProcessedFrame& processed, st
   processed.scan_position = raw.metadata.scan_position;
   processed.up_fft_magnitude_db = magnitudeDb(up_spectrum, impl_->up_window_sum);
   processed.down_fft_magnitude_db = magnitudeDb(down_spectrum, impl_->down_window_sum);
-  processed.up_peak = applyTracking(processed.up_fft_magnitude_db, impl_->config.processing,
-                                    impl_->up_tracker, processed.stop_requested);
-  processed.down_peak = applyTracking(processed.down_fft_magnitude_db, impl_->config.processing,
-                                      impl_->down_tracker, processed.stop_requested);
+  processed.up_peak = detectPeak(processed.up_fft_magnitude_db,
+                                 impl_->config.processing.peak_search_start_bin,
+                                 impl_->config.processing.peak_search_end_bin,
+                                 impl_->config.processing.peak_threshold_db);
+  processed.down_peak = detectPeak(processed.down_fft_magnitude_db,
+                                   impl_->config.processing.peak_search_start_bin,
+                                   impl_->config.processing.peak_search_end_bin,
+                                   impl_->config.processing.peak_threshold_db);
 
   if (processed.up_peak.valid && processed.down_peak.valid) {
     const double bin_frequency_hz = raw.metadata.sample_rate_hz /
@@ -356,11 +287,6 @@ bool SignalProcessor::process(const RawFrame& raw, ProcessedFrame& processed, st
   processed.processing_note = impl_->fft_backend->name();
   error.clear();
   return true;
-}
-
-void SignalProcessor::resetTracking() {
-  impl_->up_tracker = {};
-  impl_->down_tracker = {};
 }
 
 std::string SignalProcessor::backendName() const {

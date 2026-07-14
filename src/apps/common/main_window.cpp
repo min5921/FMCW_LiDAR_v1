@@ -3,8 +3,10 @@
 #include "core/app_version.h"
 #include "core/config_profile.h"
 #include "core/config_validation.h"
+#include "core/digitizer_capabilities.h"
 
 #include <QApplication>
+#include <QAbstractSpinBox>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDateTime>
@@ -21,9 +23,12 @@
 #include <QLineEdit>
 #include <QListWidget>
 #include <QMessageBox>
+#include <QPalette>
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QScrollArea>
+#include <QSignalBlocker>
+#include <QSlider>
 #include <QSpinBox>
 #include <QSplitter>
 #include <QStackedWidget>
@@ -35,6 +40,7 @@
 #include <QVBoxLayout>
 
 #include <algorithm>
+#include <cmath>
 #include <filesystem>
 #include <limits>
 #include <utility>
@@ -46,6 +52,14 @@ QGroupBox* groupBox(const QString& title, QWidget* parent = nullptr) {
   auto* group = new QGroupBox(title, parent);
   group->setProperty("surface", true);
   return group;
+}
+
+void tuneForm(QFormLayout* form) {
+  form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+  form->setFormAlignment(Qt::AlignTop);
+  form->setLabelAlignment(Qt::AlignRight | Qt::AlignVCenter);
+  form->setHorizontalSpacing(18);
+  form->setVerticalSpacing(10);
 }
 
 QFrame* statusCard(const QString& title, QLabel*& value, QWidget* parent) {
@@ -89,6 +103,70 @@ std::filesystem::path fileSystemPath(const QString& path) {
 #else
   return std::filesystem::path(path.toStdString());
 #endif
+}
+
+QString sampleRateText(double sample_rate_hz) {
+  if (sample_rate_hz >= 1.0e9) {
+    return QString("%1 GS/s").arg(sample_rate_hz / 1.0e9, 0, 'g', 6);
+  }
+  if (sample_rate_hz >= 1.0e6) {
+    return QString("%1 MS/s").arg(sample_rate_hz / 1.0e6, 0, 'g', 6);
+  }
+  return QString("%1 kS/s").arg(sample_rate_hz / 1.0e3, 0, 'g', 6);
+}
+
+QString darkStyleSheet() {
+  return QStringLiteral(R"(
+    QMainWindow, QWidget#workspace { background: #11171a; color: #dce5e7; }
+    QWidget#sidebar { background: #0b1013; color: #edf4f3; }
+    QLabel#brand { color: #f6f9f9; }
+    QLabel#platform { color: #61c7ba; }
+    QListWidget#navigation { color: #aebcc0; }
+    QListWidget#navigation::item:hover { background: #182226; color: #ffffff; }
+    QListWidget#navigation::item:selected { background: #203036; color: #ffffff; border-left: 3px solid #35b2a3; }
+    QWidget#commandBar { background: #171f23; border-bottom: 1px solid #303b40; }
+    QLabel#pageTitle { color: #f0f4f5; }
+    QLabel[caption="true"] { color: #91a2a8; }
+    QLabel[metric="true"] { color: #e8eff0; }
+    QFrame[card="true"], QGroupBox[surface="true"] { background: #192226; border: 1px solid #303c41; }
+    QGroupBox::title { color: #cbd6d9; }
+    QPushButton { border-color: #3a494f; background: #202b30; color: #dce5e7; }
+    QPushButton:hover { background: #29373c; border-color: #61757d; }
+    QPushButton:pressed { background: #152024; }
+    QPushButton:disabled { color: #68777c; background: #181f22; border-color: #2c363a; }
+    QPushButton#applyButton { background: #173d3a; color: #7ee0d3; border-color: #347e76; }
+    QPushButton#applyButton:hover { background: #1d4b47; border-color: #4da398; }
+    QPushButton#connectButton { background: #31545c; color: #ffffff; border-color: #426b74; }
+    QPushButton#startButton[runState="start"] { background: #19734f; color: #ffffff; border-color: #249169; }
+    QPushButton#startButton[runState="stop"] { background: #bd5f29; color: #ffffff; border-color: #df7d43; }
+    QPushButton#emergencyButton { background: #a82f38; color: #ffffff; border-color: #ca4c55; }
+    QToolButton { border-color: #3a494f; background: #202b30; color: #dce5e7; }
+    QToolButton:hover, QToolButton:checked { background: #21403e; border-color: #4b9f96; }
+    QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox { background: #12191d; color: #e1e8ea; border-color: #3a494f; selection-background-color: #277f76; }
+    QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus { border-color: #35b2a3; }
+    QLineEdit:disabled, QComboBox:disabled, QSpinBox:disabled, QDoubleSpinBox:disabled { background: #171e21; color: #708086; border-color: #2a3438; }
+    QComboBox::drop-down { border: none; width: 24px; }
+    QComboBox QAbstractItemView { background: #182125; color: #e1e8ea; border: 1px solid #425158; selection-background-color: #275f5a; }
+    QCheckBox { color: #d6dfe1; spacing: 7px; }
+    QCheckBox::indicator { width: 15px; height: 15px; border: 1px solid #53666d; border-radius: 2px; background: #12191d; }
+    QCheckBox::indicator:checked { background: #2da899; border-color: #55cbbd; }
+    QTabWidget::pane { border-color: #303c41; background: #192226; }
+    QTabBar::tab { background: #141c20; color: #8fa0a6; border-color: #303c41; }
+    QTabBar::tab:hover { background: #202b30; color: #dce5e7; }
+    QTabBar::tab:selected { background: #192226; color: #62d0c2; border-top: 2px solid #35b2a3; }
+    QLabel[statusKind="ready"] { background: #153a2b; color: #79d9ad; border-color: #286a50; }
+    QLabel[statusKind="warn"] { background: #473619; color: #f2c873; border-color: #80632d; }
+    QLabel[statusKind="error"] { background: #452125; color: #f0959c; border-color: #7b3940; }
+    QLabel[statusKind="neutral"] { background: #263137; color: #afbdc1; border-color: #46555b; }
+    QPlainTextEdit { background: #0c1114; color: #d5e0e2; border-color: #303c41; }
+    QScrollArea, QScrollArea > QWidget > QWidget { background: #11171a; }
+    QScrollBar:vertical { background: #11171a; width: 11px; margin: 0; }
+    QScrollBar::handle:vertical { background: #405057; min-height: 28px; border-radius: 4px; }
+    QScrollBar::handle:vertical:hover { background: #586b73; }
+    QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
+    QStatusBar { background: #151d21; color: #91a2a8; border-top-color: #303b40; }
+    QToolTip { background: #263238; color: #f2f6f6; border: 1px solid #52646b; padding: 4px; }
+  )");
 }
 
 }  // namespace
@@ -201,7 +279,7 @@ MainWindow::MainWindow(QString platform_name, QWidget* parent)
   save_button_ = new QToolButton(command_bar);
   save_button_->setIcon(style()->standardIcon(QStyle::SP_DialogSaveButton));
   save_button_->setToolTip("Save profile");
-  apply_button_ = new QPushButton("Apply", command_bar);
+  apply_button_ = new QPushButton("Apply Setup", command_bar);
   apply_button_->setObjectName("applyButton");
   validation_label_ = new QLabel("CHECKING", command_bar);
   validation_label_->setProperty("statusKind", "neutral");
@@ -245,6 +323,12 @@ MainWindow::MainWindow(QString platform_name, QWidget* parent)
   shell->addWidget(right, 1);
   setCentralWidget(central);
 
+  for (auto* spin : findChildren<QAbstractSpinBox*>()) {
+    spin->setButtonSymbols(QAbstractSpinBox::NoButtons);
+    spin->setAlignment(Qt::AlignRight);
+    spin->setKeyboardTracking(false);
+  }
+
   runtime_state_label_ = new QLabel("DISCONNECTED", this);
   runtime_state_label_->setProperty("statusKind", "neutral");
   statusBar()->addWidget(runtime_state_label_);
@@ -256,6 +340,34 @@ MainWindow::MainWindow(QString platform_name, QWidget* parent)
   navigation_->setCurrentRow(0);
   validateControls();
   controller_->applyConfig(config_);
+}
+
+void MainWindow::setDarkTheme(bool enabled) {
+  if (!enabled) {
+    return;
+  }
+
+  QPalette palette = this->palette();
+  palette.setColor(QPalette::Window, QColor("#11171a"));
+  palette.setColor(QPalette::WindowText, QColor("#dce5e7"));
+  palette.setColor(QPalette::Base, QColor("#151e22"));
+  palette.setColor(QPalette::AlternateBase, QColor("#222e33"));
+  palette.setColor(QPalette::Text, QColor("#dce5e7"));
+  palette.setColor(QPalette::Button, QColor("#202b30"));
+  palette.setColor(QPalette::ButtonText, QColor("#dce5e7"));
+  palette.setColor(QPalette::Mid, QColor("#35444a"));
+  palette.setColor(QPalette::Midlight, QColor("#64777e"));
+  palette.setColor(QPalette::PlaceholderText, QColor("#82949b"));
+  palette.setColor(QPalette::Highlight, QColor("#35b2a3"));
+  palette.setColor(QPalette::HighlightedText, QColor("#ffffff"));
+  qApp->setPalette(palette);
+  setPalette(palette);
+  setStyleSheet(styleSheet() + darkStyleSheet());
+  update();
+}
+
+bool MainWindow::savePointCloudFramebuffer(const QString& path) {
+  return point_cloud_plot_ != nullptr && point_cloud_plot_->grabFramebuffer().save(path, "PNG");
 }
 
 QWidget* MainWindow::makePage(QString title, QWidget* content) {
@@ -308,6 +420,18 @@ QWidget* MainWindow::buildLivePage() {
   layout->setContentsMargins(0, 0, 0, 0);
   layout->setSpacing(8);
   auto* tools = new QHBoxLayout;
+  auto* selected_label = new QLabel("Selected A-scan", content);
+  selected_a_scan_ = new QSpinBox(content);
+  selected_a_scan_->setRange(0, 0);
+  selected_a_scan_->setButtonSymbols(QAbstractSpinBox::NoButtons);
+  selected_a_scan_->setAlignment(Qt::AlignRight);
+  selected_a_scan_->setFixedWidth(72);
+  selected_a_scan_->setToolTip("Record index displayed from each Alazar DMA buffer");
+  selected_a_scan_status_ = new QLabel("Waiting for selected record", content);
+  selected_a_scan_status_->setProperty("statusKind", "neutral");
+  tools->addWidget(selected_label);
+  tools->addWidget(selected_a_scan_);
+  tools->addWidget(selected_a_scan_status_);
   tools->addStretch(1);
   auto* auto_range = new QToolButton(content);
   auto_range->setCheckable(true);
@@ -325,6 +449,12 @@ QWidget* MainWindow::buildLivePage() {
   save_view->setIcon(style()->standardIcon(QStyle::SP_DialogSaveButton));
   save_view->setToolTip("Save current view as PNG");
   connect(save_view, &QToolButton::clicked, this, &MainWindow::saveCurrentView);
+  connect(selected_a_scan_, &QSpinBox::valueChanged, this, [this](int value) {
+    selected_a_scan_status_->setText(QString("Waiting for A-scan %1").arg(value));
+    selected_a_scan_status_->setProperty("statusKind", "neutral");
+    repolish(selected_a_scan_status_);
+    controller_->setSelectedAScan(static_cast<std::uint32_t>(value));
+  });
   tools->addWidget(auto_range);
   tools->addWidget(manual_range);
   tools->addWidget(freeze_button_);
@@ -334,7 +464,7 @@ QWidget* MainWindow::buildLivePage() {
   live_tabs_ = new QTabWidget(content);
   time_plot_ = new LinePlotWidget(live_tabs_);
   time_plot_->setTitle("Full-period Time Domain");
-  time_plot_->setAxisLabels("Sample", "Amplitude");
+  time_plot_->setAxisLabels("Sample", "ADC full scale");
   fft_plot_ = new LinePlotWidget(live_tabs_);
   fft_plot_->setTitle("UP / DOWN FFT Spectrum");
   fft_plot_->setAxisLabels("FFT bin", "Magnitude (dB)");
@@ -358,11 +488,45 @@ QWidget* MainWindow::buildLivePage() {
   distance_plot_->setTitle("Distance / Velocity vs A-scan");
   distance_plot_->setAxisLabels("A-scan", "Measurement");
   bscan_plot_ = new HeatmapWidget(live_tabs_);
+  auto* point_cloud_page = new QWidget(live_tabs_);
+  auto* point_cloud_layout = new QVBoxLayout(point_cloud_page);
+  point_cloud_layout->setContentsMargins(0, 0, 0, 0);
+  point_cloud_layout->setSpacing(8);
+  auto* point_cloud_tools = new QHBoxLayout;
+  auto* color_mode = new QComboBox(point_cloud_page);
+  color_mode->addItems({"Intensity", "Velocity", "Distance"});
+  color_mode->setToolTip("Point color source");
+  auto* point_size = new QSlider(Qt::Horizontal, point_cloud_page);
+  point_size->setRange(1, 10);
+  point_size->setValue(3);
+  point_size->setFixedWidth(110);
+  point_size->setToolTip("Point size");
+  auto* accumulate = new QCheckBox("Accumulate", point_cloud_page);
+  auto* reset_camera = new QToolButton(point_cloud_page);
+  reset_camera->setIcon(style()->standardIcon(QStyle::SP_BrowserReload));
+  reset_camera->setToolTip("Reset 3D camera");
+  auto* save_cloud = new QToolButton(point_cloud_page);
+  save_cloud->setIcon(style()->standardIcon(QStyle::SP_DialogSaveButton));
+  save_cloud->setToolTip("Save current point cloud as CSV");
+  point_cloud_status_ = new QLabel("Waiting for point cloud", point_cloud_page);
+  point_cloud_status_->setProperty("statusKind", "neutral");
+  point_cloud_tools->addWidget(color_mode);
+  point_cloud_tools->addWidget(new QLabel("Point size", point_cloud_page));
+  point_cloud_tools->addWidget(point_size);
+  point_cloud_tools->addWidget(accumulate);
+  point_cloud_tools->addWidget(reset_camera);
+  point_cloud_tools->addWidget(save_cloud);
+  point_cloud_tools->addStretch(1);
+  point_cloud_tools->addWidget(point_cloud_status_);
+  point_cloud_plot_ = new PointCloudWidget(point_cloud_page);
+  point_cloud_layout->addLayout(point_cloud_tools);
+  point_cloud_layout->addWidget(point_cloud_plot_, 1);
   live_tabs_->addTab(time_plot_, "Time Domain");
   live_tabs_->addTab(fft_plot_, "FFT");
   live_tabs_->addTab(peak_page, "Peak Analysis");
   live_tabs_->addTab(distance_plot_, "Distance / Velocity");
   live_tabs_->addTab(bscan_plot_, "B-scan");
+  live_tabs_->addTab(point_cloud_page, "3D Point Cloud");
   layout->addWidget(live_tabs_, 1);
   connect(auto_range, &QToolButton::toggled, content, [this](bool enabled) {
     const QList<LinePlotWidget*> line_plots = {time_plot_, fft_plot_, peak_index_plot_, peak_value_plot_, distance_plot_};
@@ -388,8 +552,11 @@ QWidget* MainWindow::buildLivePage() {
       line_plot = name == "Peak Index" ? peak_index_plot_ : peak_value_plot_;
     } else if (live_tabs_->currentIndex() == 3) {
       line_plot = distance_plot_;
-    } else {
+    } else if (live_tabs_->currentIndex() == 4) {
       heatmap = bscan_plot_;
+    } else {
+      statusBar()->showMessage("3D view uses automatic spatial bounds", 3000);
+      return;
     }
     const auto current = line_plot != nullptr ? line_plot->currentRange() : heatmap->currentRange();
     bool accepted = false;
@@ -414,6 +581,22 @@ QWidget* MainWindow::buildLivePage() {
       heatmap->setManualRange(static_cast<float>(minimum), static_cast<float>(maximum));
     }
   });
+  connect(color_mode, &QComboBox::currentIndexChanged, point_cloud_page, [this](int index) {
+    point_cloud_plot_->setColorMode(index == 0 ? PointCloudColorMode::Intensity
+        : index == 1 ? PointCloudColorMode::Velocity : PointCloudColorMode::Distance);
+  });
+  connect(point_size, &QSlider::valueChanged, point_cloud_page, [this](int value) {
+    point_cloud_plot_->setPointSize(static_cast<float>(value));
+  });
+  connect(accumulate, &QCheckBox::toggled, point_cloud_plot_, &PointCloudWidget::setAccumulate);
+  connect(reset_camera, &QToolButton::clicked, point_cloud_plot_, &PointCloudWidget::resetCamera);
+  connect(save_cloud, &QToolButton::clicked, this, [this] {
+    const auto path = QFileDialog::getSaveFileName(this, "Save point cloud", "point_cloud.csv",
+                                                   "CSV point cloud (*.csv)");
+    if (!path.isEmpty() && !point_cloud_plot_->saveCurrentCloud(path)) {
+      QMessageBox::critical(this, "Point cloud save failed", "The current point cloud could not be written.");
+    }
+  });
   return content;
 }
 
@@ -424,48 +607,87 @@ QWidget* MainWindow::buildDigitizerPage() {
   layout->setSpacing(12);
   auto* board = groupBox("Alazar Board Setup", content);
   auto* board_form = new QFormLayout(board);
+  tuneForm(board_form);
+  board_profile_ = new QComboBox(board);
+  for (const auto& capability : digitizerBoardCapabilities()) {
+    board_profile_->addItem(QString::fromStdString(capability.display_name),
+                            QString::fromStdString(capability.profile_id));
+  }
+  board_address_ = new QLabel("System 1 / Board 1 | fixed", board);
+  board_address_->setProperty("statusKind", "neutral");
   digitizer_channel_ = new QComboBox(board);
   digitizer_channel_->addItems({"Channel A", "Channel B"});
-  sample_rate_ = new QDoubleSpinBox(board);
-  sample_rate_->setRange(1.0, 5000.0);
-  sample_rate_->setDecimals(1);
-  sample_rate_->setSuffix(" MS/s");
+  sample_rate_ = new QComboBox(board);
   sample_point_ = new QSpinBox(board);
   sample_point_->setRange(256, 16 * 1024 * 1024);
-  sample_point_->setSingleStep(256);
-  input_range_ = new QDoubleSpinBox(board);
-  input_range_->setRange(0.02, 20.0);
-  input_range_->setDecimals(3);
-  input_range_->setSuffix(" V");
+  sample_point_->setSingleStep(static_cast<int>(kAts9371RecordResolution));
+  input_range_ = new QComboBox(board);
+  impedance_ = new QComboBox(board);
   coupling_ = new QComboBox(board);
-  coupling_->addItems({"DC", "AC"});
+  coupling_->addItem("DC");
+  digitizer_lock_state_ = new QLabel("STOPPED | settings can be applied", board);
+  digitizer_lock_state_->setProperty("statusKind", "neutral");
+  board_form->addRow("Board model", board_profile_);
+  board_form->addRow("Board address", board_address_);
   board_form->addRow("Input channel", digitizer_channel_);
   board_form->addRow("Sampling rate", sample_rate_);
   board_form->addRow("Sample points", sample_point_);
   board_form->addRow("Input range", input_range_);
+  board_form->addRow("Impedance", impedance_);
   board_form->addRow("Coupling", coupling_);
+  board_form->addRow("Setup state", digitizer_lock_state_);
 
   auto* dma = groupBox("DMA / Trigger", content);
   auto* dma_form = new QFormLayout(dma);
+  tuneForm(dma_form);
   records_per_buffer_ = new QSpinBox(dma);
-  records_per_buffer_->setRange(1, 4096);
+  records_per_buffer_->setRange(2, 15000);
   dma_buffer_count_ = new QSpinBox(dma);
   dma_buffer_count_->setRange(2, 128);
+  auto* trigger_input = new QLabel("TRIG IN | External TTL | DC coupled", dma);
+  trigger_input->setProperty("statusKind", "neutral");
+  trigger_slope_ = new QComboBox(dma);
+  trigger_slope_->addItems({"Rising edge", "Falling edge"});
   trigger_level_ = new QDoubleSpinBox(dma);
-  trigger_level_->setRange(0.0, 100.0);
-  trigger_level_->setSuffix(" %");
-  auto* trigger_mode = new QLabel("External rising | Trigger on UP only | Capture full period", dma);
+  trigger_level_->setRange(-100.0, 100.0);
+  trigger_level_->setDecimals(1);
+  trigger_level_->setSuffix(" % FS");
+  trigger_level_code_ = new QLabel("SDK code 150", dma);
+  trigger_level_code_->setProperty("statusKind", "neutral");
+  trigger_delay_ = new QSpinBox(dma);
+  trigger_delay_->setRange(0, 9999999);
+  trigger_delay_->setSingleStep(static_cast<int>(kAts9371SingleChannelTriggerDelayAlignment));
+  trigger_delay_->setSuffix(" samples");
+  pre_trigger_ = new QSpinBox(dma);
+  pre_trigger_->setRange(0, static_cast<int>(kAts9371MaxNptPretrigger));
+  pre_trigger_->setSingleStep(static_cast<int>(kAts9371RecordResolution));
+  pre_trigger_->setSuffix(" samples");
+  post_trigger_ = new QLabel("4096 samples | derived", dma);
+  post_trigger_->setProperty("statusKind", "neutral");
+  auto* trigger_timeout = new QLabel("Wait forever | 0 ticks", dma);
+  trigger_timeout->setProperty("statusKind", "neutral");
+  auto* trigger_mode = new QLabel("One UP trigger produces one full-period record", dma);
   trigger_mode->setWordWrap(true);
   trigger_mode->setProperty("statusKind", "ready");
   dma_form->addRow("Records / buffer", records_per_buffer_);
   dma_form->addRow("DMA buffers", dma_buffer_count_);
-  dma_form->addRow("Trigger level", trigger_level_);
+  dma_form->addRow("Trigger input", trigger_input);
+  dma_form->addRow("Trigger edge", trigger_slope_);
+  dma_form->addRow("Trigger threshold", trigger_level_);
+  dma_form->addRow("Threshold code", trigger_level_code_);
+  dma_form->addRow("Trigger delay", trigger_delay_);
+  dma_form->addRow("Pre-trigger", pre_trigger_);
+  dma_form->addRow("Post-trigger", post_trigger_);
+  dma_form->addRow("Trigger timeout", trigger_timeout);
   dma_form->addRow("Trigger contract", trigger_mode);
   layout->addWidget(board, 0, 0);
   layout->addWidget(dma, 0, 1);
   layout->setColumnStretch(0, 1);
   layout->setColumnStretch(1, 1);
   layout->setRowStretch(1, 1);
+  restart_required_controls_.append(QList<QWidget*>{board_profile_, digitizer_channel_, sample_rate_, sample_point_,
+      input_range_, impedance_, coupling_, records_per_buffer_, dma_buffer_count_, trigger_slope_, trigger_level_,
+      trigger_delay_, pre_trigger_});
   return wrapInScrollArea(content);
 }
 
@@ -476,6 +698,7 @@ QWidget* MainWindow::buildLaserEdfaPage() {
   layout->setSpacing(12);
   auto* laser = groupBox("Laser Specification", content);
   auto* laser_form = new QFormLayout(laser);
+  tuneForm(laser_form);
   wavelength_ = new QDoubleSpinBox(laser);
   wavelength_->setRange(200.0, 3000.0);
   wavelength_->setDecimals(2);
@@ -498,6 +721,7 @@ QWidget* MainWindow::buildLaserEdfaPage() {
 
   auto* edfa = groupBox("Optional EDFA", content);
   auto* edfa_form = new QFormLayout(edfa);
+  tuneForm(edfa_form);
   edfa_mode_ = new QComboBox(edfa);
   edfa_mode_->addItems({"None / Bypass", "Manual", "Controlled"});
   edfa_port_ = new QLineEdit(edfa);
@@ -524,6 +748,8 @@ QWidget* MainWindow::buildLaserEdfaPage() {
   layout->setColumnStretch(0, 1);
   layout->setColumnStretch(1, 1);
   layout->setRowStretch(1, 1);
+  restart_required_controls_.append(QList<QWidget*>{wavelength_, sweep_bandwidth_, chirp_period_, laser_power_,
+      edfa_mode_, edfa_port_, edfa_control_mode_, edfa_setpoint_, edfa_warmup_});
   return wrapInScrollArea(content);
 }
 
@@ -532,8 +758,9 @@ QWidget* MainWindow::buildScanMcuPage() {
   auto* layout = new QGridLayout(content);
   layout->setContentsMargins(0, 0, 0, 0);
   layout->setSpacing(12);
-  auto* geometry = groupBox("Scan Geometry", content);
+  auto* geometry = groupBox("Frame Layout", content);
   auto* geometry_form = new QFormLayout(geometry);
+  tuneForm(geometry_form);
   auto angleSpin = [geometry] {
     auto* spin = new QDoubleSpinBox(geometry);
     spin->setRange(-180.0, 180.0);
@@ -545,41 +772,57 @@ QWidget* MainWindow::buildScanMcuPage() {
   x_end_ = angleSpin();
   y_start_ = angleSpin();
   y_end_ = angleSpin();
-  x_pixels_ = new QSpinBox(geometry);
-  x_pixels_->setRange(2, 15000);
+  a_scan_count_ = new QLabel("64 records | one DMA buffer", geometry);
+  a_scan_count_->setProperty("statusKind", "neutral");
   y_lines_ = new QSpinBox(geometry);
   y_lines_->setRange(2, 10000);
-  line_time_ = new QDoubleSpinBox(geometry);
-  line_time_->setRange(0.001, 10000.0);
-  line_time_->setDecimals(3);
-  line_time_->setSuffix(" ms");
+  frame_point_count_ = new QLabel("1600 positions | derived", geometry);
+  frame_point_count_->setProperty("statusKind", "neutral");
+  dma_bscan_rate_ = new QLabel("Waiting for DMA | measured at runtime", geometry);
+  dma_bscan_rate_->setProperty("statusKind", "neutral");
+  frame_time_ = new QLabel("Waiting for DMA | measured at runtime", geometry);
+  frame_time_->setProperty("statusKind", "neutral");
   bidirectional_ = new QCheckBox("Bidirectional raster", geometry);
   geometry_form->addRow("X start", x_start_);
   geometry_form->addRow("X end", x_end_);
   geometry_form->addRow("Y start", y_start_);
   geometry_form->addRow("Y end", y_end_);
-  geometry_form->addRow("X pixels / A-scans", x_pixels_);
-  geometry_form->addRow("Y lines / B-scans", y_lines_);
-  geometry_form->addRow("Line time", line_time_);
+  geometry_form->addRow("A-scans / B-scan", a_scan_count_);
+  geometry_form->addRow("B-scans / frame", y_lines_);
+  geometry_form->addRow("Positions / frame", frame_point_count_);
+  geometry_form->addRow("DMA B-scan rate", dma_bscan_rate_);
+  geometry_form->addRow("Measured frame time", frame_time_);
   geometry_form->addRow("Scan direction", bidirectional_);
 
   auto* mcu = groupBox("MCU Waveform", content);
   auto* mcu_form = new QFormLayout(mcu);
+  tuneForm(mcu_form);
   mcu_enabled_ = new QCheckBox("Use MCU scan and trigger controller", mcu);
   mcu_port_ = new QLineEdit(mcu);
   mcu_port_->setPlaceholderText(platform_name_ == "Windows" ? "COM4" : "/dev/ttyACM0");
+  mcu_point_rate_ = new QLabel("100 kHz | firmware TIM6", mcu);
+  mcu_point_rate_->setProperty("statusKind", "neutral");
+  mcu_frame_time_ = new QLabel("16.000 ms | 1600 points / frame", mcu);
+  mcu_frame_time_->setProperty("statusKind", "neutral");
+  frame_sync_state_ = new QLabel("Waiting for DMA timing", mcu);
+  frame_sync_state_->setProperty("statusKind", "neutral");
   upload_waveform_button_ = new QPushButton("Upload Waveform", mcu);
   mcu_waveform_state_ = new QLabel("MCU bypass active", mcu);
   mcu_waveform_state_->setProperty("statusKind", "neutral");
   mcu_form->addRow("Controller", mcu_enabled_);
   mcu_form->addRow("Serial port", mcu_port_);
-  mcu_form->addRow("Waveform", upload_waveform_button_);
+  mcu_form->addRow("Point rate", mcu_point_rate_);
+  mcu_form->addRow("Cycle / frame", mcu_frame_time_);
+  mcu_form->addRow("DMA / MCU sync", frame_sync_state_);
+  mcu_form->addRow("Full-frame waveform", upload_waveform_button_);
   mcu_form->addRow("Readiness", mcu_waveform_state_);
   layout->addWidget(geometry, 0, 0);
   layout->addWidget(mcu, 0, 1);
   layout->setColumnStretch(0, 1);
   layout->setColumnStretch(1, 1);
   layout->setRowStretch(1, 1);
+  restart_required_controls_.append(QList<QWidget*>{x_start_, x_end_, y_start_, y_end_, y_lines_, bidirectional_,
+      mcu_enabled_, mcu_port_, upload_waveform_button_});
   return wrapInScrollArea(content);
 }
 
@@ -590,12 +833,12 @@ QWidget* MainWindow::buildProcessingPage() {
   layout->setSpacing(10);
   auto* fft = groupBox("FFT / Preprocessing", content);
   auto* fft_form = new QFormLayout(fft);
+  tuneForm(fft_form);
   fft_backend_ = new QComboBox(fft);
   fft_backend_->addItems({"FFTW (CPU)", "CUDA cuFFT"});
   window_function_ = new QComboBox(fft);
   window_function_->addItems({"Hann", "Hamming", "Blackman", "Rectangular"});
   dc_removal_ = new QCheckBox("Remove DC component", fft);
-  normalize_ = new QCheckBox("Normalize segment", fft);
   fft_length_ = new QSpinBox(fft);
   fft_length_->setRange(256, 1048576);
   fft_length_->setSingleStep(256);
@@ -603,10 +846,10 @@ QWidget* MainWindow::buildProcessingPage() {
   fft_form->addRow("Window", window_function_);
   fft_form->addRow("FFT length", fft_length_);
   fft_form->addRow("DC removal", dc_removal_);
-  fft_form->addRow("Normalization", normalize_);
 
-  auto* peak = groupBox("Peak Detection / Tracking", content);
+  auto* peak = groupBox("Peak Detection", content);
   auto* peak_form = new QFormLayout(peak);
+  tuneForm(peak_form);
   peak_threshold_ = new QDoubleSpinBox(peak);
   peak_threshold_->setRange(-180.0, 20.0);
   peak_threshold_->setDecimals(1);
@@ -615,26 +858,22 @@ QWidget* MainWindow::buildProcessingPage() {
   peak_start_->setRange(0, 1048576);
   peak_end_ = new QSpinBox(peak);
   peak_end_->setRange(1, 1048576);
-  peak_tracking_ = new QCheckBox("Track peak continuity by A-scan", peak);
-  peak_delta_ = new QSpinBox(peak);
-  peak_delta_->setRange(1, 1048576);
-  reacquire_width_ = new QSpinBox(peak);
-  reacquire_width_->setRange(1, 1048576);
-  lost_policy_ = new QComboBox(peak);
-  lost_policy_->addItems({"Hold last (invalid)", "Reacquire", "Stop acquisition"});
+  auto* detection_mode = new QLabel("Highest peak above threshold per A-scan", peak);
+  detection_mode->setWordWrap(true);
+  detection_mode->setProperty("statusKind", "ready");
   auto* update_runtime = new QPushButton("Apply Processing", peak);
   peak_form->addRow("Peak threshold", peak_threshold_);
   peak_form->addRow("Search start bin", peak_start_);
   peak_form->addRow("Search end bin", peak_end_);
-  peak_form->addRow("Tracking", peak_tracking_);
-  peak_form->addRow("Max delta", peak_delta_);
-  peak_form->addRow("Reacquire width", reacquire_width_);
-  peak_form->addRow("Lost policy", lost_policy_);
-  peak_form->addRow("Runtime", update_runtime);
+  peak_form->addRow("Method", detection_mode);
+  peak_form->addRow("Runtime update", update_runtime);
 
   auto* segmentation = groupBox("Chirp Segmentation Snapshot", content);
   auto* segmentation_layout = new QVBoxLayout(segmentation);
-  auto* controls = new QHBoxLayout;
+  segmentation_layout->setSpacing(8);
+  auto* controls = new QGridLayout;
+  controls->setHorizontalSpacing(8);
+  controls->setVerticalSpacing(4);
   auto segmentSpin = [segmentation] {
     auto* spin = new QSpinBox(segmentation);
     spin->setRange(0, 16 * 1024 * 1024);
@@ -646,24 +885,31 @@ QWidget* MainWindow::buildProcessingPage() {
   down_start_ = segmentSpin();
   down_end_ = segmentSpin();
   guard_samples_ = segmentSpin();
-  auto addControl = [&controls](const QString& label, QWidget* widget) {
-    controls->addWidget(new QLabel(label));
-    controls->addWidget(widget);
+  int control_column = 0;
+  auto addControl = [&controls, &control_column](const QString& label, QWidget* widget) {
+    auto* caption = new QLabel(label);
+    caption->setAlignment(Qt::AlignLeft | Qt::AlignBottom);
+    caption->setProperty("caption", true);
+    controls->addWidget(caption, 0, control_column);
+    controls->addWidget(widget, 1, control_column);
+    controls->setColumnMinimumWidth(control_column, 112);
+    ++control_column;
   };
   addControl("UP start", up_start_);
   addControl("UP end", up_end_);
   addControl("DOWN start", down_start_);
   addControl("DOWN end", down_end_);
   addControl("Guard", guard_samples_);
-  controls->addStretch(1);
+  controls->setColumnStretch(control_column, 1);
   auto* capture = new QPushButton("Capture Snapshot", segmentation);
-  controls->addWidget(capture);
+  controls->addWidget(capture, 1, control_column + 1);
   segmentation_state_ = new QLabel("No frozen frame", segmentation);
   segmentation_state_->setProperty("statusKind", "neutral");
   segmentation_plot_ = new SegmentationPlotWidget(segmentation);
   segmentation_layout->addLayout(controls);
   segmentation_layout->addWidget(segmentation_state_);
   segmentation_layout->addWidget(segmentation_plot_, 1);
+  restart_required_controls_.append(QList<QWidget*>{fft_backend_, window_function_, fft_length_});
   layout->addWidget(fft, 0, 0);
   layout->addWidget(peak, 0, 1);
   layout->addWidget(segmentation, 1, 0, 1, 2);
@@ -692,6 +938,7 @@ QWidget* MainWindow::buildStorageUdpPage() {
   layout->setSpacing(12);
   auto* storage = groupBox("Session Storage", content);
   auto* storage_form = new QFormLayout(storage);
+  tuneForm(storage_form);
   raw_enabled_ = new QCheckBox("Write full-period raw frames", storage);
   processed_enabled_ = new QCheckBox("Write processed measurements", storage);
   output_directory_ = new QLineEdit(storage);
@@ -717,25 +964,38 @@ QWidget* MainWindow::buildStorageUdpPage() {
 
   auto* udp = groupBox("UDP Output", content);
   auto* udp_form = new QFormLayout(udp);
-  udp_enabled_ = new QCheckBox("Configure UDP point output", udp);
+  tuneForm(udp_form);
+  udp_enabled_ = new QCheckBox("Enable UDP point output", udp);
   udp_ip_ = new QLineEdit(udp);
   udp_port_ = new QSpinBox(udp);
   udp_port_->setRange(1, 65535);
   udp_points_ = new QSpinBox(udp);
-  udp_points_->setRange(1, 65535);
-  auto* packet_format = new QLabel("FMCW point packet v1 | CONFIG ONLY", udp);
-  packet_format->setWordWrap(true);
-  packet_format->setProperty("statusKind", "neutral");
+  udp_points_->setRange(1, 3273);
+  udp_version_ = new QComboBox(udp);
+  udp_version_->addItem("v1 | little endian", 1);
+  udp_queue_ = new QSpinBox(udp);
+  udp_queue_->setRange(1, 65536);
+  udp_policy_ = new QComboBox(udp);
+  udp_policy_->addItems({"Latest frame", "Preserve queued frames", "Stop sending"});
+  udp_status_ = new QLabel("UDP off", udp);
+  udp_status_->setWordWrap(true);
+  udp_status_->setProperty("statusKind", "neutral");
   udp_form->addRow("Output", udp_enabled_);
   udp_form->addRow("Target IPv4", udp_ip_);
   udp_form->addRow("Target port", udp_port_);
   udp_form->addRow("Points / packet", udp_points_);
-  udp_form->addRow("Format", packet_format);
+  udp_form->addRow("Packet format", udp_version_);
+  udp_form->addRow("Sender queue", udp_queue_);
+  udp_form->addRow("On queue full", udp_policy_);
+  udp_form->addRow("Runtime", udp_status_);
   layout->addWidget(storage, 0, 0);
   layout->addWidget(udp, 0, 1);
   layout->setColumnStretch(0, 1);
   layout->setColumnStretch(1, 1);
   layout->setRowStretch(1, 1);
+  restart_required_controls_.append(QList<QWidget*>{raw_enabled_, processed_enabled_, output_directory_, browse,
+      storage_queue_, split_size_, udp_enabled_, udp_ip_, udp_port_, udp_points_, udp_version_, udp_queue_,
+      udp_policy_});
   connect(browse, &QToolButton::clicked, this, [this] {
     const auto path = QFileDialog::getExistingDirectory(this, "Session output directory", output_directory_->text());
     if (!path.isEmpty()) {
@@ -819,9 +1079,19 @@ void MainWindow::connectUi() {
   connect(controller_, &ApplicationController::commandCompleted, this,
           [this](const QString& command, const QString& message) {
             statusBar()->showMessage(QString("%1: %2").arg(command, message), 5000);
-            if (command == "Apply configuration" || command == "Connect" || command == "Start") {
+            if (command == "Processing update") {
+              config_.processing = configFromControls().processing;
+              config_dirty_ = restart_dirty_;
+              validateControls();
+            } else if (command == "Apply configuration" || command == "Connect" || command == "Start") {
               config_ = configFromControls();
               config_dirty_ = false;
+              restart_dirty_ = false;
+              if (!runtime_status_.running) {
+                digitizer_lock_state_->setText("READY | board settings applied");
+                digitizer_lock_state_->setProperty("statusKind", "ready");
+                repolish(digitizer_lock_state_);
+              }
               validateControls();
             }
           });
@@ -829,7 +1099,13 @@ void MainWindow::connectUi() {
     if (freeze_live_ || snapshot == nullptr) {
       return;
     }
-    time_plot_->setSeries({{"Full period", qVector(snapshot->normalized_samples), QColor("#167a86")}});
+    time_plot_->setSeries({{"Full period", qVector(snapshot->full_scale_samples), QColor("#167a86")}});
+    selected_a_scan_status_->setText(QString("A-scan %1 / %2 | DMA %3")
+                                         .arg(snapshot->record_index_in_buffer)
+                                         .arg(snapshot->records_in_buffer - 1U)
+                                         .arg(snapshot->dma_buffer_sequence));
+    selected_a_scan_status_->setProperty("statusKind", "ready");
+    repolish(selected_a_scan_status_);
   });
   connect(controller_, &ApplicationController::fftReady, this, [this](FftSnapshotPtr snapshot) {
     if (freeze_live_ || snapshot == nullptr) {
@@ -863,6 +1139,31 @@ void MainWindow::connectUi() {
                            snapshot->completed_lines);
     }
   });
+  connect(controller_, &ApplicationController::pointCloudReady, this, [this](PointCloudSnapshotPtr snapshot) {
+    if (freeze_live_ || snapshot == nullptr) {
+      return;
+    }
+    const auto update_interval_ms = static_cast<qint64>(
+        1000.0 / std::clamp(config_.ui.point_cloud_update_hz, 1.0, 60.0));
+    if (point_cloud_update_timer_.isValid() && point_cloud_update_timer_.elapsed() < update_interval_ms) {
+      return;
+    }
+    if (point_cloud_update_timer_.isValid()) {
+      point_cloud_update_timer_.restart();
+    } else {
+      point_cloud_update_timer_.start();
+    }
+    point_cloud_plot_->setSnapshot(snapshot);
+    const auto valid_points = std::count_if(snapshot->points.begin(), snapshot->points.end(),
+                                            [](const PointXYZI& point) { return point.valid; });
+    point_cloud_status_->setText(QString("Frame %1 | %2 / %3 lines | %4 points")
+                                     .arg(snapshot->scan_frame_index + 1U)
+                                     .arg(snapshot->completed_lines)
+                                     .arg(snapshot->height)
+                                     .arg(valid_points));
+    point_cloud_status_->setProperty("statusKind", snapshot->complete ? "ready" : "neutral");
+    repolish(point_cloud_status_);
+  });
   connect(controller_, &ApplicationController::segmentationSnapshotReady, this,
           [this](WaveformSnapshotPtr snapshot) {
             segmentation_plot_->setSnapshot(snapshot);
@@ -877,42 +1178,77 @@ void MainWindow::connectUi() {
           });
 
   const QList<QObject*> config_controls = {
-      digitizer_channel_, sample_rate_, sample_point_, records_per_buffer_, dma_buffer_count_, input_range_, coupling_,
-      trigger_level_, wavelength_, sweep_bandwidth_, chirp_period_, laser_power_, edfa_mode_, edfa_port_,
-      edfa_control_mode_, edfa_setpoint_, edfa_warmup_, x_start_, x_end_, y_start_, y_end_, x_pixels_, y_lines_,
-      line_time_, bidirectional_, mcu_enabled_, mcu_port_, fft_backend_, window_function_, dc_removal_, normalize_,
-      peak_threshold_, peak_start_, peak_end_, peak_tracking_, peak_delta_, reacquire_width_, lost_policy_,
+      board_profile_, digitizer_channel_, sample_rate_, sample_point_, records_per_buffer_, dma_buffer_count_,
+      input_range_, impedance_, coupling_, trigger_slope_, trigger_level_, trigger_delay_, pre_trigger_,
+      wavelength_, sweep_bandwidth_,
+      chirp_period_, laser_power_, edfa_mode_, edfa_port_,
+      edfa_control_mode_, edfa_setpoint_, edfa_warmup_, x_start_, x_end_, y_start_, y_end_, y_lines_,
+      bidirectional_, mcu_enabled_, mcu_port_, fft_backend_, window_function_, dc_removal_,
+      peak_threshold_, peak_start_, peak_end_,
       up_start_, up_end_, down_start_, down_end_, guard_samples_, fft_length_, raw_enabled_, processed_enabled_,
-      output_directory_, storage_queue_, split_size_, udp_enabled_, udp_ip_, udp_port_, udp_points_};
+      output_directory_, storage_queue_, split_size_, udp_enabled_, udp_ip_, udp_port_, udp_points_, udp_version_,
+      udp_queue_, udp_policy_};
+  const QList<QObject*> runtime_controls = {dc_removal_, peak_threshold_, peak_start_, peak_end_};
+  connect(board_profile_, &QComboBox::currentIndexChanged, this, [this] {
+    populateDigitizerCapabilities(board_profile_->currentData().toString(), 0.0, 0.0, 0U);
+  });
+  connect(records_per_buffer_, &QSpinBox::valueChanged, this, [this] { updateDerivedAcquisitionLabels(); });
+  connect(y_lines_, &QSpinBox::valueChanged, this, [this] { updateDerivedAcquisitionLabels(); });
+  connect(sample_point_, &QSpinBox::valueChanged, this, [this] { updateDerivedAcquisitionLabels(); });
+  connect(pre_trigger_, &QSpinBox::valueChanged, this, [this] { updateDerivedAcquisitionLabels(); });
+  connect(trigger_level_, &QDoubleSpinBox::valueChanged, this, [this] { updateDerivedAcquisitionLabels(); });
   for (auto* control : config_controls) {
+    const auto changed = [this, restart_required = !runtime_controls.contains(control)] {
+      if (restart_required) {
+        markRestartDirty();
+      } else {
+        markDirty();
+      }
+    };
     if (auto* spin = qobject_cast<QSpinBox*>(control)) {
-      connect(spin, &QSpinBox::valueChanged, this, [this] { markDirty(); });
+      connect(spin, &QSpinBox::valueChanged, this, changed);
     } else if (auto* double_spin = qobject_cast<QDoubleSpinBox*>(control)) {
-      connect(double_spin, &QDoubleSpinBox::valueChanged, this, [this] { markDirty(); });
+      connect(double_spin, &QDoubleSpinBox::valueChanged, this, changed);
     } else if (auto* combo = qobject_cast<QComboBox*>(control)) {
-      connect(combo, &QComboBox::currentIndexChanged, this, [this] { markDirty(); });
+      connect(combo, &QComboBox::currentIndexChanged, this, changed);
     } else if (auto* check = qobject_cast<QCheckBox*>(control)) {
-      connect(check, &QCheckBox::toggled, this, [this] { markDirty(); });
+      connect(check, &QCheckBox::toggled, this, changed);
     } else if (auto* edit = qobject_cast<QLineEdit*>(control)) {
-      connect(edit, &QLineEdit::textChanged, this, [this] { markDirty(); });
+      connect(edit, &QLineEdit::textChanged, this, changed);
     }
   }
 }
 
 void MainWindow::markDirty() {
+  if (loading_controls_) {
+    return;
+  }
   config_dirty_ = true;
   raw_indicator_->setText(raw_enabled_->isChecked() ? "RAW ON" : "RAW OFF");
   raw_indicator_->setProperty("statusKind", raw_enabled_->isChecked() ? "ready" : "neutral");
-  udp_indicator_->setText(udp_enabled_->isChecked() ? "UDP CFG" : "UDP OFF");
+  udp_indicator_->setText(udp_enabled_->isChecked() ? "UDP READY" : "UDP OFF");
   udp_indicator_->setProperty("statusKind", udp_enabled_->isChecked() ? "ready" : "neutral");
   repolish(raw_indicator_);
   repolish(udp_indicator_);
+  if (restart_dirty_ && !runtime_status_.running && digitizer_lock_state_ != nullptr) {
+    digitizer_lock_state_->setText("APPLY REQUIRED | reconnect before START");
+    digitizer_lock_state_->setProperty("statusKind", "warn");
+    repolish(digitizer_lock_state_);
+  }
   segmentation_plot_->setSegments({static_cast<std::uint32_t>(up_start_->value()),
                                     static_cast<std::uint32_t>(up_end_->value())},
                                    {static_cast<std::uint32_t>(down_start_->value()),
                                     static_cast<std::uint32_t>(down_end_->value())},
                                    static_cast<std::uint32_t>(guard_samples_->value()));
   validateControls();
+}
+
+void MainWindow::markRestartDirty() {
+  if (loading_controls_) {
+    return;
+  }
+  restart_dirty_ = true;
+  markDirty();
 }
 
 bool MainWindow::validateControls(bool show_dialog) {
@@ -936,16 +1272,16 @@ bool MainWindow::validateControls(bool show_dialog) {
     validation_label_->setText(QString("%1 ERROR").arg(errors));
     validation_label_->setProperty("statusKind", "error");
   } else if (warnings > 0) {
-    validation_label_->setText(config_dirty_ ? QString("VALID | %1 WARN | PENDING").arg(warnings)
+    validation_label_->setText(config_dirty_ ? QString("VALID | %1 WARN | APPLY").arg(warnings)
                                              : QString("VALID | %1 WARN").arg(warnings));
     validation_label_->setProperty("statusKind", "warn");
   } else {
-    validation_label_->setText(config_dirty_ ? "VALID | PENDING" : "VALID");
+    validation_label_->setText(config_dirty_ ? "VALID | APPLY" : "VALID");
     validation_label_->setProperty("statusKind", "ready");
   }
   validation_label_->setToolTip(tooltip);
   repolish(validation_label_);
-  start_stop_button_->setEnabled(runtime_status_.running || errors == 0);
+  start_stop_button_->setEnabled(runtime_status_.running || (errors == 0 && !config_dirty_));
   apply_button_->setEnabled(!runtime_status_.running && errors == 0);
   if (show_dialog && errors > 0) {
     QMessageBox::warning(this, "Configuration validation", tooltip);
@@ -956,14 +1292,22 @@ bool MainWindow::validateControls(bool show_dialog) {
 SystemConfig MainWindow::configFromControls() const {
   auto config = config_;
   config.profile.name = profile_combo_->currentText().toStdString();
+  config.digitizer.board_profile = board_profile_->currentData().toString().toStdString();
+  config.digitizer.system_id = kAlazarSystemId;
+  config.digitizer.board_id = kAlazarBoardId;
   config.digitizer.channel = digitizer_channel_->currentIndex() == 0 ? DigitizerChannel::A : DigitizerChannel::B;
-  config.digitizer.sample_rate_hz = sample_rate_->value() * 1.0e6;
+  config.digitizer.sample_rate_hz = sample_rate_->currentData().toDouble();
   config.digitizer.sample_point = static_cast<std::uint32_t>(sample_point_->value());
   config.digitizer.records_per_buffer = static_cast<std::uint32_t>(records_per_buffer_->value());
   config.digitizer.dma_buffer_count = static_cast<std::uint32_t>(dma_buffer_count_->value());
-  config.digitizer.input_range_volts = input_range_->value();
-  config.digitizer.coupling = coupling_->currentIndex() == 0 ? Coupling::Dc : Coupling::Ac;
+  config.digitizer.input_range_volts = input_range_->currentData().toDouble();
+  config.digitizer.impedance_ohms = impedance_->currentData().toUInt();
+  config.digitizer.coupling = Coupling::Dc;
+  config.digitizer.trigger_source = TriggerSource::External;
+  config.digitizer.trigger_slope = trigger_slope_->currentIndex() == 0 ? TriggerSlope::Rising : TriggerSlope::Falling;
   config.digitizer.trigger_level_percent = trigger_level_->value();
+  config.digitizer.trigger_delay_samples = static_cast<std::uint32_t>(trigger_delay_->value());
+  config.digitizer.pre_trigger_samples = static_cast<std::uint32_t>(pre_trigger_->value());
   config.digitizer.post_trigger_samples = config.digitizer.sample_point > config.digitizer.pre_trigger_samples
       ? config.digitizer.sample_point - config.digitizer.pre_trigger_samples
       : 0U;
@@ -982,11 +1326,10 @@ SystemConfig MainWindow::configFromControls() const {
   config.scan.x_end_deg = x_end_->value();
   config.scan.y_start_deg = y_start_->value();
   config.scan.y_end_deg = y_end_->value();
-  config.scan.x_pixel_count = static_cast<std::uint32_t>(x_pixels_->value());
   config.scan.y_line_count = static_cast<std::uint32_t>(y_lines_->value());
-  config.scan.line_time_ms = line_time_->value();
   config.scan.bidirectional = bidirectional_->isChecked();
-  config.digitizer.a_scan_count = config.scan.x_pixel_count;
+  config.scan.x_pixel_count = derivedAScanCount(config);
+  config.digitizer.a_scan_count = derivedAScanCount(config);
   config.digitizer.b_scan_count = config.scan.y_line_count;
   config.mcu.enabled = mcu_enabled_->isChecked();
   config.mcu.port = mcu_port_->text().trimmed().toStdString();
@@ -994,14 +1337,9 @@ SystemConfig MainWindow::configFromControls() const {
   config.chirp_segmentation.window = static_cast<WindowFunction>(window_function_->currentIndex());
   config.chirp_segmentation.segment_fft_length = static_cast<std::uint32_t>(fft_length_->value());
   config.processing.dc_removal = dc_removal_->isChecked();
-  config.processing.normalize = normalize_->isChecked();
   config.processing.peak_threshold_db = peak_threshold_->value();
   config.processing.peak_search_start_bin = static_cast<std::uint32_t>(peak_start_->value());
   config.processing.peak_search_end_bin = static_cast<std::uint32_t>(peak_end_->value());
-  config.processing.peak_tracking_enabled = peak_tracking_->isChecked();
-  config.processing.peak_tracking_max_delta_bins = static_cast<std::uint32_t>(peak_delta_->value());
-  config.processing.peak_reacquire_width_bins = static_cast<std::uint32_t>(reacquire_width_->value());
-  config.processing.peak_lost_policy = static_cast<PeakLostPolicy>(lost_policy_->currentIndex());
   config.chirp_segmentation.up_segment = {static_cast<std::uint32_t>(up_start_->value()),
                                          static_cast<std::uint32_t>(up_end_->value())};
   config.chirp_segmentation.down_segment = {static_cast<std::uint32_t>(down_start_->value()),
@@ -1016,21 +1354,137 @@ SystemConfig MainWindow::configFromControls() const {
   config.udp.target_ip = udp_ip_->text().trimmed().toStdString();
   config.udp.target_port = static_cast<std::uint16_t>(udp_port_->value());
   config.udp.packet_point_count = static_cast<std::uint32_t>(udp_points_->value());
+  config.udp.packet_format_version = udp_version_->currentData().toUInt();
+  config.udp.queue_capacity = static_cast<std::uint32_t>(udp_queue_->value());
+  config.udp.backpressure_policy = udp_policy_->currentIndex() == 0 ? UdpBackpressurePolicy::LatestFrame
+      : udp_policy_->currentIndex() == 1 ? UdpBackpressurePolicy::PreserveFrames
+                                         : UdpBackpressurePolicy::StopSending;
   return config;
 }
 
-void MainWindow::loadConfigToControls(const SystemConfig& config) {
+void MainWindow::populateDigitizerCapabilities(QString profile_id, double preferred_rate_hz,
+                                                double preferred_range_volts,
+                                                std::uint32_t preferred_impedance) {
+  const QSignalBlocker rate_blocker(sample_rate_);
+  const QSignalBlocker range_blocker(input_range_);
+  const QSignalBlocker impedance_blocker(impedance_);
+  const auto* capabilities = findDigitizerBoardCapabilities(profile_id.toStdString());
+  if (capabilities == nullptr && !digitizerBoardCapabilities().empty()) {
+    capabilities = &digitizerBoardCapabilities().front();
+  }
+  sample_rate_->clear();
+  input_range_->clear();
+  impedance_->clear();
+  if (capabilities == nullptr) {
+    return;
+  }
+  int preferred_rate_index = 0;
+  for (std::size_t index = 0; index < capabilities->sample_rates_hz.size(); ++index) {
+    const auto rate = capabilities->sample_rates_hz[index];
+    sample_rate_->addItem(sampleRateText(rate), rate);
+    if (std::abs(rate - preferred_rate_hz) <= 1.0) {
+      preferred_rate_index = static_cast<int>(index);
+    }
+  }
+  int preferred_range_index = 0;
+  for (std::size_t index = 0; index < capabilities->input_ranges_volts.size(); ++index) {
+    const auto range = capabilities->input_ranges_volts[index];
+    input_range_->addItem(QString("+/- %1 mV").arg(range * 1000.0, 0, 'g', 8), range);
+    if (std::abs(range - preferred_range_volts) <= 1.0e-9) {
+      preferred_range_index = static_cast<int>(index);
+    }
+  }
+  int preferred_impedance_index = 0;
+  for (std::size_t index = 0; index < capabilities->impedances_ohms.size(); ++index) {
+    const auto impedance = capabilities->impedances_ohms[index];
+    impedance_->addItem(QString("%1 ohm").arg(impedance), impedance);
+    if (impedance == preferred_impedance) {
+      preferred_impedance_index = static_cast<int>(index);
+    }
+  }
+  sample_rate_->setCurrentIndex(preferred_rate_index);
+  input_range_->setCurrentIndex(preferred_range_index);
+  impedance_->setCurrentIndex(preferred_impedance_index);
+}
+
+void MainWindow::updateDerivedAcquisitionLabels() {
+  if (sample_point_ == nullptr || pre_trigger_ == nullptr) {
+    return;
+  }
+  const QSignalBlocker pre_trigger_blocker(pre_trigger_);
+  pre_trigger_->setMaximum(std::min(sample_point_->value(), static_cast<int>(kAts9371MaxNptPretrigger)));
+  if (pre_trigger_->value() > sample_point_->value()) {
+    pre_trigger_->setValue(sample_point_->value());
+  }
+  const auto post_trigger = sample_point_->value() - pre_trigger_->value();
+  post_trigger_->setText(QString("%1 samples | derived").arg(post_trigger));
+  trigger_level_code_->setText(QString("SDK code %1").arg(alazarTriggerLevelCode(trigger_level_->value())));
+  const auto a_scans = records_per_buffer_->value();
+  if (selected_a_scan_ != nullptr) {
+    selected_a_scan_->setMaximum(std::max(0, a_scans - 1));
+  }
+  const auto b_scans = y_lines_->value();
+  const auto frame_points = static_cast<qulonglong>(a_scans) * static_cast<qulonglong>(b_scans);
+  a_scan_count_->setText(QString("%1 records | one DMA buffer").arg(a_scans));
+  frame_point_count_->setText(QString("%1 positions | %2 x %3")
+                                  .arg(frame_points)
+                                  .arg(a_scans)
+                                  .arg(b_scans));
+  if (runtime_status_.dma_bscan_rate_hz > 0.0 && runtime_status_.dma_bscan_period_ms > 0.0) {
+    dma_bscan_rate_->setText(QString("%1 B-scans/s | %2 ms/buffer")
+                                 .arg(runtime_status_.dma_bscan_rate_hz, 0, 'f', 2)
+                                 .arg(runtime_status_.dma_bscan_period_ms, 0, 'f', 3));
+    frame_time_->setText(QString("%1 ms | %2 measured DMA buffers")
+                             .arg(runtime_status_.dma_bscan_period_ms * b_scans, 0, 'f', 3)
+                             .arg(b_scans));
+  } else {
+    dma_bscan_rate_->setText("Waiting for DMA | measured at runtime");
+    frame_time_->setText("Waiting for DMA | measured at runtime");
+  }
+  const auto point_rate_hz = config_.scan.scanner_sample_rate_hz;
+  mcu_point_rate_->setText(QString("%1 kHz | firmware TIM6").arg(point_rate_hz / 1000.0, 0, 'g', 6));
+  const auto mcu_frame_time_ms = point_rate_hz > 0.0
+      ? static_cast<double>(frame_points) * 1000.0 / point_rate_hz
+      : 0.0;
+  mcu_frame_time_->setText(QString("%1 ms | %2 points / frame")
+                               .arg(mcu_frame_time_ms, 0, 'f', 3)
+                               .arg(frame_points));
+  if (runtime_status_.dma_bscan_period_ms > 0.0 && mcu_frame_time_ms > 0.0) {
+    const auto dma_frame_time_ms = runtime_status_.dma_bscan_period_ms * b_scans;
+    const auto difference_percent = std::abs(dma_frame_time_ms - mcu_frame_time_ms) /
+        dma_frame_time_ms * 100.0;
+    const auto synchronized = difference_percent <= 5.0;
+    frame_sync_state_->setText(synchronized
+        ? QString("SYNC | difference %1 %").arg(difference_percent, 0, 'f', 2)
+        : QString("MISMATCH | DMA %1 ms vs MCU %2 ms")
+              .arg(dma_frame_time_ms, 0, 'f', 3)
+              .arg(mcu_frame_time_ms, 0, 'f', 3));
+    frame_sync_state_->setProperty("statusKind", synchronized ? "ready" : "warn");
+  } else {
+    frame_sync_state_->setText("Waiting for DMA timing");
+    frame_sync_state_->setProperty("statusKind", "neutral");
+  }
+  repolish(frame_sync_state_);
+}
+
+void MainWindow::loadConfigToControls(const SystemConfig& config, bool mark_pending) {
+  loading_controls_ = true;
   config_ = config;
   profile_combo_->clear();
   profile_combo_->addItem(QString::fromStdString(config.profile.name));
+  const auto profile_index = board_profile_->findData(QString::fromStdString(config.digitizer.board_profile));
+  board_profile_->setCurrentIndex(profile_index >= 0 ? profile_index : 0);
+  populateDigitizerCapabilities(board_profile_->currentData().toString(), config.digitizer.sample_rate_hz,
+                                config.digitizer.input_range_volts, config.digitizer.impedance_ohms);
   digitizer_channel_->setCurrentIndex(config.digitizer.channel == DigitizerChannel::A ? 0 : 1);
-  sample_rate_->setValue(config.digitizer.sample_rate_hz / 1.0e6);
   sample_point_->setValue(static_cast<int>(config.digitizer.sample_point));
   records_per_buffer_->setValue(static_cast<int>(config.digitizer.records_per_buffer));
   dma_buffer_count_->setValue(static_cast<int>(config.digitizer.dma_buffer_count));
-  input_range_->setValue(config.digitizer.input_range_volts);
-  coupling_->setCurrentIndex(config.digitizer.coupling == Coupling::Dc ? 0 : 1);
+  coupling_->setCurrentIndex(0);
+  trigger_slope_->setCurrentIndex(config.digitizer.trigger_slope == TriggerSlope::Rising ? 0 : 1);
   trigger_level_->setValue(config.digitizer.trigger_level_percent);
+  trigger_delay_->setValue(static_cast<int>(config.digitizer.trigger_delay_samples));
+  pre_trigger_->setValue(static_cast<int>(config.digitizer.pre_trigger_samples));
   wavelength_->setValue(config.laser.wavelength_nm);
   sweep_bandwidth_->setValue(config.laser.sweep_bandwidth_hz / 1.0e9);
   chirp_period_->setValue(config.laser.chirp_period_us);
@@ -1045,9 +1499,7 @@ void MainWindow::loadConfigToControls(const SystemConfig& config) {
   x_end_->setValue(config.scan.x_end_deg);
   y_start_->setValue(config.scan.y_start_deg);
   y_end_->setValue(config.scan.y_end_deg);
-  x_pixels_->setValue(static_cast<int>(config.scan.x_pixel_count));
   y_lines_->setValue(static_cast<int>(config.scan.y_line_count));
-  line_time_->setValue(config.scan.line_time_ms);
   bidirectional_->setChecked(config.scan.bidirectional);
   mcu_enabled_->setChecked(config.mcu.enabled);
   mcu_port_->setText(QString::fromStdString(config.mcu.port));
@@ -1055,14 +1507,9 @@ void MainWindow::loadConfigToControls(const SystemConfig& config) {
   window_function_->setCurrentIndex(static_cast<int>(config.chirp_segmentation.window));
   fft_length_->setValue(static_cast<int>(config.chirp_segmentation.segment_fft_length));
   dc_removal_->setChecked(config.processing.dc_removal);
-  normalize_->setChecked(config.processing.normalize);
   peak_threshold_->setValue(config.processing.peak_threshold_db);
   peak_start_->setValue(static_cast<int>(config.processing.peak_search_start_bin));
   peak_end_->setValue(static_cast<int>(config.processing.peak_search_end_bin));
-  peak_tracking_->setChecked(config.processing.peak_tracking_enabled);
-  peak_delta_->setValue(static_cast<int>(config.processing.peak_tracking_max_delta_bins));
-  reacquire_width_->setValue(static_cast<int>(config.processing.peak_reacquire_width_bins));
-  lost_policy_->setCurrentIndex(static_cast<int>(config.processing.peak_lost_policy));
   up_start_->setValue(static_cast<int>(config.chirp_segmentation.up_segment.start_sample));
   up_end_->setValue(static_cast<int>(config.chirp_segmentation.up_segment.end_sample_exclusive));
   down_start_->setValue(static_cast<int>(config.chirp_segmentation.down_segment.start_sample));
@@ -1077,9 +1524,29 @@ void MainWindow::loadConfigToControls(const SystemConfig& config) {
   udp_ip_->setText(QString::fromStdString(config.udp.target_ip));
   udp_port_->setValue(config.udp.target_port);
   udp_points_->setValue(static_cast<int>(config.udp.packet_point_count));
-  config_dirty_ = false;
-  markDirty();
-  config_dirty_ = false;
+  udp_version_->setCurrentIndex(std::max(0, udp_version_->findData(config.udp.packet_format_version)));
+  udp_queue_->setValue(static_cast<int>(config.udp.queue_capacity));
+  udp_policy_->setCurrentIndex(config.udp.backpressure_policy == UdpBackpressurePolicy::LatestFrame ? 0
+      : config.udp.backpressure_policy == UdpBackpressurePolicy::PreserveFrames ? 1 : 2);
+  updateDerivedAcquisitionLabels();
+  loading_controls_ = false;
+  config_dirty_ = mark_pending;
+  restart_dirty_ = mark_pending;
+  raw_indicator_->setText(raw_enabled_->isChecked() ? "RAW ON" : "RAW OFF");
+  raw_indicator_->setProperty("statusKind", raw_enabled_->isChecked() ? "ready" : "neutral");
+  udp_indicator_->setText(udp_enabled_->isChecked() ? "UDP READY" : "UDP OFF");
+  udp_indicator_->setProperty("statusKind", udp_enabled_->isChecked() ? "ready" : "neutral");
+  repolish(raw_indicator_);
+  repolish(udp_indicator_);
+  segmentation_plot_->setSegments({static_cast<std::uint32_t>(up_start_->value()),
+                                    static_cast<std::uint32_t>(up_end_->value())},
+                                   {static_cast<std::uint32_t>(down_start_->value()),
+                                    static_cast<std::uint32_t>(down_end_->value())},
+                                   static_cast<std::uint32_t>(guard_samples_->value()));
+  digitizer_lock_state_->setText(mark_pending ? "APPLY REQUIRED | reconnect before START"
+                                              : "READY | board settings applied");
+  digitizer_lock_state_->setProperty("statusKind", mark_pending ? "warn" : "ready");
+  repolish(digitizer_lock_state_);
   validateControls();
 }
 
@@ -1105,7 +1572,7 @@ void MainWindow::loadProfile() {
     QMessageBox::warning(this, "Profile load failed", message);
     return;
   }
-  loadConfigToControls(result.config);
+  loadConfigToControls(result.config, true);
   appendLog("INFO", "Configuration", QString("Loaded profile %1").arg(QFileInfo(path).fileName()));
 }
 
@@ -1118,14 +1585,10 @@ void MainWindow::saveProfile() {
     return;
   }
   std::string error;
-  const auto config = configFromControls();
-  if (!ConfigProfileCodec::save(fileSystemPath(path), config, error)) {
+  if (!ConfigProfileCodec::save(fileSystemPath(path), configFromControls(), error)) {
     QMessageBox::critical(this, "Profile save failed", QString::fromStdString(error));
     return;
   }
-  config_ = config;
-  config_dirty_ = false;
-  validateControls();
   appendLog("INFO", "Configuration", QString("Saved profile %1").arg(QFileInfo(path).fileName()));
 }
 
@@ -1140,15 +1603,32 @@ void MainWindow::updateStatus(RuntimeStatus status) {
   start_stop_button_->setText(runtime_status_.running ? "STOP" : "START");
   start_stop_button_->setProperty("runState", runtime_status_.running ? "stop" : "start");
   repolish(start_stop_button_);
+  connect_button_->setEnabled(!runtime_status_.running);
   apply_button_->setEnabled(!runtime_status_.running);
   load_button_->setEnabled(!runtime_status_.running);
   save_button_->setEnabled(!runtime_status_.running);
+  for (auto* control : restart_required_controls_) {
+    control->setEnabled(!runtime_status_.running);
+  }
+  if (runtime_status_.running) {
+    digitizer_lock_state_->setText("LOCKED | press STOP before setup changes");
+    digitizer_lock_state_->setProperty("statusKind", "warn");
+  } else if (restart_dirty_) {
+    digitizer_lock_state_->setText("APPLY REQUIRED | reconnect before START");
+    digitizer_lock_state_->setProperty("statusKind", "warn");
+  } else {
+    digitizer_lock_state_->setText("READY | board settings applied");
+    digitizer_lock_state_->setProperty("statusKind", "ready");
+  }
+  repolish(digitizer_lock_state_);
 
   overview_digitizer_->setText(runtime_status_.digitizer_ready ? "READY\nSingle channel" : "NOT READY");
   overview_edfa_->setText(runtime_status_.edfa_bypassed ? "BYPASS\nNo EDFA" :
                           runtime_status_.edfa_output_enabled ? "OUTPUT ON" : "READY\nOutput off");
   overview_mcu_->setText(runtime_status_.mcu_bypassed ? "BYPASS\nMCU disabled" :
-                         runtime_status_.mcu_waveform_loaded ? "READY\nWaveform loaded" : "WAITING\nNo waveform");
+                         runtime_status_.mcu_waveform_loaded
+                             ? QString("READY\n%1 points").arg(runtime_status_.mcu_waveform_points)
+                             : "WAITING\nNo waveform");
   overview_processing_->setText(runtime_status_.backend_name.isEmpty() ? "NOT CONFIGURED" : runtime_status_.backend_name);
   overview_frames_->setText(QString("%1 received\n%2 processed")
                                 .arg(runtime_status_.frames_received)
@@ -1163,13 +1643,41 @@ void MainWindow::updateStatus(RuntimeStatus status) {
                                  .arg(runtime_status_.processing_revision));
   overview_recording_->setText(runtime_status_.recording
       ? QString("ACTIVE\n%1 frames").arg(runtime_status_.frames_written) : "OFF");
+  if (runtime_status_.udp_running) {
+    udp_indicator_->setText("UDP TX");
+    udp_indicator_->setProperty("statusKind", "ready");
+    udp_status_->setText(QString("Sending | %1 fps | %2 packets | queue %3 / %4 | %5 dropped")
+                             .arg(runtime_status_.udp_send_fps, 0, 'f', 1)
+                             .arg(runtime_status_.udp_packets_sent)
+                             .arg(runtime_status_.udp_queue_size)
+                             .arg(runtime_status_.udp_queue_capacity)
+                             .arg(runtime_status_.udp_dropped_frames));
+    udp_status_->setProperty("statusKind", runtime_status_.udp_dropped_frames == 0U ? "ready" : "warn");
+  } else if (udp_enabled_->isChecked()) {
+    udp_indicator_->setText("UDP READY");
+    udp_indicator_->setProperty("statusKind", "neutral");
+    udp_status_->setText(runtime_status_.running ? "Sender stopped" : "Configured | starts with global START");
+    udp_status_->setProperty("statusKind", runtime_status_.running ? "warn" : "neutral");
+  } else {
+    udp_indicator_->setText("UDP OFF");
+    udp_indicator_->setProperty("statusKind", "neutral");
+    udp_status_->setText("UDP off");
+    udp_status_->setProperty("statusKind", "neutral");
+  }
+  repolish(udp_indicator_);
+  repolish(udp_status_);
   overview_detail_->setText(QString("%1 | Config revision %2 | %3")
                                 .arg(state)
                                 .arg(runtime_status_.config_revision)
                                 .arg(runtime_status_.detail));
   setStatusText(mcu_waveform_state_, runtime_status_.mcu_bypassed ? "MCU bypass active" :
-                runtime_status_.mcu_waveform_loaded ? "Waveform loaded and ready" : "Upload required",
+                runtime_status_.mcu_waveform_loaded
+                    ? QString("Loaded | %1 points | %2 ms/frame")
+                          .arg(runtime_status_.mcu_waveform_points)
+                          .arg(runtime_status_.mcu_frame_time_ms, 0, 'f', 3)
+                    : "Upload required",
                 runtime_status_.mcu_ready, runtime_status_.mcu_bypassed);
+  updateDerivedAcquisitionLabels();
   edfa_output_button_->setText(runtime_status_.edfa_output_enabled ? "Disable Output" : "Enable Output");
   edfa_output_button_->setEnabled(runtime_status_.connected && edfa_mode_->currentIndex() == 2 &&
                                   !runtime_status_.edfa_bypassed && !runtime_status_.running);

@@ -28,7 +28,7 @@ ctest --preset windows-msvc-debug
 AlazarTech hardware adapter를 활성화하려면 ATS-SDK root를 지정한다. CMake가 `AlazarApi.h`, `AlazarCmd.h`, `AlazarError.h`와 `ATSApi.lib`를 모두 찾으면 adapter가 enabled로 표시된다. SDK가 없으면 simulator와 나머지 앱은 계속 빌드된다.
 
 ```powershell
-cmake --preset windows-msvc-release -DALAZAR_SDK_ROOT=C:\AlazarTech\ATS-SDK\26.2.0
+cmake --preset windows-msvc-release -DALAZAR_SDK_ROOT=C:\AlazarTech\ATS-SDK\25.1.0
 ```
 
 ## Jetson/Linux
@@ -65,6 +65,8 @@ cmake --preset windows-msvc-debug -DFFTW_ROOT=C:\path\to\fftw-prefix
 ```
 
 CUDA/cuFFT is enabled when `CUDAToolkit` is found. On Windows the build copies the discovered FFTW and cuFFT runtime DLLs next to the application and Phase 4 test executable. If a backend is not compiled or no CUDA device is available, the backend reports an actionable runtime error instead of silently selecting another backend.
+
+The Windows Qt target is linked with the `Windows GUI` subsystem, so launching `fmcw_lidar_windows.exe` does not create a separate command window. Local SDK paths belong in ignored `CMakeUserPresets.json`; this workspace uses the `windows-local-debug` preset for ATS-SDK 25.1.0 and FFTW.
 
 ## Current Workspace Check
 

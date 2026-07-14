@@ -46,3 +46,12 @@ if(WIN32)
 endif()
 
 add_test(NAME fmcw_phase4_tests COMMAND fmcw_phase4_tests)
+
+add_executable(fmcw_phase6_network_tests
+  phase6_network_test.cpp
+)
+
+target_link_libraries(fmcw_phase6_network_tests PRIVATE fmcw_core)
+target_compile_features(fmcw_phase6_network_tests PRIVATE cxx_std_17)
+
+add_test(NAME fmcw_phase6_network_tests COMMAND fmcw_phase6_network_tests)

@@ -18,6 +18,7 @@ using WaveformSnapshotPtr = std::shared_ptr<const WaveformSnapshot>;
 using FftSnapshotPtr = std::shared_ptr<const FftSnapshot>;
 using ScanLineSnapshotPtr = std::shared_ptr<const ScanLineSnapshot>;
 using BScanSnapshotPtr = std::shared_ptr<const BScanSnapshot>;
+using PointCloudSnapshotPtr = std::shared_ptr<const PointCloudSnapshot>;
 
 struct RuntimeStatus {
   OperationState state = OperationState::Disconnected;
@@ -32,6 +33,11 @@ struct RuntimeStatus {
   bool mcu_ready = false;
   bool mcu_bypassed = true;
   bool mcu_waveform_loaded = false;
+  std::uint32_t mcu_waveform_points = 0;
+  double mcu_frame_time_ms = 0.0;
+  std::uint64_t dma_buffers_received = 0;
+  double dma_bscan_rate_hz = 0.0;
+  double dma_bscan_period_ms = 0.0;
   std::uint64_t config_revision = 0;
   std::uint64_t processing_revision = 0;
   std::uint64_t frames_received = 0;
@@ -43,6 +49,13 @@ struct RuntimeStatus {
   std::size_t storage_queue_capacity = 0;
   double processing_latency_ms = 0.0;
   double storage_throughput_mbps = 0.0;
+  bool udp_running = false;
+  std::uint64_t udp_frames_sent = 0;
+  std::uint64_t udp_packets_sent = 0;
+  std::uint64_t udp_dropped_frames = 0;
+  std::size_t udp_queue_size = 0;
+  std::size_t udp_queue_capacity = 0;
+  double udp_send_fps = 0.0;
   QString backend_name;
   QString detail;
 };
@@ -66,6 +79,7 @@ class ApplicationController final : public QObject {
   void stopSystem();
   void emergencyStop();
   void updateProcessing(const ProcessingConfig& config);
+  void setSelectedAScan(std::uint32_t record_index);
   void setEdfaOutput(bool enabled);
   void uploadMcuWaveform();
   void captureSegmentationSnapshot();
@@ -76,6 +90,7 @@ class ApplicationController final : public QObject {
   void fftReady(fmcw::FftSnapshotPtr snapshot);
   void scanLineReady(fmcw::ScanLineSnapshotPtr snapshot);
   void bscanReady(fmcw::BScanSnapshotPtr snapshot);
+  void pointCloudReady(fmcw::PointCloudSnapshotPtr snapshot);
   void segmentationSnapshotReady(fmcw::WaveformSnapshotPtr snapshot);
   void logMessage(QString level, QString source, QString message);
   void commandFailed(QString command, QString message);
@@ -93,3 +108,4 @@ Q_DECLARE_METATYPE(fmcw::WaveformSnapshotPtr)
 Q_DECLARE_METATYPE(fmcw::FftSnapshotPtr)
 Q_DECLARE_METATYPE(fmcw::ScanLineSnapshotPtr)
 Q_DECLARE_METATYPE(fmcw::BScanSnapshotPtr)
+Q_DECLARE_METATYPE(fmcw::PointCloudSnapshotPtr)

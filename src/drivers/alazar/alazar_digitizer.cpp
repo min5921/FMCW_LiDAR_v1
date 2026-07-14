@@ -6,6 +6,7 @@
 #include "drivers/alazar/alazar_digitizer.h"
 
 #include "core/config_validation.h"
+#include "core/digitizer_capabilities.h"
 
 #include <algorithm>
 #include <chrono>
@@ -54,6 +55,32 @@ U32 triggerSlopeId(TriggerSlope slope) {
   return slope == TriggerSlope::Rising ? TRIGGER_SLOPE_POSITIVE : TRIGGER_SLOPE_NEGATIVE;
 }
 
+U32 sampleRateId(double sample_rate_hz) {
+  switch (static_cast<std::uint64_t>(std::llround(sample_rate_hz))) {
+    case 1000ULL: return SAMPLE_RATE_1KSPS;
+    case 2000ULL: return SAMPLE_RATE_2KSPS;
+    case 5000ULL: return SAMPLE_RATE_5KSPS;
+    case 10000ULL: return SAMPLE_RATE_10KSPS;
+    case 20000ULL: return SAMPLE_RATE_20KSPS;
+    case 50000ULL: return SAMPLE_RATE_50KSPS;
+    case 100000ULL: return SAMPLE_RATE_100KSPS;
+    case 200000ULL: return SAMPLE_RATE_200KSPS;
+    case 500000ULL: return SAMPLE_RATE_500KSPS;
+    case 1000000ULL: return SAMPLE_RATE_1MSPS;
+    case 2000000ULL: return SAMPLE_RATE_2MSPS;
+    case 5000000ULL: return SAMPLE_RATE_5MSPS;
+    case 10000000ULL: return SAMPLE_RATE_10MSPS;
+    case 20000000ULL: return SAMPLE_RATE_20MSPS;
+    case 50000000ULL: return SAMPLE_RATE_50MSPS;
+    case 100000000ULL: return SAMPLE_RATE_100MSPS;
+    case 200000000ULL: return SAMPLE_RATE_200MSPS;
+    case 500000000ULL: return SAMPLE_RATE_500MSPS;
+    case 800000000ULL: return SAMPLE_RATE_800MSPS;
+    case 1000000000ULL: return SAMPLE_RATE_1000MSPS;
+    default: return 0U;
+  }
+}
+
 #endif
 
 }  // namespace
@@ -70,6 +97,9 @@ struct AlazarDigitizer::Impl {
   bool buffer_ready = false;
   bool async_prepared = false;
   std::uint64_t next_frame_id = 1;
+  std::uint64_t current_buffer_timestamp_ns = 0;
+  std::uint64_t previous_buffer_timestamp_ns = 0;
+  double buffer_period_ema_ms = 0.0;
 #endif
 };
 
@@ -99,10 +129,12 @@ bool AlazarDigitizer::configure(const SystemConfig& config, std::string& error) 
     error = "Cannot configure Alazar digitizer while acquisition is running";
     return false;
   }
-  if (std::abs(config.digitizer.sample_rate_hz - 1.0e9) > 1.0 ||
-      std::abs(config.digitizer.input_range_volts - 0.4) > 1.0e-9 ||
-      config.digitizer.impedance_ohms != 50 || config.digitizer.trigger_source != TriggerSource::External) {
-    error = "Phase 3 Alazar hardware adapter currently supports 1 GS/s, +/-400 mV, 50 ohm, external trigger";
+  const auto* capabilities = findDigitizerBoardCapabilities(config.digitizer.board_profile);
+  if (capabilities == nullptr || !supportsSampleRate(*capabilities, config.digitizer.sample_rate_hz) ||
+      !supportsInputRange(*capabilities, config.digitizer.input_range_volts) ||
+      !supportsImpedance(*capabilities, config.digitizer.impedance_ohms) ||
+      config.digitizer.trigger_source != TriggerSource::External || config.digitizer.coupling != Coupling::Dc) {
+    error = "Alazar settings are outside the selected board capability profile";
     return false;
   }
   config_ = config;
@@ -124,9 +156,16 @@ bool AlazarDigitizer::connect(std::string& error) {
     return false;
   }
 #if FMCW_HAS_ALAZAR_SDK
-  impl_->board = AlazarGetBoardBySystemID(config_.digitizer.system_id, config_.digitizer.board_id);
+  impl_->board = AlazarGetBoardBySystemID(kAlazarSystemId, kAlazarBoardId);
   if (impl_->board == nullptr) {
-    error = "AlazarGetBoardBySystemID returned no board for the configured system/board id";
+    error = "AlazarGetBoardBySystemID returned no board for System 1 / Board 1";
+    return false;
+  }
+  const auto board_kind = AlazarGetBoardKind(impl_->board);
+  if (board_kind != ATS9371) {
+    error = "Expected ATS9371 at System 1 / Board 1, detected board kind " +
+            std::to_string(static_cast<unsigned int>(board_kind));
+    impl_->board = nullptr;
     return false;
   }
   telemetry_.device.connected = true;
@@ -136,7 +175,7 @@ bool AlazarDigitizer::connect(std::string& error) {
     return false;
   }
   telemetry_.device.ready = true;
-  telemetry_.device.detail = "Alazar board connected and configured";
+  telemetry_.device.detail = "ATS9371 System 1 / Board 1 connected and configured";
   error.clear();
   return true;
 #else
@@ -224,8 +263,14 @@ bool AlazarDigitizer::start(std::string& error) {
   impl_->buffer_ready = false;
   impl_->next_frame_id = 1;
   telemetry_.frames_received = 0;
+  telemetry_.dma_buffers_received = 0;
   telemetry_.dma_buffer_drops = 0;
   telemetry_.trigger_misses = 0;
+  telemetry_.dma_buffer_rate_hz = 0.0;
+  telemetry_.dma_buffer_period_ms = 0.0;
+  impl_->current_buffer_timestamp_ns = 0;
+  impl_->previous_buffer_timestamp_ns = 0;
+  impl_->buffer_period_ema_ms = 0.0;
   telemetry_.device.running = true;
   telemetry_.device.detail = "Alazar NPT AutoDMA acquisition active";
   error.clear();
@@ -265,6 +310,20 @@ FrameWaitResult AlazarDigitizer::waitForFrame(RawFrame& frame, std::chrono::mill
       telemetry_.device.detail = error;
       return FrameWaitResult::Error;
     }
+    impl_->current_buffer_timestamp_ns = nowNs();
+    ++telemetry_.dma_buffers_received;
+    if (impl_->previous_buffer_timestamp_ns != 0U &&
+        impl_->current_buffer_timestamp_ns > impl_->previous_buffer_timestamp_ns) {
+      const auto period_ms = static_cast<double>(impl_->current_buffer_timestamp_ns -
+          impl_->previous_buffer_timestamp_ns) * 1.0e-6;
+      constexpr double kTelemetryAlpha = 0.2;
+      impl_->buffer_period_ema_ms = impl_->buffer_period_ema_ms > 0.0
+          ? kTelemetryAlpha * period_ms + (1.0 - kTelemetryAlpha) * impl_->buffer_period_ema_ms
+          : period_ms;
+      telemetry_.dma_buffer_period_ms = impl_->buffer_period_ema_ms;
+      telemetry_.dma_buffer_rate_hz = 1000.0 / impl_->buffer_period_ema_ms;
+    }
+    impl_->previous_buffer_timestamp_ns = impl_->current_buffer_timestamp_ns;
     impl_->buffer_ready = true;
     impl_->active_record = 0;
   }
@@ -281,7 +340,10 @@ FrameWaitResult AlazarDigitizer::waitForFrame(RawFrame& frame, std::chrono::mill
   const auto frame_id = impl_->next_frame_id++;
   frame.metadata.frame_kind = FrameKind::FullChirpPeriod;
   frame.metadata.frame_id = frame_id;
-  frame.metadata.host_timestamp_ns = nowNs();
+  frame.metadata.dma_buffer_sequence = telemetry_.dma_buffers_received - 1U;
+  frame.metadata.record_index_in_buffer = impl_->active_record;
+  frame.metadata.records_in_buffer = impl_->records_per_buffer;
+  frame.metadata.host_timestamp_ns = impl_->current_buffer_timestamp_ns;
   frame.metadata.trigger.sequence = frame_id;
   frame.metadata.trigger.timestamp_ns = frame.metadata.host_timestamp_ns;
   frame.metadata.trigger.valid = true;
@@ -353,13 +415,19 @@ bool AlazarDigitizer::stop(std::string& error) {
 
 bool AlazarDigitizer::configureBoard(std::string& error) {
 #if FMCW_HAS_ALAZAR_SDK
-  if (!check(AlazarSetCaptureClock(impl_->board, INTERNAL_CLOCK, SAMPLE_RATE_1000MSPS,
+  const auto sample_rate_id = sampleRateId(config_.digitizer.sample_rate_hz);
+  if (sample_rate_id == 0U) {
+    error = "Unsupported ATS9371 internal-clock sample rate";
+    return false;
+  }
+  if (!check(AlazarSetCaptureClock(impl_->board, INTERNAL_CLOCK, sample_rate_id,
                                    CLOCK_EDGE_RISING, 0), "AlazarSetCaptureClock", error) ||
       !check(AlazarInputControlEx(impl_->board, channelMask(config_.digitizer.channel),
                                   couplingId(config_.digitizer.coupling), INPUT_RANGE_PM_400_MV,
                                   IMPEDANCE_50_OHM), "AlazarInputControlEx", error) ||
       !check(AlazarSetTriggerOperation(impl_->board, TRIG_ENGINE_OP_J, TRIG_ENGINE_J, TRIG_EXTERNAL,
-                                       triggerSlopeId(config_.digitizer.trigger_slope), 128,
+                                       triggerSlopeId(config_.digitizer.trigger_slope),
+                                       alazarTriggerLevelCode(config_.digitizer.trigger_level_percent),
                                        TRIG_ENGINE_K, TRIG_DISABLE, TRIGGER_SLOPE_POSITIVE, 128),
              "AlazarSetTriggerOperation", error) ||
       !check(AlazarSetExternalTrigger(impl_->board, DC_COUPLING, ETR_TTL),

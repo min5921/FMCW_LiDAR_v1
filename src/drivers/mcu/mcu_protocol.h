@@ -19,6 +19,8 @@ struct McuResponse {
 
 class McuProtocol {
  public:
+  static std::vector<McuWaveformFrame> buildFullFrameWaveform(const SystemConfig& config,
+                                                               std::string& error);
   static std::string clearCommand();
   static std::string dataCommand(const McuWaveformFrame& frame);
   static std::string loadDoneCommand();

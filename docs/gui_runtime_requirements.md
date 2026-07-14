@@ -30,10 +30,10 @@
 |---|---|---|
 | Overview | readiness, device status, active profile, session summary, throughput/drop counters | waveform, FFT, B-scan |
 | Live View | Time Domain, FFT, Peak Analysis, Distance/Velocity, B-scan, 3D | hardware setup forms |
-| Digitizer | Alazar board, A or B channel, sample rate/point, DMA, trigger | scanner Start/Stop |
+| Digitizer | ATS9371, fixed System 1 / Board 1, A or B channel, supported sample rate/range, DMA, detailed trigger | scanner Start/Stop |
 | Laser / EDFA | laser specification, EDFA none/manual/controlled, setpoint, output safety control | acquisition Start/Stop |
-| Scan / MCU | scan geometry, waveform upload, MCU connection and readiness | local scan Start/Stop |
-| Processing | FFT backend, window/DC, peak threshold/search/tracking, segmentation snapshot | FFT spectrum plot |
+| Scan / MCU | frame geometry, DMA-derived A-scans/B-scan, operator B-scans/frame, measured DMA rate/frame time, full-frame MCU waveform | local scan Start/Stop |
+| Processing | FFT backend, window/DC, independent peak threshold/search, segmentation snapshot | FFT spectrum plot |
 | Storage / UDP | raw/processed save, path, queue, UDP endpoint/format | acquisition Start/Stop |
 | System Log | log filtering, alarms, diagnostics export | duplicated setup controls |
 
@@ -67,6 +67,19 @@
 5. session metadata 종료 및 summary 생성
 
 EDFA output on/off는 광 출력 안전 명령이므로 Laser / EDFA 페이지에도 독립 control을 둔다. 이 control은 시스템 acquisition을 시작하지 않으며, emergency off는 언제나 전역 동작보다 우선한다.
+
+설정 변경 순서:
+
+- peak threshold/search range와 DC removal은 `Apply Processing` 후 다음 frame boundary에서 반영한다.
+- board capability, sampling rate, sample point, channel, input, DMA, trigger, FFT backend/length, scan, storage 설정은 Running 중 control을 잠근다.
+- restart-required 설정은 global `STOP` 후 수정하고 `Apply Setup`을 누른다.
+- `Apply Setup`은 필요 시 disconnect, configure, reconnect까지 수행하고 Ready에서 멈춘다. 안전을 위해 acquisition을 자동 재시작하지 않는다.
+- Digitizer sampling rate, input range, impedance는 선택한 board capability가 제공하는 ComboBox 값만 허용한다.
+- ATS9371 System ID와 Board ID는 모두 1로 고정하며 UI에서 변경하지 않는다.
+- A-scans/B-scan은 records per buffer에서 파생하고 B-scans/frame은 사용자가 설정한다.
+- B-scan rate와 period는 Alazar DMA buffer 완료 간격에서 실측하며, measured frame time은 `period * B-scans/frame`으로 계산한다.
+- MCU cycle time은 전체 프레임 파형 point 수와 100 kHz point rate에서 별도로 계산한다.
+- DMA frame time과 MCU cycle time의 차이가 5%를 넘으면 Scan / MCU 페이지에 mismatch warning을 표시한다.
 
 ## 4. Qt Software Boundaries
 
@@ -114,7 +127,7 @@ UI는 다음 snapshot만 읽는다.
 | `SystemStatusSnapshot` | 10-20 Hz | operation state, device readiness, active revision, alarms, queue/drop counters |
 | `WaveformSnapshot` | 20-60 Hz | frame id, timestamp, channel, downsampled full-period samples, trigger/segment indices |
 | `FftSnapshot` | 20-60 Hz | up/down magnitude arrays, frequency/bin axis, detected peak markers |
-| `PeakAnalysisSnapshot` | per completed scan line | A-scan index, up/down peak index, magnitude, valid/lost/reacquired state |
+| `PeakAnalysisSnapshot` | per completed scan line | A-scan index, up/down peak index, magnitude, validity |
 | `DistanceVelocitySnapshot` | per completed scan line | pixel, distance, velocity, validity |
 | `BScanSnapshot` | 5-30 Hz | X pixel by B-scan line Z heatmap, min/max, validity mask |
 | `PointCloudSnapshot` | 5-30 Hz | XYZ, intensity/velocity color scalar, frame/scan revision |
@@ -133,26 +146,18 @@ Processing 페이지의 chirp segmentation graph는 실시간 plot이 아니다.
 - boundary가 record/period 밖으로 나가거나 겹치면 global START를 막는다.
 - Live View의 Time Domain plot만 연속 실시간 waveform을 표시한다.
 
-## 8. Peak Detection And Tracking
+## 8. Peak Detection
 
 Processing page의 필수 runtime 설정:
 
 - `peak_threshold_db`
 - `peak_search_start_bin`
 - `peak_search_end_bin`
-- `peak_tracking_enabled`
-- `peak_tracking_max_delta_bins`
-- `peak_reacquire_width_bins`
-- `peak_lost_policy`: `hold_last`, `reacquire`, `stop_acquisition`
-
-v1 tracking 기준은 한 B-scan line 안에서 연속 A-scan 간 peak index continuity이다. line 시작 시 tracker를 초기화하고, up/down chirp는 독립 tracker를 사용한다.
 
 - candidate는 threshold 이상이며 global search range 안에 있어야 한다.
-- 이전 valid peak와의 차이가 `peak_tracking_max_delta_bins` 이하면 tracked peak로 승인한다.
-- 범위를 벗어나거나 candidate가 없으면 lost 상태로 기록한다.
-- `reacquire`는 이전 peak 주변 `peak_reacquire_width_bins`와 global search range를 이용해 재탐색한 뒤 필요 시 global maximum으로 초기화한다.
-- `hold_last`는 표시용으로 마지막 값을 유지하되 결과 validity는 false로 저장하고 거리/속도 유효값으로 송신하지 않는다.
-- `stop_acquisition`은 peak loss를 core stop request로 전달한다.
+- UP과 DOWN은 각 A-scan에서 독립적으로 최대 peak를 검출한다.
+- 이전 A-scan의 peak index를 추적, 유지, 재탐색하지 않는다.
+- threshold 이상 candidate가 없으면 해당 chirp peak와 측정 결과를 invalid로 기록한다.
 
 Peak Analysis 탭은 FFT spectrum을 다시 그리지 않는다. 다음 두 plot과 상태 요약만 표시한다.
 
@@ -166,15 +171,25 @@ Peak Analysis 탭은 FFT spectrum을 다시 그리지 않는다. 다음 두 plot
 - B-scan은 `X Pixel x B Scan` Z heatmap으로 표시한다.
 - freeze는 acquisition/processing/storage를 멈추지 않고 화면 snapshot만 고정한다.
 - auto/manual range, cursor readout, plot save를 공통 plot toolbar로 제공한다.
-- 3D는 Qt/OpenGL vertex buffer를 사용하고 acquisition과 독립 rate로 갱신한다.
-- Phase 5에서 구현되지 않은 3D 기능은 비활성 tab으로 노출하지 않고 Phase 6에서 기능과 함께 추가한다.
+- 3D는 Qt/OpenGL-backed point renderer를 사용하고 acquisition과 독립 rate로 갱신한다.
+- 3D 기능은 Phase 6의 실제 동작 tab으로 제공하며 빈 tab이나 disabled placeholder를 노출하지 않는다.
 
-## 10. Phase Ownership
+## 10. Selected A-scan And Phase 6 Runtime
+
+- Live Time Domain and FFT display the selected zero-based A-scan record from each Alazar DMA buffer.
+- Changing the selected A-scan is display-only and applies while acquisition is running; it does not restart or reconfigure the digitizer.
+- Peak Analysis, Distance/Velocity, B-scan, 3D, UDP, and raw/processed storage continue to consume all A-scans.
+- The 3D tab consumes immutable point-cloud snapshots at `ui.point_cloud_update_hz`, independently from acquisition.
+- The Qt/OpenGL-backed renderer supports rotate, pan, zoom, reset, point size, frame accumulation, color mode, freeze, PNG capture, and CSV point export.
+- UDP uses a dedicated bounded sender queue. Socket I/O never runs on the UI, acquisition, or processing thread.
+- Global STOP first stops device input, drains processing, then finalizes UDP and storage workers.
+
+## 11. Phase Ownership
 
 Phase 4가 먼저 제공해야 하는 항목:
 
 - FFTW/CUDA 공통 processing result contract
-- up/down extraction, FFT, peak detection/tracking, distance/velocity
+- up/down extraction, FFT, independent peak detection, distance/velocity
 - line accumulator와 B-scan matrix
 - async raw/processed writer 및 replay
 - UI용 immutable processing snapshot publisher
@@ -195,7 +210,7 @@ Phase 6가 구현해야 하는 항목:
 - UDP sender/receiver 도구 확장
 - simulator fault injection과 diagnostics export
 
-## 11. Acceptance Criteria
+## 12. Acceptance Criteria
 
 - 사용자는 한 개의 global START/STOP만으로 digitizer와 scanner session을 운용할 수 있다.
 - digitizer가 arm되기 전에 MCU trigger가 시작되지 않는다.
@@ -203,6 +218,6 @@ Phase 6가 구현해야 하는 항목:
 - EDFA none profile과 MCU disabled profile이 정상 동작한다.
 - Live View를 닫거나 freeze해도 acquisition과 raw 저장이 계속된다.
 - FFT spectrum은 Live View FFT 탭에만 존재한다.
-- Peak Analysis에서 threshold/search/tracking 변경이 적용된 frame revision을 확인할 수 있다.
+- Peak Analysis에서 threshold/search 변경이 적용된 frame revision을 확인할 수 있다.
 - segmentation 설정 화면은 고정 snapshot임을 명확히 표시하며 실시간 plot으로 오인되지 않는다.
 - 잘못된 설정, 장비 not-ready, queue overflow는 global START 또는 session 지속을 안전하게 차단한다.

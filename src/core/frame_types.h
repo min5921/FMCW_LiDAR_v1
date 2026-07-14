@@ -68,6 +68,9 @@ struct RawFrameMetadata {
   std::uint32_t format_version = kRawFrameFormatVersion;
   FrameKind frame_kind = FrameKind::FullChirpPeriod;
   std::uint64_t frame_id = 0;
+  std::uint64_t dma_buffer_sequence = 0;
+  std::uint32_t record_index_in_buffer = 0;
+  std::uint32_t records_in_buffer = 1;
   std::uint64_t host_timestamp_ns = 0;
   std::uint64_t config_revision = 0;
   TriggerMetadata trigger;
@@ -101,6 +104,7 @@ struct PointXYZI {
 };
 
 enum class PeakTrackState : std::uint8_t {
+  // Processing emits Invalid or Detected; remaining values preserve the processed stream layout.
   Invalid,
   Detected,
   Tracked,

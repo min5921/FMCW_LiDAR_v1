@@ -7,6 +7,7 @@ set(FMCW_CORE_SOURCES
   core/config_profile.cpp
   core/config_types.cpp
   core/config_validation.cpp
+  core/digitizer_capabilities.cpp
   core/logging.cpp
   core/operation_controller.cpp
   core/system_state.cpp
@@ -19,6 +20,8 @@ set(FMCW_CORE_SOURCES
   drivers/simulator/fake_digitizer.cpp
   drivers/simulator/fake_edfa.cpp
   drivers/simulator/fake_mcu.cpp
+  network/udp_point_protocol.cpp
+  network/udp_sender_service.cpp
   processing/fft_backends.cpp
   processing/processing_service.cpp
   processing/processing_snapshots.cpp
@@ -33,6 +36,10 @@ target_include_directories(fmcw_core
     ${PROJECT_SOURCE_DIR}/src
 )
 target_compile_features(fmcw_core PUBLIC cxx_std_17)
+
+if(WIN32)
+  target_link_libraries(fmcw_core PRIVATE ws2_32)
+endif()
 
 if(MSVC)
   target_compile_options(fmcw_core PRIVATE /W4 /permissive-)
@@ -148,7 +155,7 @@ else()
 endif()
 
 if(FMCW_BUILD_QT_APPS)
-  find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets)
+  find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets OpenGL OpenGLWidgets)
   qt_standard_project_setup()
 
   add_library(fmcw_qt_common STATIC
@@ -156,6 +163,8 @@ if(FMCW_BUILD_QT_APPS)
     apps/common/application_controller.h
     apps/common/main_window.cpp
     apps/common/main_window.h
+    apps/common/point_cloud_widget.cpp
+    apps/common/point_cloud_widget.h
     apps/common/plot_widgets.cpp
     apps/common/plot_widgets.h
   )
@@ -164,6 +173,8 @@ if(FMCW_BUILD_QT_APPS)
       fmcw_core
       Qt6::Core
       Qt6::Gui
+      Qt6::OpenGL
+      Qt6::OpenGLWidgets
       Qt6::Widgets
   )
   target_include_directories(fmcw_qt_common PUBLIC ${PROJECT_SOURCE_DIR}/src)
@@ -175,7 +186,7 @@ if(FMCW_BUILD_QT_APPS)
   endif()
 
   if(FMCW_TARGET_PLATFORM STREQUAL "WINDOWS")
-    add_executable(fmcw_lidar_windows apps/windows/main.cpp)
+    add_executable(fmcw_lidar_windows WIN32 apps/windows/main.cpp)
     target_link_libraries(fmcw_lidar_windows PRIVATE fmcw_qt_common)
     target_compile_definitions(fmcw_lidar_windows PRIVATE FMCW_PLATFORM_NAME="Windows")
     foreach(_runtime_dll IN ITEMS "${FMCW_FFTW_RUNTIME_DLL}" "${FMCW_CUFFT_RUNTIME_DLL}")

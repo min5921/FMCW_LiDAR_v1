@@ -8,7 +8,7 @@
 
 namespace fmcw {
 
-inline constexpr std::uint32_t kConfigSchemaVersion = 2;
+inline constexpr std::uint32_t kConfigSchemaVersion = 4;
 
 enum class Coupling {
   Ac,
@@ -79,12 +79,6 @@ enum class UdpBackpressurePolicy {
   StopSending,
 };
 
-enum class PeakLostPolicy {
-  HoldLast,
-  Reacquire,
-  StopAcquisition,
-};
-
 enum class SerialParity {
   None,
   Even,
@@ -109,21 +103,22 @@ struct ProfileMetadata {
 struct DigitizerConfig {
   std::uint32_t system_id = 1;
   std::uint32_t board_id = 1;
+  std::string board_profile = "ats9371";
   DigitizerChannel channel = DigitizerChannel::A;
   double sample_rate_hz = 1.0e9;
   std::uint32_t sample_point = 4096;
   std::uint32_t records_per_buffer = 64;
-  std::uint32_t a_scan_count = 512;
+  std::uint32_t a_scan_count = 64;
   std::uint32_t b_scan_count = 25;
   double input_range_volts = 0.4;
   Coupling coupling = Coupling::Dc;
   std::uint32_t impedance_ohms = 50;
   TriggerSource trigger_source = TriggerSource::External;
   TriggerSlope trigger_slope = TriggerSlope::Rising;
-  double trigger_level_percent = 50.0;
-  std::uint32_t trigger_delay_samples = 0;
-  std::uint32_t pre_trigger_samples = 128;
-  std::uint32_t post_trigger_samples = 3968;
+  double trigger_level_percent = 17.3;
+  std::uint32_t trigger_delay_samples = 400;
+  std::uint32_t pre_trigger_samples = 0;
+  std::uint32_t post_trigger_samples = 4096;
   std::uint32_t timeout_ms = 1000;
   std::uint32_t dma_buffer_count = 8;
   bool fifo_only_streaming = true;
@@ -164,9 +159,8 @@ struct ScanConfig {
   double y_start_deg = -9.0;
   double y_end_deg = 9.0;
   bool bidirectional = false;
-  std::uint32_t x_pixel_count = 512;
+  std::uint32_t x_pixel_count = 64;
   std::uint32_t y_line_count = 25;
-  double line_time_ms = 1.0;
   std::int32_t trigger_shift_samples = 0;
   double scanner_sample_rate_hz = 100000.0;
 };
@@ -186,14 +180,9 @@ struct ChirpSegmentationConfig {
 struct ProcessingConfig {
   FftBackendKind fft_backend = FftBackendKind::Fftw;
   bool dc_removal = true;
-  bool normalize = false;
   double peak_threshold_db = -45.0;
   std::uint32_t peak_search_start_bin = 2;
   std::uint32_t peak_search_end_bin = 900;
-  bool peak_tracking_enabled = true;
-  std::uint32_t peak_tracking_max_delta_bins = 12;
-  std::uint32_t peak_reacquire_width_bins = 64;
-  PeakLostPolicy peak_lost_policy = PeakLostPolicy::Reacquire;
   std::uint32_t queue_capacity = 32;
   QueueOverflowPolicy overflow_policy = QueueOverflowPolicy::StopAcquisition;
 };
@@ -262,6 +251,10 @@ struct SystemConfig {
   McuConfig mcu;
 };
 
+std::uint32_t derivedAScanCount(const SystemConfig& config);
+std::uint64_t derivedFramePointCount(const SystemConfig& config);
+double derivedMcuFrameTimeMs(const SystemConfig& config);
+
 std::string toString(DigitizerChannel value);
 std::string toString(Coupling value);
 std::string toString(TriggerSource value);
@@ -276,7 +269,6 @@ std::string toString(EdfaControlMode value);
 std::string toString(OpticalPowerUnit value);
 std::string toString(QueueOverflowPolicy value);
 std::string toString(UdpBackpressurePolicy value);
-std::string toString(PeakLostPolicy value);
 std::string toString(SerialParity value);
 
 bool fromString(std::string_view text, DigitizerChannel& value);
@@ -293,7 +285,6 @@ bool fromString(std::string_view text, EdfaControlMode& value);
 bool fromString(std::string_view text, OpticalPowerUnit& value);
 bool fromString(std::string_view text, QueueOverflowPolicy& value);
 bool fromString(std::string_view text, UdpBackpressurePolicy& value);
-bool fromString(std::string_view text, PeakLostPolicy& value);
 bool fromString(std::string_view text, SerialParity& value);
 
 }  // namespace fmcw

@@ -67,7 +67,7 @@ struct ProcessingService::Impl {
         processing_config_revision = processed->processing_config_revision;
         if (processed->stop_requested) {
           stop_requested = true;
-          stop_reason = "Peak tracking requested acquisition stop";
+          stop_reason = "Processing requested acquisition stop";
           accepting = false;
           queue.clear();
         }
@@ -258,5 +258,9 @@ ProcessingServiceStatus ProcessingService::status() const {
 ProcessingSnapshotStore& ProcessingService::snapshots() { return impl_->snapshots; }
 
 const ProcessingSnapshotStore& ProcessingService::snapshots() const { return impl_->snapshots; }
+
+void ProcessingService::setSelectedRecordIndex(std::uint32_t record_index) {
+  impl_->snapshots.setSelectedRecordIndex(record_index);
+}
 
 }  // namespace fmcw

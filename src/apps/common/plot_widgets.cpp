@@ -6,6 +6,7 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QPaintEvent>
+#include <QPalette>
 #include <QToolTip>
 
 #include <algorithm>
@@ -15,10 +16,10 @@
 namespace fmcw {
 namespace {
 
-constexpr int kLeft = 58;
+constexpr int kLeft = 68;
 constexpr int kTop = 42;
 constexpr int kRight = 22;
-constexpr int kBottom = 42;
+constexpr int kBottom = 54;
 
 QRectF plotRect(const QWidget& widget) {
   return QRectF(kLeft, kTop, std::max(1, widget.width() - kLeft - kRight),
@@ -28,36 +29,84 @@ QRectF plotRect(const QWidget& widget) {
 void drawFrame(QPainter& painter, const QWidget& widget, const QString& title,
                const QString& x_label, const QString& y_label) {
   const auto area = plotRect(widget);
-  painter.fillRect(widget.rect(), QColor("#ffffff"));
+  const auto palette = widget.palette();
+  painter.fillRect(widget.rect(), palette.color(QPalette::Base));
   painter.setRenderHint(QPainter::Antialiasing);
-  painter.setPen(QColor("#d9e0e3"));
+  auto grid_color = palette.color(QPalette::Mid);
+  grid_color.setAlpha(150);
+  painter.setPen(grid_color);
   for (int index = 0; index <= 5; ++index) {
     const auto x = area.left() + area.width() * index / 5.0;
     const auto y = area.top() + area.height() * index / 5.0;
     painter.drawLine(QPointF(x, area.top()), QPointF(x, area.bottom()));
     painter.drawLine(QPointF(area.left(), y), QPointF(area.right(), y));
   }
-  painter.setPen(QPen(QColor("#6a777d"), 1.0));
+  painter.setPen(QPen(palette.color(QPalette::Midlight), 1.0));
   painter.drawRect(area);
 
   QFont title_font = painter.font();
   title_font.setPointSize(10);
   title_font.setBold(true);
   painter.setFont(title_font);
-  painter.setPen(QColor("#263238"));
+  painter.setPen(palette.color(QPalette::Text));
   painter.drawText(QRectF(kLeft, 10, area.width(), 24), Qt::AlignLeft | Qt::AlignVCenter, title);
 
   QFont axis_font = painter.font();
   axis_font.setPointSize(8);
   axis_font.setBold(false);
   painter.setFont(axis_font);
-  painter.setPen(QColor("#6a777d"));
-  painter.drawText(QRectF(area.left(), area.bottom() + 10, area.width(), 20),
+  painter.setPen(palette.color(QPalette::PlaceholderText));
+  painter.drawText(QRectF(area.left(), area.bottom() + 31, area.width(), 18),
                    Qt::AlignCenter, x_label);
   painter.save();
   painter.translate(16, area.center().y());
   painter.rotate(-90.0);
   painter.drawText(QRectF(-area.height() / 2.0, -10, area.height(), 20), Qt::AlignCenter, y_label);
+  painter.restore();
+}
+
+QString axisValue(double value, bool integer) {
+  if (integer) {
+    return QString::number(static_cast<qlonglong>(std::llround(value)));
+  }
+  const auto magnitude = std::abs(value);
+  if (magnitude >= 10000.0 || (magnitude > 0.0 && magnitude < 0.001)) {
+    return QString::number(value, 'e', 2);
+  }
+  return QString::number(value, 'g', 4);
+}
+
+void drawAxisTicks(QPainter& painter, const QWidget& widget, double x_minimum, double x_maximum,
+                   double y_minimum, double y_maximum, bool integer_x, bool integer_y = false) {
+  const auto area = plotRect(widget);
+  const auto color = widget.palette().color(QPalette::PlaceholderText);
+  painter.save();
+  painter.setClipping(false);
+  painter.setPen(color);
+  QFont tick_font = painter.font();
+  tick_font.setPointSize(8);
+  tick_font.setBold(false);
+  painter.setFont(tick_font);
+
+  constexpr int kTickCount = 5;
+  for (int index = 0; index <= kTickCount; ++index) {
+    const auto ratio = static_cast<double>(index) / kTickCount;
+    const auto x = area.left() + area.width() * ratio;
+    const auto x_value = x_minimum + (x_maximum - x_minimum) * ratio;
+    painter.drawLine(QPointF(x, area.bottom()), QPointF(x, area.bottom() + 4));
+    const QRectF label_rect(index == 0 ? area.left() :
+                            index == kTickCount ? area.right() - 68.0 : x - 34.0,
+                            area.bottom() + 5.0, 68.0, 17.0);
+    const auto alignment = index == 0 ? Qt::AlignLeft :
+                           index == kTickCount ? Qt::AlignRight : Qt::AlignHCenter;
+    painter.drawText(label_rect, alignment | Qt::AlignTop, axisValue(x_value, integer_x));
+
+    const auto y = area.bottom() - area.height() * ratio;
+    const auto y_value = y_minimum + (y_maximum - y_minimum) * ratio;
+    painter.drawLine(QPointF(area.left() - 4, y), QPointF(area.left(), y));
+    painter.drawText(QRectF(2, y - 9.0, kLeft - 8.0, 18.0), Qt::AlignRight | Qt::AlignVCenter,
+                     axisValue(y_value, integer_y));
+  }
   painter.restore();
 }
 
@@ -145,7 +194,8 @@ void LinePlotWidget::paintEvent(QPaintEvent* event) {
   }
 
   if (longest < 2U || minimum == std::numeric_limits<float>::max()) {
-    painter.setPen(QColor("#87949a"));
+    drawAxisTicks(painter, *this, 0.0, 1.0, 0.0, 1.0, false);
+    painter.setPen(palette().color(QPalette::PlaceholderText));
     painter.drawText(area, Qt::AlignCenter, "Waiting for data");
     return;
   }
@@ -163,6 +213,8 @@ void LinePlotWidget::paintEvent(QPaintEvent* event) {
     minimum = range_minimum_;
     maximum = range_maximum_;
   }
+
+  drawAxisTicks(painter, *this, 0.0, static_cast<double>(longest - 1U), minimum, maximum, true);
 
   painter.setClipRect(area.adjusted(1, 1, -1, -1));
   for (const auto& series : series_) {
@@ -200,12 +252,9 @@ void LinePlotWidget::paintEvent(QPaintEvent* event) {
     legend_x -= width;
     painter.setPen(QPen(series_[index].color, 3));
     painter.drawLine(legend_x, 23, legend_x + 14, 23);
-    painter.setPen(QColor("#445158"));
+    painter.setPen(palette().color(QPalette::Text));
     painter.drawText(legend_x + 18, 28, series_[index].name);
   }
-  painter.setPen(QColor("#6a777d"));
-  painter.drawText(QRectF(4, area.top() - 8, 48, 18), Qt::AlignRight, QString::number(maximum, 'g', 4));
-  painter.drawText(QRectF(4, area.bottom() - 10, 48, 18), Qt::AlignRight, QString::number(minimum, 'g', 4));
 }
 
 void LinePlotWidget::mouseMoveEvent(QMouseEvent* event) {
@@ -282,7 +331,8 @@ void HeatmapWidget::paintEvent(QPaintEvent* event) {
   const auto area = plotRect(*this);
   const auto expected = static_cast<std::size_t>(width_) * static_cast<std::size_t>(height_);
   if (width_ == 0U || height_ == 0U || static_cast<std::size_t>(values_.size()) < expected) {
-    painter.setPen(QColor("#87949a"));
+    drawAxisTicks(painter, *this, 0.0, 1.0, 0.0, 1.0, false);
+    painter.setPen(palette().color(QPalette::PlaceholderText));
     painter.drawText(area, Qt::AlignCenter, "Waiting for completed scan lines");
     return;
   }
@@ -318,12 +368,14 @@ void HeatmapWidget::paintEvent(QPaintEvent* event) {
       const bool is_valid = index < valid_.size() && valid_[index] != 0U;
       const auto normalized = is_valid ? (values_[index] - minimum) / (maximum - minimum) : 0.0F;
       image.setPixelColor(static_cast<int>(x), static_cast<int>(y),
-                          is_valid ? heatColor(normalized) : QColor("#e9eef0"));
+                          is_valid ? heatColor(normalized) : palette().color(QPalette::AlternateBase));
     }
   }
   painter.setRenderHint(QPainter::SmoothPixmapTransform, false);
   painter.drawImage(area, image);
-  painter.setPen(QColor("#445158"));
+  drawAxisTicks(painter, *this, 0.0, static_cast<double>(width_ - 1U),
+                static_cast<double>(height_ - 1U), 0.0, true, true);
+  painter.setPen(palette().color(QPalette::Text));
   painter.drawText(QRectF(area.left(), 10, area.width(), 24), Qt::AlignRight | Qt::AlignVCenter,
                    QString("%1 / %2 lines   Z %3 to %4 m")
                        .arg(completed_lines_)
@@ -378,15 +430,16 @@ void SegmentationPlotWidget::clear() {
 void SegmentationPlotWidget::paintEvent(QPaintEvent* event) {
   static_cast<void>(event);
   QPainter painter(this);
-  drawFrame(painter, *this, "Frozen Full-period Chirp Segmentation", "Sample", "Normalized amplitude");
+  drawFrame(painter, *this, "Frozen Full-period Chirp Segmentation", "Sample", "ADC full scale");
   const auto area = plotRect(*this);
-  if (snapshot_ == nullptr || snapshot_->normalized_samples.size() < 2U) {
-    painter.setPen(QColor("#87949a"));
+  if (snapshot_ == nullptr || snapshot_->full_scale_samples.size() < 2U) {
+    drawAxisTicks(painter, *this, 0.0, 1.0, -1.0, 1.0, false);
+    painter.setPen(palette().color(QPalette::PlaceholderText));
     painter.drawText(area, Qt::AlignCenter, "Capture a frame while running");
     return;
   }
 
-  const auto sample_count = static_cast<double>(snapshot_->normalized_samples.size());
+  const auto sample_count = static_cast<double>(snapshot_->full_scale_samples.size());
   auto sampleToX = [&](std::uint32_t sample) {
     return area.left() + area.width() * std::clamp(static_cast<double>(sample) / sample_count, 0.0, 1.0);
   };
@@ -406,10 +459,10 @@ void SegmentationPlotWidget::paintEvent(QPaintEvent* event) {
   }
 
   QPainterPath path;
-  for (std::size_t index = 0; index < snapshot_->normalized_samples.size(); ++index) {
+  for (std::size_t index = 0; index < snapshot_->full_scale_samples.size(); ++index) {
     const auto x = area.left() + area.width() * static_cast<double>(index) /
-                                    static_cast<double>(snapshot_->normalized_samples.size() - 1U);
-    const auto y = area.center().y() - snapshot_->normalized_samples[index] * area.height() * 0.45;
+                                    static_cast<double>(snapshot_->full_scale_samples.size() - 1U);
+    const auto y = area.center().y() - snapshot_->full_scale_samples[index] * area.height() * 0.45;
     if (index == 0U) {
       path.moveTo(x, y);
     } else {
@@ -417,14 +470,16 @@ void SegmentationPlotWidget::paintEvent(QPaintEvent* event) {
     }
   }
   painter.setClipRect(area);
-  painter.setPen(QPen(QColor("#176c78"), 1.2));
+  painter.setPen(QPen(palette().color(QPalette::Highlight), 1.2));
   painter.drawPath(path);
   painter.setClipping(false);
-  painter.setPen(QColor("#277e65"));
+  drawAxisTicks(painter, *this, 0.0,
+                static_cast<double>(snapshot_->full_scale_samples.size() - 1U), -1.0, 1.0, true);
+  painter.setPen(QColor("#4bc596"));
   painter.drawText(QPointF(sampleToX(up_.start_sample) + 5, area.top() + 18), "UP");
-  painter.setPen(QColor("#b2542f"));
+  painter.setPen(QColor("#e78a59"));
   painter.drawText(QPointF(sampleToX(down_.start_sample) + 5, area.top() + 18), "DOWN");
-  painter.setPen(QColor("#6a777d"));
+  painter.setPen(palette().color(QPalette::PlaceholderText));
   painter.drawText(QRectF(area.left(), 10, area.width(), 24), Qt::AlignRight | Qt::AlignVCenter,
                    QString("Frozen frame %1").arg(snapshot_->frame_id));
 }

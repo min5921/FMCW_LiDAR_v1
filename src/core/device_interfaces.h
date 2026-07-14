@@ -27,9 +27,12 @@ enum class FrameWaitResult {
 struct DigitizerTelemetry {
   DeviceStatus device;
   std::uint64_t frames_received = 0;
+  std::uint64_t dma_buffers_received = 0;
   std::uint64_t dma_buffer_drops = 0;
   std::uint64_t trigger_misses = 0;
   double trigger_jitter_ns = 0.0;
+  double dma_buffer_rate_hz = 0.0;
+  double dma_buffer_period_ms = 0.0;
 };
 
 class IDigitizer {

@@ -2,9 +2,11 @@
 #include "core/config_policy.h"
 #include "core/config_profile.h"
 #include "core/config_validation.h"
+#include "core/digitizer_capabilities.h"
 #include "core/operation_controller.h"
 
 #include <filesystem>
+#include <cmath>
 #include <iostream>
 #include <string>
 #include <vector>
@@ -31,10 +33,21 @@ void testDefaultsAndRoundTrip() {
   expect(decoded.config.digitizer.channel == fmcw::DigitizerChannel::A, "round trip preserves single channel A");
   expect(decoded.config.chirp_segmentation.mode == fmcw::ChirpTriggerMode::UpChirpOnly,
          "round trip preserves up-chirp-only trigger mode");
-  expect(decoded.config.profile.schema_version == 2, "round trip uses the single-UI schema version");
-  expect(decoded.config.processing.peak_tracking_enabled &&
-             decoded.config.processing.peak_lost_policy == fmcw::PeakLostPolicy::Reacquire,
-         "round trip preserves peak tracking controls");
+  expect(decoded.config.profile.schema_version == 4, "round trip uses the full-frame scan schema version");
+  expect(decoded.config.digitizer.board_profile == "ats9371",
+         "round trip preserves the digitizer capability profile");
+  expect(fmcw::alazarTriggerLevelCode(defaults.digitizer.trigger_level_percent) == 150,
+         "legacy +17.3 percent trigger threshold maps to ATS code 150");
+  expect(fmcw::derivedAScanCount(defaults) == defaults.digitizer.records_per_buffer,
+         "A-scan count is derived from records per buffer");
+  expect(fmcw::derivedFramePointCount(defaults) == 1600U,
+         "one frame contains A-scans per DMA buffer times B-scans per frame");
+  expect(std::abs(fmcw::derivedMcuFrameTimeMs(defaults) - 16.0) < 1.0e-9,
+         "MCU cycle time is derived from the full-frame waveform point count");
+  const auto& board = fmcw::digitizerBoardCapabilities().front();
+  expect(board.display_name.find("ATS9371") != std::string::npos && board.sample_rates_hz.size() == 20,
+         "ATS9371 capability exposes the SDK discrete sample-rate list");
+  expect(fmcw::supportsSampleRate(board, 800.0e6), "ATS9371 supports the SDK 800 MS/s setting");
 }
 
 void testStrictYamlAndLayering() {
@@ -46,6 +59,18 @@ void testStrictYamlAndLayering() {
 
   const auto removed_ui_mode = fmcw::ConfigProfileCodec::decodeYaml("ui:\n  mode: basic\n", "legacy-ui-mode");
   expect(!removed_ui_mode.ok(), "removed global Basic/Advanced mode is rejected");
+
+  const auto removed_tracking = fmcw::ConfigProfileCodec::decodeYaml(
+      "processing:\n  peak_tracking_max_delta_bins: 12\n", "legacy-peak-tracking");
+  expect(!removed_tracking.ok(), "removed peak tracking controls are rejected");
+
+  const auto removed_normalize = fmcw::ConfigProfileCodec::decodeYaml(
+      "processing:\n  normalize: true\n", "legacy-normalize");
+  expect(!removed_normalize.ok(), "removed dynamic segment normalization is rejected");
+
+  const auto removed_line_time = fmcw::ConfigProfileCodec::decodeYaml(
+      "scan:\n  line_time_ms: 0.64\n", "legacy-line-time");
+  expect(!removed_line_time.ok(), "removed MCU-derived B-scan line time is rejected");
 
   const std::filesystem::path source_root = FMCW_TEST_SOURCE_DIR;
   const auto layered = fmcw::ConfigProfileCodec::loadLayered({
@@ -79,45 +104,72 @@ void testPresentationAndChangePolicy() {
          "sampling rate requires restart");
   expect(fmcw::policyFor("processing.peak_threshold_db").change_policy == fmcw::ChangePolicy::Runtime,
          "peak threshold applies at runtime");
-  expect(fmcw::policyFor("processing.peak_tracking_max_delta_bins").change_policy ==
-             fmcw::ChangePolicy::Runtime,
-         "peak tracking delta applies at runtime");
+  expect(fmcw::policyFor("processing.peak_search_end_bin").change_policy == fmcw::ChangePolicy::Runtime,
+         "peak search range applies at runtime");
   expect(fmcw::policyFor("chirp_segmentation.up_segment.start_sample").change_policy ==
              fmcw::ChangePolicy::PreviewOnly,
          "segment boundary applies only during preview");
 }
 
-void testPeakTrackingValidation() {
+void testSchemaAndBoardCapabilityValidation() {
   fmcw::SystemConfig legacy_schema;
-  legacy_schema.profile.schema_version = 1;
+  legacy_schema.profile.schema_version = 3;
   expect(fmcw::ConfigValidator::validate(legacy_schema).hasErrors(),
-         "schema version 1 requires migration before Start");
+         "schema version 3 requires migration before Start");
+
+  fmcw::SystemConfig oversized_mcu_frame;
+  oversized_mcu_frame.mcu.enabled = true;
+  oversized_mcu_frame.mcu.port = "COM4";
+  oversized_mcu_frame.scan.y_line_count = 300;
+  oversized_mcu_frame.digitizer.b_scan_count = 300;
+  expect(fmcw::ConfigValidator::validate(oversized_mcu_frame).hasErrors(),
+         "MCU full-frame waveform cannot exceed the firmware point buffer");
 
   fmcw::SystemConfig invalid;
-  invalid.processing.peak_tracking_max_delta_bins = 80;
-  invalid.processing.peak_reacquire_width_bins = 40;
+  invalid.digitizer.sample_rate_hz = 750.0e6;
   const auto validation = fmcw::ConfigValidator::validate(invalid);
-  expect(validation.hasErrors(), "reacquire width smaller than tracking delta is rejected");
+  expect(validation.hasErrors(), "unsupported board sampling rate is rejected");
+
+  fmcw::SystemConfig wrong_address;
+  wrong_address.digitizer.board_id = 2;
+  expect(fmcw::ConfigValidator::validate(wrong_address).hasErrors(),
+         "System 1 / Board 1 is enforced");
+
+  fmcw::SystemConfig inconsistent_scan;
+  inconsistent_scan.scan.x_pixel_count += 1;
+  expect(fmcw::ConfigValidator::validate(inconsistent_scan).hasErrors(),
+         "A-scan count cannot diverge from records per buffer");
+
+  fmcw::SystemConfig misaligned_trigger;
+  misaligned_trigger.digitizer.trigger_delay_samples = 401;
+  expect(fmcw::ConfigValidator::validate(misaligned_trigger).hasErrors(),
+         "ATS9371 trigger delay alignment is enforced");
+
+  fmcw::SystemConfig oversized_udp_packet;
+  oversized_udp_packet.udp.enabled = true;
+  oversized_udp_packet.udp.packet_point_count = 3274;
+  expect(fmcw::ConfigValidator::validate(oversized_udp_packet).hasErrors(),
+         "UDP v1 point count cannot exceed one maximum-size datagram");
 }
 
 void testActiveAndPendingConfiguration() {
   fmcw::ConfigManager manager;
   auto requested = manager.activeConfig();
   requested.processing.peak_threshold_db = -38.0;
-  requested.digitizer.sample_rate_hz = 800.0e6;
+  requested.digitizer.dma_buffer_count = 16;
 
   const auto update = manager.requestUpdate(requested, fmcw::OperationState::Acquiring);
   expect(update.accepted, "valid running update is accepted");
   expect(update.applied_changes.size() == 1, "runtime field applies immediately");
   expect(update.pending_changes.size() == 1, "digitizer field remains pending");
   expect(manager.activeConfig().processing.peak_threshold_db == -38.0, "active threshold is updated");
-  expect(manager.activeConfig().digitizer.sample_rate_hz == 1.0e9, "active sample rate remains unchanged");
+  expect(manager.activeConfig().digitizer.dma_buffer_count == 8, "active DMA setting remains unchanged");
   expect(manager.revision() == 2, "immediate update increments config revision");
 
   std::string error;
   expect(!manager.applyPending(fmcw::OperationState::Acquiring, error), "pending settings cannot apply while running");
   expect(manager.applyPending(fmcw::OperationState::Ready, error), "pending settings apply in Ready state");
-  expect(manager.activeConfig().digitizer.sample_rate_hz == 800.0e6, "pending sample rate becomes active");
+  expect(manager.activeConfig().digitizer.dma_buffer_count == 16, "pending DMA setting becomes active");
   expect(manager.revision() == 3, "pending application increments config revision");
 
   fmcw::ConfigManager coupled_manager;
@@ -167,7 +219,7 @@ int main() {
   testDefaultsAndRoundTrip();
   testStrictYamlAndLayering();
   testPresentationAndChangePolicy();
-  testPeakTrackingValidation();
+  testSchemaAndBoardCapabilityValidation();
   testActiveAndPendingConfiguration();
   testStartGateSnapshotAndOverflowStop();
 

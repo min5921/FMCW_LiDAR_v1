@@ -14,18 +14,14 @@ bool contains(const std::array<std::string_view, Size>& values, std::string_view
 }
 
 ConfigFieldPolicy classify(std::string_view path) {
-  static constexpr std::array<std::string_view, 17> primary_paths = {
+  static constexpr std::array<std::string_view, 13> primary_paths = {
       "profile.id", "profile.name", "storage.raw_enabled", "storage.processed_enabled", "udp.enabled",
       "ui.plot_update_hz", "ui.point_cloud_update_hz", "ui.segment_overlay", "ui.color_map", "ui.last_profile",
-      "processing.peak_threshold_db", "processing.peak_search_start_bin", "processing.peak_search_end_bin",
-      "processing.peak_tracking_enabled", "processing.peak_tracking_max_delta_bins",
-      "processing.peak_reacquire_width_bins", "processing.peak_lost_policy"};
-  static constexpr std::array<std::string_view, 15> runtime_paths = {
-      "processing.dc_removal", "processing.normalize", "processing.peak_threshold_db",
-      "processing.peak_search_start_bin", "processing.peak_search_end_bin", "storage.raw_enabled",
-      "storage.processed_enabled", "udp.enabled", "ui.plot_update_hz", "ui.point_cloud_update_hz",
-      "ui.segment_overlay", "processing.peak_tracking_enabled", "processing.peak_tracking_max_delta_bins",
-      "processing.peak_reacquire_width_bins", "processing.peak_lost_policy"};
+      "processing.peak_threshold_db", "processing.peak_search_start_bin", "processing.peak_search_end_bin"};
+  static constexpr std::array<std::string_view, 7> runtime_paths = {
+      "processing.dc_removal", "processing.peak_threshold_db",
+      "processing.peak_search_start_bin", "processing.peak_search_end_bin", "ui.plot_update_hz",
+      "ui.point_cloud_update_hz", "ui.segment_overlay"};
   static constexpr std::array<std::string_view, 7> preview_paths = {
       "chirp_segmentation.up_segment.start_sample", "chirp_segmentation.up_segment.end_sample_exclusive",
       "chirp_segmentation.down_segment.start_sample", "chirp_segmentation.down_segment.end_sample_exclusive",

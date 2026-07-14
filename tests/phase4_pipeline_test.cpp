@@ -41,6 +41,7 @@ fmcw::SystemConfig testConfig() {
   config.processing.fft_backend = fmcw::FftBackendKind::Fftw;
   config.processing.peak_threshold_db = -60.0;
   config.processing.queue_capacity = 16;
+  config.digitizer.records_per_buffer = 4;
   config.scan.x_pixel_count = 4;
   config.scan.y_line_count = 2;
   config.digitizer.a_scan_count = 4;
@@ -122,17 +123,18 @@ fmcw::ProcessedFrame testSignalProcessing(const fmcw::SystemConfig& config,
   expect(processed.distance_m > 0.0F, "paired peaks produce positive distance");
   expect(processed.velocity_mps < 0.0F, "up/down peak difference preserves velocity sign");
 
-  auto hold_config = config.processing;
-  hold_config.peak_lost_policy = fmcw::PeakLostPolicy::HoldLast;
-  expect(processor.updateRuntimeConfig(hold_config, 2, error), "peak loss policy updates at a frame boundary");
+  auto runtime_config = config.processing;
+  runtime_config.peak_threshold_db = -55.0;
+  expect(processor.updateRuntimeConfig(runtime_config, 2, error), "peak threshold updates at a frame boundary");
   fmcw::RawFrame silent = *frames.at(1);
   std::fill(silent.samples.begin(), silent.samples.end(), 0);
-  fmcw::ProcessedFrame held;
-  expect(processor.process(silent, held, error), "silent frame is processed without crashing");
-  expect(!held.measurement_valid && held.up_peak.state == fmcw::PeakTrackState::HeldLast &&
-             held.down_peak.state == fmcw::PeakTrackState::HeldLast,
-         "hold-last preserves display bins while marking the measurement invalid");
-  expect(held.processing_config_revision == 2, "processed frame records the applied runtime revision");
+  fmcw::ProcessedFrame invalid;
+  expect(processor.process(silent, invalid, error), "silent frame is processed without crashing");
+  expect(!invalid.measurement_valid && !invalid.up_peak.valid && !invalid.down_peak.valid &&
+             invalid.up_peak.state == fmcw::PeakTrackState::Invalid &&
+             invalid.down_peak.state == fmcw::PeakTrackState::Invalid,
+         "each silent A-scan is independently marked invalid without carrying a previous peak");
+  expect(invalid.processing_config_revision == 2, "processed frame records the applied runtime revision");
   return processed;
 }
 
@@ -161,7 +163,7 @@ void testProcessingServiceSnapshots(const fmcw::SystemConfig& config,
   const auto fft = service.snapshots().latestFft();
   const auto line = service.snapshots().latestScanLine();
   const auto bscan = service.snapshots().latestBScan();
-  expect(waveform && waveform->normalized_samples.size() == config.digitizer.sample_point,
+  expect(waveform && waveform->full_scale_samples.size() == config.digitizer.sample_point,
          "waveform snapshot owns a UI-safe sample copy");
   expect(fft && !fft->up_magnitude_db.empty(), "FFT snapshot is published");
   expect(line && line->distance_m.size() == config.scan.x_pixel_count,
@@ -373,6 +375,73 @@ class BlockingRawWriter final : public fmcw::IRawFrameWriter {
   fmcw::WriterStatus status_;
 };
 
+void testBscanFrameBoundaryReset() {
+  fmcw::ProcessingSnapshotStore snapshots;
+  snapshots.configure(2, 2);
+  fmcw::RawFrame raw;
+  fmcw::ProcessedFrame processed;
+  processed.measurement_valid = true;
+  processed.point.z = 1.0F;
+  processed.point.valid = true;
+
+  const auto publish = [&](std::uint64_t frame_id, std::uint32_t x, std::uint32_t y) {
+    raw.metadata.frame_id = frame_id;
+    processed.frame_id = frame_id;
+    processed.scan_position.x_index = x;
+    processed.scan_position.y_index = y;
+    processed.scan_position.valid = true;
+    snapshots.publish(raw, processed);
+  };
+
+  publish(1, 0, 0);
+  publish(2, 1, 0);
+  publish(3, 0, 1);
+  publish(4, 1, 1);
+  auto bscan = snapshots.latestBScan();
+  expect(bscan && bscan->completed_lines == 2 && bscan->scan_frame_index == 0,
+         "first raster frame completes both B-scan lines");
+  const auto cloud = snapshots.latestPointCloud();
+  expect(cloud && cloud->complete && cloud->points.size() == 4U && cloud->points[3].valid,
+         "completed raster publishes an immutable 3D point-cloud snapshot");
+
+  publish(5, 0, 0);
+  publish(6, 1, 0);
+  bscan = snapshots.latestBScan();
+  expect(bscan && bscan->completed_lines == 1 && bscan->scan_frame_index == 1 && bscan->valid[2] == 0U,
+         "new raster frame clears rows from the previous B-scan frame");
+  const auto next_cloud = snapshots.latestPointCloud();
+  expect(next_cloud && !next_cloud->complete && !next_cloud->points[2].valid,
+         "new raster frame clears stale 3D points from unfinished rows");
+}
+
+void testSelectedAScanSnapshots() {
+  fmcw::ProcessingSnapshotStore snapshots;
+  snapshots.configure(2, 1);
+  snapshots.setSelectedRecordIndex(1);
+  fmcw::RawFrame raw;
+  raw.samples = {100, -100};
+  raw.metadata.records_in_buffer = 2;
+  fmcw::ProcessedFrame processed;
+
+  raw.metadata.frame_id = 1;
+  raw.metadata.dma_buffer_sequence = 0;
+  raw.metadata.record_index_in_buffer = 0;
+  processed.frame_id = 1;
+  snapshots.publish(raw, processed);
+  expect(!snapshots.latestWaveform() && !snapshots.latestFft(),
+         "non-selected A-scan does not replace Time Domain or FFT snapshots");
+
+  raw.metadata.frame_id = 2;
+  raw.metadata.record_index_in_buffer = 1;
+  processed.frame_id = 2;
+  snapshots.publish(raw, processed);
+  const auto waveform = snapshots.latestWaveform();
+  const auto fft = snapshots.latestFft();
+  expect(waveform && fft && waveform->record_index_in_buffer == 1U &&
+             waveform->dma_buffer_sequence == 0U && waveform->records_in_buffer == 2U,
+         "selected A-scan publishes paired Time Domain and FFT snapshots");
+}
+
 void testStorageOverflow(fmcw::RawFramePtr raw) {
   auto state = std::make_shared<BlockingWriterState>();
   fmcw::AsyncStorageService storage(std::make_unique<BlockingRawWriter>(state),
@@ -414,12 +483,16 @@ void testStorageOverflow(fmcw::RawFramePtr raw) {
 }  // namespace
 
 int main() {
+  std::cout << "[Phase5] Selected A-scan snapshots\n" << std::flush;
+  testSelectedAScanSnapshots();
   if (!fmcw::FftwBackend::available()) {
     std::cout << "Phase 4 FFT tests skipped: FFTW3f was not found at configure time.\n";
-    return 0;
+    return failures == 0 ? 0 : 1;
   }
   std::cout << "[Phase4] FFT backends\n" << std::flush;
   testFftBackends();
+  std::cout << "[Phase4] B-scan frame boundary\n" << std::flush;
+  testBscanFrameBoundaryReset();
   const auto config = testConfig();
   std::cout << "[Phase4] Fake frames\n" << std::flush;
   const auto frames = makeFakeFrames(config, config.scan.x_pixel_count);

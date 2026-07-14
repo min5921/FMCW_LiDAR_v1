@@ -1,5 +1,7 @@
 #include "core/config_validation.h"
 
+#include "core/digitizer_capabilities.h"
+
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -83,18 +85,47 @@ ValidationResult ConfigValidator::validate(const SystemConfig& config) {
         "Set both profile.id and profile.name");
   }
 
-  if (digitizer.system_id == 0 || digitizer.board_id == 0) {
-    add(result, ValidationSeverity::Error, "digitizer", "Alazar system and board ids are one-based",
-        "Set system_id and board_id to values greater than zero");
+  if (digitizer.system_id != kAlazarSystemId || digitizer.board_id != kAlazarBoardId) {
+    add(result, ValidationSeverity::Error, "digitizer", "This application uses Alazar System 1 / Board 1",
+        "Set system_id and board_id to 1");
   }
   if (!(digitizer.sample_rate_hz > 0.0) || digitizer.sample_point == 0) {
     add(result, ValidationSeverity::Error, "digitizer.sample_rate_hz", "Sample rate and sample point must be positive",
         "Select a supported Alazar sample rate and record length");
   }
+  const auto* board_capabilities = findDigitizerBoardCapabilities(digitizer.board_profile);
+  if (board_capabilities == nullptr) {
+    add(result, ValidationSeverity::Error, "digitizer.board_profile", "Unknown digitizer board capability profile",
+        "Select a board profile supported by this application build");
+  } else {
+    if (!supportsSampleRate(*board_capabilities, digitizer.sample_rate_hz)) {
+      add(result, ValidationSeverity::Error, "digitizer.sample_rate_hz",
+          "Sampling rate is not supported by the selected board profile",
+          "Choose one of the board-specific sampling rates");
+    }
+    if (!supportsInputRange(*board_capabilities, digitizer.input_range_volts) ||
+        !supportsImpedance(*board_capabilities, digitizer.impedance_ohms)) {
+      add(result, ValidationSeverity::Error, "digitizer.input_range_volts",
+          "Input range or impedance is not supported by the selected board profile",
+          "Choose a board-specific input range and impedance");
+    }
+  }
   if (digitizer.pre_trigger_samples + digitizer.post_trigger_samples != digitizer.sample_point) {
     add(result, ValidationSeverity::Error, "digitizer.sample_point",
         "pre_trigger_samples + post_trigger_samples must equal sample_point",
         "Adjust the pre/post trigger split to cover exactly one record");
+  }
+  if ((digitizer.sample_point % kAts9371RecordResolution) != 0U ||
+      (digitizer.pre_trigger_samples % kAts9371RecordResolution) != 0U ||
+      digitizer.pre_trigger_samples > kAts9371MaxNptPretrigger) {
+    add(result, ValidationSeverity::Error, "digitizer.sample_point",
+        "ATS9371 record resolution and pre-trigger alignment are 128 samples, with at most 8176 NPT pre-trigger samples",
+        "Use aligned sample counts within the ATS9371 NPT limit");
+  }
+  if ((digitizer.trigger_delay_samples % kAts9371SingleChannelTriggerDelayAlignment) != 0U) {
+    add(result, ValidationSeverity::Error, "digitizer.trigger_delay_samples",
+        "ATS9371 single-channel trigger delay alignment is 16 samples",
+        "Use a trigger delay divisible by 16");
   }
   if (digitizer.records_per_buffer == 0 || digitizer.dma_buffer_count == 0 || digitizer.timeout_ms == 0) {
     add(result, ValidationSeverity::Error, "digitizer.records_per_buffer", "DMA sizes and timeout must be non-zero",
@@ -106,9 +137,18 @@ ValidationResult ConfigValidator::validate(const SystemConfig& config) {
         "Input range must be positive and impedance must be 50 or 1000000 ohms",
         "Choose a value supported by the installed digitizer");
   }
-  if (digitizer.trigger_level_percent < 0.0 || digitizer.trigger_level_percent > 100.0) {
-    add(result, ValidationSeverity::Error, "digitizer.trigger_level_percent", "Trigger level must be between 0 and 100 percent",
-        "Adjust the trigger level percentage");
+  if (digitizer.trigger_source != TriggerSource::External) {
+    add(result, ValidationSeverity::Error, "digitizer.trigger_source", "UP chirp acquisition requires TRIG IN",
+        "Use the external TTL trigger source");
+  }
+  if (digitizer.coupling != Coupling::Dc) {
+    add(result, ValidationSeverity::Error, "digitizer.coupling", "ATS9371 analog inputs use DC coupling",
+        "Select DC coupling");
+  }
+  if (digitizer.trigger_level_percent < -100.0 || digitizer.trigger_level_percent > 100.0) {
+    add(result, ValidationSeverity::Error, "digitizer.trigger_level_percent",
+        "Trigger threshold must be between -100 and +100 percent of full scale",
+        "Adjust the external trigger threshold");
   }
   if (digitizer.acquisition_mode == AcquisitionMode::Finite && digitizer.finite_frame_count == 0) {
     add(result, ValidationSeverity::Error, "digitizer.finite_frame_count", "Finite mode requires at least one frame",
@@ -159,23 +199,6 @@ ValidationResult ConfigValidator::validate(const SystemConfig& config) {
     add(result, ValidationSeverity::Error, "processing.peak_search_end_bin", "Peak search range is outside the usable FFT bins",
         "Set start < end < segment_fft_length / 2");
   }
-  const auto peak_search_width = config.processing.peak_search_end_bin > config.processing.peak_search_start_bin
-      ? config.processing.peak_search_end_bin - config.processing.peak_search_start_bin
-      : 0U;
-  if (config.processing.peak_tracking_enabled &&
-      (config.processing.peak_tracking_max_delta_bins == 0U ||
-       config.processing.peak_tracking_max_delta_bins > peak_search_width)) {
-    add(result, ValidationSeverity::Error, "processing.peak_tracking_max_delta_bins",
-        "Peak tracking delta must fit inside the configured peak search range",
-        "Set peak_tracking_max_delta_bins between 1 and the peak search width");
-  }
-  if (config.processing.peak_tracking_enabled &&
-      (config.processing.peak_reacquire_width_bins < config.processing.peak_tracking_max_delta_bins ||
-       config.processing.peak_reacquire_width_bins > peak_search_width)) {
-    add(result, ValidationSeverity::Error, "processing.peak_reacquire_width_bins",
-        "Peak reacquire width must cover the tracking delta and fit inside the search range",
-        "Set peak_reacquire_width_bins between peak_tracking_max_delta_bins and the peak search width");
-  }
   if (config.processing.queue_capacity == 0 || config.storage.queue_capacity == 0 || config.udp.queue_capacity == 0) {
     add(result, ValidationSeverity::Error, "processing.queue_capacity", "All real-time queue capacities must be non-zero",
         "Set processing, storage, and UDP queue capacities above zero");
@@ -196,14 +219,21 @@ ValidationResult ConfigValidator::validate(const SystemConfig& config) {
   }
 
   if (config.scan.x_start_deg >= config.scan.x_end_deg || config.scan.y_start_deg >= config.scan.y_end_deg ||
-      config.scan.x_pixel_count < 2 || config.scan.y_line_count < 2 || !(config.scan.line_time_ms > 0.0)) {
-    add(result, ValidationSeverity::Error, "scan", "Scan ranges, dimensions, and line time are invalid",
-        "Set increasing angle ranges and at least two points on each scan axis");
+      config.scan.x_pixel_count < 2 || config.scan.y_line_count < 2 ||
+      !(config.scan.scanner_sample_rate_hz > 0.0)) {
+    add(result, ValidationSeverity::Error, "scan", "Scan ranges, dimensions, or MCU point rate are invalid",
+        "Set increasing angle ranges, at least two points on each axis, and a positive MCU point rate");
   }
-  if (digitizer.a_scan_count != config.scan.x_pixel_count || digitizer.b_scan_count != config.scan.y_line_count) {
+  if (config.scan.x_pixel_count != derivedAScanCount(config) || digitizer.a_scan_count != derivedAScanCount(config) ||
+      digitizer.b_scan_count != config.scan.y_line_count) {
     add(result, ValidationSeverity::Error, "digitizer.a_scan_count",
-        "Digitizer A/B scan counts must match scanner x/y dimensions",
-        "Match a_scan_count to x_pixel_count and b_scan_count to y_line_count");
+        "A-scan count must equal records_per_buffer and B-scan count must equal the configured line count",
+        "Derive A-scans from the DMA record count and keep B-scans aligned with scan.y_line_count");
+  }
+  if (config.mcu.enabled && derivedFramePointCount(config) > 15000U) {
+    add(result, ValidationSeverity::Error, "scan.y_line_count",
+        "The full-frame MCU waveform exceeds the firmware 15000-point buffer",
+        "Reduce records_per_buffer or B-scans per frame");
   }
 
   if (config.edfa.mode == EdfaMode::None && config.edfa.required_before_start) {
@@ -228,9 +258,10 @@ ValidationResult ConfigValidator::validate(const SystemConfig& config) {
   }
 
   if (config.udp.enabled && (!isValidIpv4(config.udp.target_ip) || config.udp.target_port == 0 ||
-                             config.udp.packet_point_count == 0 || config.udp.packet_format_version == 0)) {
+                             config.udp.packet_point_count == 0 || config.udp.packet_point_count > 3273U ||
+                             config.udp.packet_format_version != 1U)) {
     add(result, ValidationSeverity::Error, "udp", "Enabled UDP output requires a valid IPv4 endpoint and packet format",
-        "Set target_ip, target_port, packet_point_count, and packet_format_version");
+        "Use packet format v1 and 1..3273 points per datagram");
   }
   if ((config.storage.raw_enabled || config.storage.processed_enabled) && config.storage.output_directory.empty()) {
     add(result, ValidationSeverity::Error, "storage.output_directory", "Enabled storage requires an output directory",

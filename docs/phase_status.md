@@ -1,118 +1,125 @@
 # Phase Status
 
-이 파일은 phase별 구현 단위와 commit 기준을 추적한다.
+Each phase records the delivered scope and its verification point.
 
 ## Phase 0: Legacy Inventory and Requirement Lock
 
 Status: done
 
 - Legacy PC/Jetson code, MCU firmware, and EDFA vendor material are stored under `legacy/`.
-- Requirements and folder structure are documented.
+- Requirements, decisions, and the simplified folder structure are documented.
 
 ## Phase 1: Build System and Core Skeleton
 
 Status: done
 
-- Root CMake project and `src/CMakeLists.txt` are present.
-- Windows and Jetson CMake presets select one platform application at a time.
-- Full-period raw frame, trigger, scan, optical-state, and revision metadata contracts are defined.
-- Digitizer frame delivery/abort, EDFA safety control, and asynchronous storage boundaries are defined.
-- Operation state transitions are explicitly validated and core contract tests are present.
-- Build prerequisites are documented.
+- The root CMake project and Windows/Jetson presets select one platform application at a time.
+- Full-period raw frame, trigger, scan, optical-state, and revision contracts are defined.
+- Digitizer, optional EDFA, storage, and operation-state interfaces are separated from the UI.
 
 Verification:
 
-- Windows preset configured and built with MSVC 19.44, NMake, and Qt 6.11.0.
-- `fmcw_core_tests` passed through the Windows CTest preset.
-- The Windows Qt shell constructed and exited successfully in offscreen smoke-test mode.
-- The Jetson preset is host-gated and ready for target-side verification; actual Jetson SDK and hardware acceptance remain Phase 7 work.
+- Windows MSVC, Qt, and `fmcw_core_tests` passed.
+- The Windows Qt shell passed the offscreen smoke test.
+- Jetson SDK and hardware acceptance remain target-side work.
 
 ## Phase 2: Configuration and System State
 
 Status: done
 
-- Typed `SystemConfig` covers digitizer, laser, optional EDFA, scan, full-period chirp segmentation, processing, UDP, storage, UI, calibration, and optional MCU settings.
-- Configuration schema version 2 removes the global UI mode and adds runtime peak tracking controls.
-- Strict YAML profiles support default, platform, user, and calibration layers with unknown-key and scalar-type rejection.
-- Validation blocks unsafe Start requests while retaining actionable field paths and messages.
-- Primary/Detailed presentation and runtime/preview/restart-required policies are defined per field without a global UI mode.
-- Active and pending configuration revisions are managed without changing restart-required hardware settings during acquisition.
-- Start captures a JSON configuration snapshot and revision for later session metadata.
-- Queue overflow forces `Stopping`, preserves diagnostic context, and completes in `Error` for operator acknowledgement.
+- Typed `SystemConfig` covers digitizer, laser, optional EDFA/MCU, scan, chirp segmentation, processing, UDP, storage, UI, and calibration.
+- Configuration schema version 4 keeps independent peak detection and defines one frame as records-per-buffer A-scans times operator-selected B-scans.
+- Strict YAML layers reject unknown keys, wrong scalar types, and unsupported hardware combinations.
+- Runtime and restart-required changes are tracked separately; invalid or unapplied settings block START.
+- Start captures the active configuration snapshot and revision for session metadata.
+- Queue overflow transitions through `Stopping` and preserves diagnostic context.
 
 Verification:
 
-- Windows preset configured and built with MSVC 19.44, NMake, and Qt 6.11.0.
-- `fmcw_core_tests` and `fmcw_config_tests` passed through the Windows CTest preset.
-- Strict YAML parsing, layered profiles, validation, field presentation policies, pending changes, Start gating, snapshot capture, and overflow Stop behavior are covered by tests.
-- The Windows Qt shell still passed its offscreen smoke test after linking the Phase 2 core.
-- Jetson profile parsing is platform-independent; target-side compiler and hardware verification remain Phase 7 work.
+- `fmcw_core_tests` and `fmcw_config_tests` passed.
+- Profile parsing, validation, pending changes, Start gating, snapshot capture, and overflow behavior are covered.
 
 ## Phase 3: Acquisition and Device Drivers
 
 Status: done
 
-- `AcquisitionSession` coordinates optional EDFA warm-up, digitizer arm, MCU trigger start, and reverse stop safety order.
-- Core telemetry exposes digitizer frame/DMA status, EDFA bypass/output state, and MCU waveform/scan state.
-- Fake A/B single-channel digitizer produces deterministic up-triggered full-period frames with up/down segment metadata.
-- Fake EDFA and MCU adapters allow acquisition with no connected hardware; EDFA `none` and MCU disabled are explicit bypass states.
-- Windows COM and Jetson/Linux tty transports share MCU line and CivilLaser EDFA binary protocol controllers.
-- The Alazar adapter uses NPT AutoDMA and is build-gated by ATS-SDK discovery for `ATSApi.lib` or `libATSApi.so`.
-- Hardware acceptance procedures distinguish Windows SDK validation from exact-board Jetson arm64 driver validation.
+- `AcquisitionSession` coordinates optional EDFA warm-up, digitizer arm, MCU trigger start, and reverse-order stop.
+- The fake A/B single-channel digitizer produces deterministic UP-triggered full-period frames.
+- EDFA `none` and MCU disabled are explicit bypass modes.
+- Windows COM and Jetson/Linux tty transports share MCU and CivilLaser EDFA protocol controllers.
+- The Alazar NPT AutoDMA adapter is enabled only when the ATS SDK is found.
 
 Verification:
 
-- Windows MSVC/Qt no-SDK build completed with the Alazar adapter disabled and simulator path enabled.
-- Existing core/config tests and the new acquisition/device test passed through CTest.
-- EDFA packet examples from the vendor document, checksum rejection, MCU ACK/count handling, scripted serial controllers, optional-device safety, channel A/B full-period frames, and telemetry are covered.
-- The SDK-enabled Alazar source path compiled against the preserved vendor headers; only vendor-header code-page warnings remained.
-- Actual Windows/Jetson board, MCU port, and EDFA optical-output acceptance remain hardware-required checks documented in `hardware_acceptance.md`.
+- Core, configuration, and acquisition/device tests passed with the simulator path.
+- Vendor packet parsing, optional-device safety, single-channel capture, and telemetry are covered.
+- Actual board, MCU, and EDFA acceptance remains hardware-required work.
 
 ## Phase 4: Processing and Storage Pipeline
 
 Status: done
 
-- FFTW3f and CUDA/cuFFT implement the common real-to-complex FFT backend contract with reusable plans.
-- `SignalProcessor` extracts configured up/down segments, applies preprocessing/windowing, detects and tracks peaks, and produces calibrated distance, velocity, and XYZ results.
-- Peak tracking supports detected, tracked, reacquired, held-invalid, lost, and stop-requested behavior per scan line.
-- `ProcessingService` decouples acquisition enqueue from FFT work with a bounded worker queue and frame-boundary runtime settings.
-- Immutable waveform, FFT, scan-line, and X-by-B-scan Z snapshots are published without exposing acquisition buffers to the UI.
-- Raw full-period and processed binary writers run through a bounded asynchronous storage service with stop-on-overflow and writer-failure reporting.
-- JSON sidecars record session/config identity, stream description, file parts, frame count, completion state, and stop reason.
-- Raw replay restores the original frame contract, follows numbered split parts, and feeds the same signal processor used by live acquisition.
+- FFTW3f and CUDA/cuFFT implement a common FFT backend contract.
+- `SignalProcessor` extracts configured UP/DOWN segments and independently selects the highest threshold-qualified peak in each search range.
+- Every A-scan is independent; a below-threshold result is invalid and never carries a previous peak.
+- `ProcessingService` uses a bounded worker queue and applies runtime processing changes at frame boundaries.
+- Immutable waveform, FFT, scan-line, and X-by-B-scan Z snapshots are published to the UI.
+- Raw full-period and processed binary writers use bounded asynchronous storage with JSON sidecars and split-part replay.
 
 Verification:
 
-- Windows MSVC Debug build enabled FFTW3f and CUDA 13.1/cuFFT through external SDK discovery.
-- `fmcw_phase4_tests` passed FFTW tone detection and the runtime-available CUDA/FFTW spectrum comparison.
-- Full-period UP/DOWN peak processing, hold-last invalid semantics, runtime revision application, scan-line/B-scan snapshots, async raw/processed writing, JSON metadata, split-part replay, processed callbacks, and forced processing/storage overflow are covered.
-- All four CTest targets passed and the Qt offscreen smoke test remained successful.
-- Sustained Alazar-to-NVMe throughput and long-run thermal/drop behavior remain hardware acceptance work for Phase 7.
+- `fmcw_phase4_tests` passed FFTW tone detection and the available CUDA/FFTW comparison.
+- Independent invalid-peak behavior, runtime updates, B-scan snapshots, writers, replay, callbacks, and overflow are covered.
+- Sustained Alazar-to-NVMe throughput remains Phase 7 hardware acceptance work.
 
 ## Phase 5: Qt UI MVP
 
 Status: done
 
-- Windows와 Jetson entry point가 동일한 Qt Widgets `MainWindow`와 `ApplicationController`를 사용한다.
-- 좌측 8개 navigation과 Overview, Live View, 장비 설정, Processing, Storage/UDP, System Log 화면을 구현했다.
-- 상단의 단일 global START/STOP이 simulator digitizer, optional EDFA, optional MCU, processing, storage session을 함께 제어한다.
-- UI thread와 runtime worker를 분리했으며 acquisition, FFT, raw/processed writer는 UI thread에서 실행하지 않는다.
-- Live View는 Time Domain, FFT, Peak Analysis, Distance/Velocity, X-by-B-scan Z heatmap을 immutable snapshot으로 표시한다.
-- Live plot toolbar는 display freeze, auto/manual range, cursor readout, PNG 저장을 제공하며 acquisition은 계속 실행한다.
-- Peak Analysis는 FFT를 중복 표시하지 않고 peak index/value line 결과만 표시한다.
-- Processing 화면은 threshold, search range, tracking, lost policy와 frame-boundary runtime update를 제공한다.
-- Chirp segmentation은 live waveform이 아닌 사용자가 capture한 고정 full-period frame에 UP/DOWN/guard overlay를 표시한다.
-- Digitizer는 A 또는 B 단일 채널만 선택할 수 있고 A+B 동시 모드는 제공하지 않는다.
-- EDFA none/manual/controlled 설정과 controlled EDFA output의 독립 safety on/off를 제공한다.
-- raw/processed binary recording은 기존 bounded asynchronous writer에 연결된다.
-- Phase 5의 UDP 화면은 endpoint/profile configuration만 소유하며 실제 sender와 3D renderer는 Phase 6에서 활성화한다.
+- Windows and Jetson use the same Qt Widgets `MainWindow` and `ApplicationController` boundaries.
+- Eight operational pages cover Overview, Live View, Digitizer, Laser/EDFA, Scan/MCU, Processing, Storage/UDP, and System Log.
+- One global START/STOP controls the digitizer, scanner, optional devices, processing, and storage session.
+- Live View owns Time Domain, FFT, Peak Analysis, Distance/Velocity, and B-scan displays without duplicate FFT plots.
+- Time Domain and FFT use the operator-selected A-scan record from every DMA buffer, matching the legacy `g_pick_r` behavior; peak, B-scan, UDP, and raw storage still process all records.
+- SDK 25.1.0 hardware discovery identifies ATS9371 at fixed System 1 / Board 1; its discrete sample rates and alignment limits drive validation and UI choices.
+- Digitizer setup exposes External TTL edge, threshold/code, delay, pre/post-trigger, and timeout details.
+- A-scans per B-scan are derived from records per buffer; B-scans per frame are operator-selected; DMA B-scan rate and frame time are measured from buffer completion timestamps.
+- MCU upload contains one complete raster frame and emits a marker only at each B-scan boundary.
+- Native spin-box arrows are removed and numeric fields use clean right-aligned entry.
+- The Windows executable uses the GUI subsystem and does not open a console window.
+- Running locks restart-required controls. STOP followed by `Apply Setup` performs configure/reconnect and remains Ready without automatic START.
+- Processing exposes only DC removal, peak threshold, and search range as frame-boundary runtime controls.
+- Chirp segmentation uses a frozen full-period snapshot with UP, DOWN, and guard overlays.
+- Form labels, field spacing, and segmentation controls use consistent alignment across all setup pages.
 
 Verification:
 
-- Windows MSVC Debug Qt application이 FFTW3f와 CUDA/cuFFT를 활성화한 구성에서 빌드됐다.
-- 기존 4개 CTest target이 모두 통과했다.
-- Qt simulator demo가 global START 후 정상 종료했으며 full-period Time Domain plot을 생성했다.
-- 512 A-scan의 첫 line이 완료된 뒤 B-scan 화면에 `1 / 25 lines`와 유효 Z range가 표시됐다.
-- frame 174의 segmentation snapshot에서 UP, DOWN, 양쪽 guard overlay가 고정 표시됐다.
-- `--smoke-test`, `--demo-run`, `--page`, `--live-tab`, `--capture-segmentation`, `--screenshot` 검증 옵션이 Windows와 Jetson entry point에 공통으로 제공된다.
-- 실제 Alazar DMA, MCU/EDFA serial hardware, sustained NVMe recording은 Phase 7 hardware acceptance가 필요하다.
+- Windows MSVC Debug build and all four CTest targets passed.
+- ATS-SDK adapter compiled and linked against `C:/AlazarTech/ATS-SDK/25.1.0`; `AlazarSysInfo` reported ATS9371, 12-bit, FPGA 35.3.
+- Simulator demo and all eight page captures were reviewed at 1480 x 900 without text overlap.
+- Runtime Digitizer lock and Processing snapshot captures remain part of the final UI regression check.
+- Actual Alazar DMA, serial hardware, and sustained NVMe recording require Phase 7 hardware acceptance.
+
+## Phase 6: UDP and 3D Visualization
+
+Status: done
+
+- Versioned `FMCW` UDP point packets carry raster frame ID, config revision, timestamp, segment indices, and little-endian XYZ/intensity/velocity arrays.
+- A bounded asynchronous sender assembles complete raster frames and applies `latest_frame`, `preserve_frames`, or `stop_sending` queue policy without network I/O in the acquisition or processing loop.
+- Live View includes a Qt/OpenGL-backed 3D point-cloud tab with color modes, rotate, pan, zoom, reset, point size, accumulation, freeze, and CSV export.
+- Point-cloud snapshots publish at completed B-scan line boundaries and clear unfinished rows at each new raster frame.
+- Storage / UDP exposes packet version, points per packet, sender queue, backpressure policy, send FPS, packet count, queue use, and dropped-frame telemetry.
+
+Verification:
+
+- Windows MSVC Release build completed with Qt OpenGL/OpenGLWidgets, ATS-SDK, FFTW, and CUDA enabled.
+- All five CTest targets passed, including UDP v1 encode/decode and asynchronous localhost send tests.
+- Simulator framebuffer validation rendered 576 points with X/Y/Z axes and a 3D ground grid; the UDP setup page was reviewed at 1480 x 900 without overlap.
+- The user package was refreshed with the Phase 6 executable and Qt OpenGL runtime DLLs.
+
+## Phase 7: Hardware Integration and Release Hardening
+
+Status: next
+
+- Replace the simulator runtime selection with the compiled Alazar/MCU/EDFA adapters.
+- Validate sustained ATS9371 DMA, NVMe raw recording, UDP throughput, and Jetson UI/thermal behavior on hardware.

@@ -2,9 +2,12 @@
 
 #include "apps/common/application_controller.h"
 #include "apps/common/plot_widgets.h"
+#include "apps/common/point_cloud_widget.h"
 #include "core/config_types.h"
 
 #include <QMainWindow>
+#include <QElapsedTimer>
+#include <QList>
 #include <QStringList>
 
 class QCheckBox;
@@ -31,6 +34,8 @@ class MainWindow final : public QMainWindow {
   void captureSegmentation();
   void showPage(int index);
   void showLiveTab(int index);
+  void setDarkTheme(bool enabled = true);
+  bool savePointCloudFramebuffer(const QString& path);
 
  private:
   QWidget* buildOverviewPage();
@@ -45,9 +50,13 @@ class MainWindow final : public QMainWindow {
 
   void connectUi();
   void markDirty();
+  void markRestartDirty();
   bool validateControls(bool show_dialog = false);
   SystemConfig configFromControls() const;
-  void loadConfigToControls(const SystemConfig& config);
+  void loadConfigToControls(const SystemConfig& config, bool mark_pending = false);
+  void populateDigitizerCapabilities(QString profile_id, double preferred_rate_hz,
+                                     double preferred_range_volts, std::uint32_t preferred_impedance);
+  void updateDerivedAcquisitionLabels();
   void applyProfile();
   void loadProfile();
   void saveProfile();
@@ -62,6 +71,8 @@ class MainWindow final : public QMainWindow {
   SystemConfig config_;
   RuntimeStatus runtime_status_;
   bool config_dirty_ = false;
+  bool restart_dirty_ = false;
+  bool loading_controls_ = false;
   bool freeze_live_ = false;
   QStringList log_entries_;
 
@@ -91,23 +102,37 @@ class MainWindow final : public QMainWindow {
 
   QTabWidget* live_tabs_ = nullptr;
   QToolButton* freeze_button_ = nullptr;
+  QSpinBox* selected_a_scan_ = nullptr;
+  QLabel* selected_a_scan_status_ = nullptr;
   LinePlotWidget* time_plot_ = nullptr;
   LinePlotWidget* fft_plot_ = nullptr;
   LinePlotWidget* peak_index_plot_ = nullptr;
   LinePlotWidget* peak_value_plot_ = nullptr;
   LinePlotWidget* distance_plot_ = nullptr;
   HeatmapWidget* bscan_plot_ = nullptr;
+  PointCloudWidget* point_cloud_plot_ = nullptr;
+  QLabel* point_cloud_status_ = nullptr;
+  QElapsedTimer point_cloud_update_timer_;
   SegmentationPlotWidget* segmentation_plot_ = nullptr;
   QLabel* segmentation_state_ = nullptr;
 
   QComboBox* digitizer_channel_ = nullptr;
-  QDoubleSpinBox* sample_rate_ = nullptr;
+  QComboBox* board_profile_ = nullptr;
+  QLabel* board_address_ = nullptr;
+  QComboBox* sample_rate_ = nullptr;
   QSpinBox* sample_point_ = nullptr;
   QSpinBox* records_per_buffer_ = nullptr;
   QSpinBox* dma_buffer_count_ = nullptr;
-  QDoubleSpinBox* input_range_ = nullptr;
+  QComboBox* input_range_ = nullptr;
+  QComboBox* impedance_ = nullptr;
   QComboBox* coupling_ = nullptr;
+  QComboBox* trigger_slope_ = nullptr;
   QDoubleSpinBox* trigger_level_ = nullptr;
+  QSpinBox* trigger_delay_ = nullptr;
+  QSpinBox* pre_trigger_ = nullptr;
+  QLabel* trigger_level_code_ = nullptr;
+  QLabel* post_trigger_ = nullptr;
+  QLabel* digitizer_lock_state_ = nullptr;
 
   QDoubleSpinBox* wavelength_ = nullptr;
   QDoubleSpinBox* sweep_bandwidth_ = nullptr;
@@ -124,9 +149,14 @@ class MainWindow final : public QMainWindow {
   QDoubleSpinBox* x_end_ = nullptr;
   QDoubleSpinBox* y_start_ = nullptr;
   QDoubleSpinBox* y_end_ = nullptr;
-  QSpinBox* x_pixels_ = nullptr;
+  QLabel* a_scan_count_ = nullptr;
   QSpinBox* y_lines_ = nullptr;
-  QDoubleSpinBox* line_time_ = nullptr;
+  QLabel* frame_point_count_ = nullptr;
+  QLabel* dma_bscan_rate_ = nullptr;
+  QLabel* frame_time_ = nullptr;
+  QLabel* mcu_point_rate_ = nullptr;
+  QLabel* mcu_frame_time_ = nullptr;
+  QLabel* frame_sync_state_ = nullptr;
   QCheckBox* bidirectional_ = nullptr;
   QCheckBox* mcu_enabled_ = nullptr;
   QLineEdit* mcu_port_ = nullptr;
@@ -136,14 +166,9 @@ class MainWindow final : public QMainWindow {
   QComboBox* fft_backend_ = nullptr;
   QComboBox* window_function_ = nullptr;
   QCheckBox* dc_removal_ = nullptr;
-  QCheckBox* normalize_ = nullptr;
   QDoubleSpinBox* peak_threshold_ = nullptr;
   QSpinBox* peak_start_ = nullptr;
   QSpinBox* peak_end_ = nullptr;
-  QCheckBox* peak_tracking_ = nullptr;
-  QSpinBox* peak_delta_ = nullptr;
-  QSpinBox* reacquire_width_ = nullptr;
-  QComboBox* lost_policy_ = nullptr;
   QSpinBox* up_start_ = nullptr;
   QSpinBox* up_end_ = nullptr;
   QSpinBox* down_start_ = nullptr;
@@ -160,9 +185,14 @@ class MainWindow final : public QMainWindow {
   QLineEdit* udp_ip_ = nullptr;
   QSpinBox* udp_port_ = nullptr;
   QSpinBox* udp_points_ = nullptr;
+  QComboBox* udp_version_ = nullptr;
+  QSpinBox* udp_queue_ = nullptr;
+  QComboBox* udp_policy_ = nullptr;
+  QLabel* udp_status_ = nullptr;
 
   QComboBox* log_filter_ = nullptr;
   QPlainTextEdit* log_view_ = nullptr;
+  QList<QWidget*> restart_required_controls_;
 };
 
 }  // namespace fmcw

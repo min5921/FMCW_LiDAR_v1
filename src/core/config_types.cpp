@@ -92,15 +92,6 @@ std::string toString(UdpBackpressurePolicy value) {
   return "latest_frame";
 }
 
-std::string toString(PeakLostPolicy value) {
-  switch (value) {
-    case PeakLostPolicy::HoldLast: return "hold_last";
-    case PeakLostPolicy::Reacquire: return "reacquire";
-    case PeakLostPolicy::StopAcquisition: return "stop_acquisition";
-  }
-  return "reacquire";
-}
-
 std::string toString(SerialParity value) {
   switch (value) {
     case SerialParity::None: return "none";
@@ -179,17 +170,26 @@ bool fromString(std::string_view text, UdpBackpressurePolicy& value) {
                                  {"stop_sending", UdpBackpressurePolicy::StopSending}});
 }
 
-bool fromString(std::string_view text, PeakLostPolicy& value) {
-  return parseEnum(text, value, {{"hold_last", PeakLostPolicy::HoldLast},
-                                 {"reacquire", PeakLostPolicy::Reacquire},
-                                 {"stop_acquisition", PeakLostPolicy::StopAcquisition},
-                                 {"stop", PeakLostPolicy::StopAcquisition}});
-}
-
 bool fromString(std::string_view text, SerialParity& value) {
   return parseEnum(text, value, {{"none", SerialParity::None},
                                  {"even", SerialParity::Even},
                                  {"odd", SerialParity::Odd}});
+}
+
+std::uint32_t derivedAScanCount(const SystemConfig& config) {
+  return config.digitizer.records_per_buffer;
+}
+
+std::uint64_t derivedFramePointCount(const SystemConfig& config) {
+  return static_cast<std::uint64_t>(derivedAScanCount(config)) * config.scan.y_line_count;
+}
+
+double derivedMcuFrameTimeMs(const SystemConfig& config) {
+  if (!(config.scan.scanner_sample_rate_hz > 0.0)) {
+    return 0.0;
+  }
+  return static_cast<double>(derivedFramePointCount(config)) * 1000.0 /
+      config.scan.scanner_sample_rate_hz;
 }
 
 }  // namespace fmcw

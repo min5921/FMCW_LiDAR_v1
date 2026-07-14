@@ -146,11 +146,29 @@ class ScriptedSerialTransport final : public fmcw::ISerialTransport {
 void testMcuProtocol() {
   const fmcw::McuWaveformFrame frame{1, 2, 3, 4, true};
   expect(fmcw::McuProtocol::clearCommand() == "CLR\n", "MCU clear command matches firmware");
-  expect(fmcw::McuProtocol::dataCommand(frame) == "DATA,1,2,3,4,1\n", "MCU DATA command matches firmware");
+  expect(fmcw::McuProtocol::dataCommand(frame) == "DATA,1,2,3,4,255\n",
+         "MCU DATA command drives the firmware trigger output high");
   const auto loaded = fmcw::McuProtocol::parseResponse("ACK:LOAD_DONE,25");
   expect(loaded.acknowledged && loaded.code == "LOAD_DONE" && loaded.has_count && loaded.count == 25,
          "MCU LOAD_DONE count is parsed");
   expect(fmcw::McuProtocol::parseResponse("ERR:BUFFER_FULL").error, "MCU error response is recognized");
+
+  fmcw::SystemConfig raster;
+  raster.digitizer.records_per_buffer = 4;
+  raster.digitizer.a_scan_count = 4;
+  raster.scan.x_pixel_count = 4;
+  raster.scan.y_line_count = 3;
+  raster.digitizer.b_scan_count = 3;
+  raster.scan.bidirectional = true;
+  std::string waveform_error;
+  const auto waveform = fmcw::McuProtocol::buildFullFrameWaveform(raster, waveform_error);
+  expect(waveform.size() == 12, "MCU waveform contains one complete 4 by 3 raster frame");
+  expect(waveform[0].trigger && waveform[4].trigger && waveform[8].trigger,
+         "MCU waveform emits one marker at each B-scan boundary");
+  expect(!waveform[1].trigger && !waveform[3].trigger && !waveform[5].trigger,
+         "MCU waveform does not hold the marker across a B-scan");
+  expect(waveform[0].a < waveform[3].a && waveform[4].a > waveform[7].a,
+         "bidirectional raster reverses the X waveform on alternating B-scans");
 }
 
 void testEdfaProtocol() {
@@ -228,6 +246,9 @@ void testFakeFullPeriodSession() {
   expect(frame.samples.size() == config.digitizer.sample_point, "fake frame contains one full record");
   expect(frame.metadata.frame_kind == fmcw::FrameKind::FullChirpPeriod, "fake frame is full-period");
   expect(frame.metadata.channel == fmcw::DigitizerChannel::A, "fake session acquires channel A only");
+  expect(frame.metadata.dma_buffer_sequence == 0U && frame.metadata.record_index_in_buffer == 0U &&
+             frame.metadata.records_in_buffer == config.digitizer.records_per_buffer,
+         "fake frame identifies its DMA buffer and record index");
   expect(frame.metadata.up_segment.start_sample == config.chirp_segmentation.up_segment.start_sample &&
              frame.metadata.down_segment.end_sample_exclusive ==
                  config.chirp_segmentation.down_segment.end_sample_exclusive,

@@ -4,12 +4,14 @@
 
 Phase 5 Qt UI는 Windows와 Jetson에서 같은 화면과 core runtime contract를 사용한다. 현재 즉시 실행 가능한 기본 runtime은 simulator이며 다음 경계가 적용된다.
 
-- 실제 동작: simulator acquisition, FFTW/CUDA processing, peak tracking, distance/velocity, B-scan, raw/processed binary recording
-- 설정 가능: digitizer, laser, optional EDFA, optional MCU, chirp segmentation, processing, storage, UDP endpoint
-- Phase 6: UDP sender, 3D point cloud, simulator fault injection
+운용자는 실행 파일을 직접 실행하며 별도 command-line theme option을 사용하지 않는다. Windows와 Jetson 모두 dark theme가 기본이다.
+
+- 실제 동작: simulator acquisition, FFTW/CUDA processing, independent peak detection, distance/velocity, B-scan, 3D point cloud, raw/processed binary recording, UDP point-frame transmission
+- 설정 가능: digitizer, laser, optional EDFA, optional MCU, chirp segmentation, processing, storage, UDP endpoint/packet/queue policy
+- Phase 6: selected A-scan display, UDP sender, 3D point cloud
 - Phase 7: 실제 Alazar, MCU, EDFA, Jetson target 및 NVMe 장시간 검증
 
-3D는 빈 tab이나 disabled control로 노출하지 않는다. UDP는 Phase 5에서 `CONFIG ONLY`로 표시해 실제 송신 중으로 오인하지 않게 한다.
+3D는 Live View의 실제 동작 tab으로 제공한다. UDP 상태는 `OFF`, `READY`, `TX`로 구분해 설정 상태와 실제 송신 상태를 혼동하지 않게 한다.
 
 ## 2. Runtime Architecture
 
@@ -33,10 +35,10 @@ STOP은 MCU trigger, digitizer abort/stop, processing drain, storage finalize, c
 |---|---|
 | Overview | readiness, revision, queue, frame, latency, recording status |
 | Live View | Time Domain, FFT, Peak Analysis, Distance/Velocity, B-scan, freeze/range/cursor/save |
-| Digitizer | A 또는 B channel, sampling, sample point, DMA, trigger |
+| Digitizer | ATS9371 System 1 / Board 1, A 또는 B channel, discrete sampling rate, DMA, detailed trigger |
 | Laser / EDFA | laser specification, optional EDFA mode/setpoint/output safety |
-| Scan / MCU | geometry, optional MCU port, waveform upload/readiness |
-| Processing | FFT/window/DC, peak threshold/search/tracking, frozen segmentation |
+| Scan / MCU | frame geometry, records-per-buffer A-scans/B-scan, operator B-scans/frame, measured DMA rate/frame time, full-frame MCU readiness |
+| Processing | FFT/window/DC, independent peak threshold/search, frozen segmentation |
 | Storage / UDP | raw/processed recording and UDP profile configuration |
 | System Log | command, runtime, warning, error log filtering |
 
@@ -66,7 +68,11 @@ build\preset-windows-msvc-debug\src\fmcw_lidar_windows.exe --demo-run --page=5 -
 
 `--page`는 0부터 7, `--live-tab`은 0부터 4 범위를 사용한다. demo screenshot은 B-scan line이 완성될 시간을 포함해 5.2초 후 저장하고 자동 종료한다.
 
-## 5. Operator Flow
+## 5. Phase 6 Extension
+
+Live View now includes a functional `3D Point Cloud` tab, and Storage / UDP starts a real asynchronous sender with global START. Time Domain and FFT use the selected A-scan record from each DMA buffer; all aggregate processing, UDP, and storage paths remain unfiltered.
+
+## 6. Operator Flow
 
 1. profile을 load하거나 화면에서 설정한다.
 2. 상단 validation indicator가 error가 아닌지 확인한다.
@@ -77,4 +83,4 @@ build\preset-windows-msvc-debug\src\fmcw_lidar_windows.exe --demo-run --page=5 -
 7. Live View에서 측정 결과를 확인하고 필요하면 display만 freeze한다.
 8. global `STOP`으로 writer metadata finalize까지 완료한다.
 
-잘못된 설정은 START를 막는다. processing/storage queue overflow, writer failure, peak lost `stop_acquisition`은 session stop으로 전달된다.
+잘못된 설정과 적용되지 않은 설정은 START를 막는다. processing/storage queue overflow와 writer failure는 session stop으로 전달된다.

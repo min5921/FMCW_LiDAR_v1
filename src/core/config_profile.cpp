@@ -166,6 +166,7 @@ ConfigDocument ConfigProfileCodec::encode(const SystemConfig& config) {
 
   setUnsigned(document, "digitizer.system_id", config.digitizer.system_id);
   setUnsigned(document, "digitizer.board_id", config.digitizer.board_id);
+  document.setString("digitizer.board_profile", config.digitizer.board_profile);
   document.setString("digitizer.channel", toString(config.digitizer.channel));
   document.setNumber("digitizer.sample_rate_hz", config.digitizer.sample_rate_hz);
   setUnsigned(document, "digitizer.sample_point", config.digitizer.sample_point);
@@ -218,7 +219,6 @@ ConfigDocument ConfigProfileCodec::encode(const SystemConfig& config) {
   document.setBoolean("scan.bidirectional", config.scan.bidirectional);
   setUnsigned(document, "scan.x_pixel_count", config.scan.x_pixel_count);
   setUnsigned(document, "scan.y_line_count", config.scan.y_line_count);
-  document.setNumber("scan.line_time_ms", config.scan.line_time_ms);
   document.setInteger("scan.trigger_shift_samples", config.scan.trigger_shift_samples);
   document.setNumber("scan.scanner_sample_rate_hz", config.scan.scanner_sample_rate_hz);
 
@@ -238,16 +238,9 @@ ConfigDocument ConfigProfileCodec::encode(const SystemConfig& config) {
 
   document.setString("processing.fft_backend", toString(config.processing.fft_backend));
   document.setBoolean("processing.dc_removal", config.processing.dc_removal);
-  document.setBoolean("processing.normalize", config.processing.normalize);
   document.setNumber("processing.peak_threshold_db", config.processing.peak_threshold_db);
   setUnsigned(document, "processing.peak_search_start_bin", config.processing.peak_search_start_bin);
   setUnsigned(document, "processing.peak_search_end_bin", config.processing.peak_search_end_bin);
-  document.setBoolean("processing.peak_tracking_enabled", config.processing.peak_tracking_enabled);
-  setUnsigned(document, "processing.peak_tracking_max_delta_bins",
-              config.processing.peak_tracking_max_delta_bins);
-  setUnsigned(document, "processing.peak_reacquire_width_bins",
-              config.processing.peak_reacquire_width_bins);
-  document.setString("processing.peak_lost_policy", toString(config.processing.peak_lost_policy));
   setUnsigned(document, "processing.queue_capacity", config.processing.queue_capacity);
   document.setString("processing.overflow_policy", toString(config.processing.overflow_policy));
 
@@ -307,6 +300,7 @@ bool ConfigProfileCodec::decode(const ConfigDocument& document, SystemConfig& co
 
   readInteger(document, "digitizer.system_id", config.digitizer.system_id, issues, source);
   readInteger(document, "digitizer.board_id", config.digitizer.board_id, issues, source);
+  readString(document, "digitizer.board_profile", config.digitizer.board_profile, issues, source);
   readEnum(document, "digitizer.channel", config.digitizer.channel, issues, source);
   readNumber(document, "digitizer.sample_rate_hz", config.digitizer.sample_rate_hz, issues, source);
   readInteger(document, "digitizer.sample_point", config.digitizer.sample_point, issues, source);
@@ -359,7 +353,6 @@ bool ConfigProfileCodec::decode(const ConfigDocument& document, SystemConfig& co
   readBool(document, "scan.bidirectional", config.scan.bidirectional, issues, source);
   readInteger(document, "scan.x_pixel_count", config.scan.x_pixel_count, issues, source);
   readInteger(document, "scan.y_line_count", config.scan.y_line_count, issues, source);
-  readNumber(document, "scan.line_time_ms", config.scan.line_time_ms, issues, source);
   readInteger(document, "scan.trigger_shift_samples", config.scan.trigger_shift_samples, issues, source);
   readNumber(document, "scan.scanner_sample_rate_hz", config.scan.scanner_sample_rate_hz, issues, source);
 
@@ -384,16 +377,9 @@ bool ConfigProfileCodec::decode(const ConfigDocument& document, SystemConfig& co
 
   readEnum(document, "processing.fft_backend", config.processing.fft_backend, issues, source);
   readBool(document, "processing.dc_removal", config.processing.dc_removal, issues, source);
-  readBool(document, "processing.normalize", config.processing.normalize, issues, source);
   readNumber(document, "processing.peak_threshold_db", config.processing.peak_threshold_db, issues, source);
   readInteger(document, "processing.peak_search_start_bin", config.processing.peak_search_start_bin, issues, source);
   readInteger(document, "processing.peak_search_end_bin", config.processing.peak_search_end_bin, issues, source);
-  readBool(document, "processing.peak_tracking_enabled", config.processing.peak_tracking_enabled, issues, source);
-  readInteger(document, "processing.peak_tracking_max_delta_bins",
-              config.processing.peak_tracking_max_delta_bins, issues, source);
-  readInteger(document, "processing.peak_reacquire_width_bins",
-              config.processing.peak_reacquire_width_bins, issues, source);
-  readEnum(document, "processing.peak_lost_policy", config.processing.peak_lost_policy, issues, source);
   readInteger(document, "processing.queue_capacity", config.processing.queue_capacity, issues, source);
   readEnum(document, "processing.overflow_policy", config.processing.overflow_policy, issues, source);
 

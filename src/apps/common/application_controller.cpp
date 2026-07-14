@@ -3,9 +3,11 @@
 #include "core/acquisition_session.h"
 #include "core/app_version.h"
 #include "core/config_profile.h"
+#include "drivers/mcu/mcu_protocol.h"
 #include "drivers/simulator/fake_digitizer.h"
 #include "drivers/simulator/fake_edfa.h"
 #include "drivers/simulator/fake_mcu.h"
+#include "network/udp_sender_service.h"
 #include "processing/fft_backends.h"
 #include "processing/processing_service.h"
 #include "storage/async_storage_service.h"
@@ -112,6 +114,7 @@ class RuntimeWorker final : public QObject {
     }
 
     storage_.reset();
+    udp_.reset();
     if (config_.storage.raw_enabled || config_.storage.processed_enabled) {
       storage_ = std::make_unique<AsyncStorageService>();
       WriterOpenOptions options;
@@ -142,20 +145,34 @@ class RuntimeWorker final : public QObject {
       }
     }
 
-    processing_->setProcessedFrameCallback([this](ProcessedFramePtr frame) {
-      if (storage_ == nullptr || !config_.storage.processed_enabled) {
+    if (config_.udp.enabled) {
+      udp_ = std::make_unique<UdpSenderService>();
+      std::string udp_error;
+      if (!udp_->start(config_.udp, config_.scan.x_pixel_count, config_.scan.y_line_count, udp_error)) {
+        udp_.reset();
+        stopStorage("UDP sender failed to start");
+        fail("Start", qString(udp_error));
         return;
       }
-      std::string error_message;
-      const auto result = storage_->enqueueProcessed(std::move(frame), error_message);
-      if (result != EnqueueResult::Accepted) {
-        storage_failure_pending_ = true;
+    }
+
+    processing_->setProcessedFrameCallback([this](ProcessedFramePtr frame) {
+      if (udp_ != nullptr) {
+        udp_->enqueue(frame);
+      }
+      if (storage_ != nullptr && config_.storage.processed_enabled) {
+        std::string error_message;
+        const auto result = storage_->enqueueProcessed(std::move(frame), error_message);
+        if (result != EnqueueResult::Accepted) {
+          storage_failure_pending_ = true;
+        }
       }
     });
 
     std::string core_error;
     if (!processing_->start(core_error)) {
       stopStorage("Processing failed to start");
+      stopUdp();
       fail("Start", qString(core_error));
       return;
     }
@@ -167,6 +184,7 @@ class RuntimeWorker final : public QObject {
       processing_->requestStop("Device start failed");
       processing_->waitUntilStopped(core_error);
       stopStorage("Device start failed");
+      stopUdp();
       fail("Start", qString(start_error));
       return;
     }
@@ -178,8 +196,10 @@ class RuntimeWorker final : public QObject {
     state_ = recording_ ? OperationState::Recording : OperationState::Acquiring;
     acquisition_timer_->start();
     emitLog("INFO", "Acquisition", "Global START completed; full-period up-triggered frames are active");
-    if (config_.udp.enabled) {
-      emitLog("WARNING", "UDP", "Endpoint is configured; network sender activation is scheduled for Phase 6");
+    if (udp_ != nullptr) {
+      emitLog("INFO", "UDP", QString("Sending point frames to %1:%2")
+                                 .arg(qString(config_.udp.target_ip))
+                                 .arg(config_.udp.target_port));
     }
     publishStatus(recording_ ? "Acquiring and recording" : "Acquiring");
     emit commandCompleted("Start", "Acquisition started");
@@ -202,6 +222,7 @@ class RuntimeWorker final : public QObject {
     std::string error;
     session_.emergencyStop(error);
     stopProcessing("Emergency stop");
+    stopUdp();
     stopStorage("Emergency stop");
     running_ = false;
     recording_ = false;
@@ -229,6 +250,17 @@ class RuntimeWorker final : public QObject {
     emit commandCompleted("Processing update", "Settings apply on the next processed frame");
   }
 
+  void setSelectedAScanRuntime(std::uint32_t record_index) {
+    selected_record_index_ = config_.digitizer.records_per_buffer == 0U
+        ? 0U
+        : std::min(record_index, config_.digitizer.records_per_buffer - 1U);
+    if (processing_ != nullptr) {
+      processing_->setSelectedRecordIndex(selected_record_index_);
+    }
+    emitLog("INFO", "Live View", QString("Selected A-scan %1 for Time Domain and FFT display")
+                                     .arg(selected_record_index_));
+  }
+
   void setEdfaOutputRuntime(bool enabled) {
     std::string error;
     if (!edfa_.setOutputEnabled(enabled, error)) {
@@ -250,22 +282,25 @@ class RuntimeWorker final : public QObject {
       emit commandCompleted("MCU waveform", "MCU is disabled; bypass remains ready");
       return;
     }
-    const auto count = std::min<std::uint32_t>(config_.scan.x_pixel_count, 15000U);
-    std::vector<McuWaveformFrame> frames(count);
-    for (std::uint32_t index = 0; index < count; ++index) {
-      const auto code = static_cast<std::uint16_t>(count <= 1U ? 0U : (index * 65535U) / (count - 1U));
-      frames[index].a = code;
-      frames[index].b = static_cast<std::uint16_t>(65535U - code);
-      frames[index].trigger = true;
-    }
+    const auto x_count = derivedAScanCount(config_);
+    const auto y_count = config_.scan.y_line_count;
+    const auto point_count = derivedFramePointCount(config_);
     std::string error;
+    auto frames = McuProtocol::buildFullFrameWaveform(config_, error);
+    if (frames.empty()) {
+      reject("MCU waveform", qString(error));
+      return;
+    }
     if (!mcu_.uploadWaveform(frames, error)) {
       reject("MCU waveform", qString(error));
       return;
     }
-    emitLog("INFO", "MCU", QString("Uploaded %1 scan waveform points").arg(count));
+    emitLog("INFO", "MCU", QString("Uploaded one full frame: %1 A-scans x %2 B-scans = %3 points")
+                                  .arg(x_count)
+                                  .arg(y_count)
+                                  .arg(point_count));
     publishStatus("MCU waveform loaded");
-    emit commandCompleted("MCU waveform", QString("%1 points uploaded").arg(count));
+    emit commandCompleted("MCU waveform", QString("%1-point full-frame waveform uploaded").arg(point_count));
   }
 
   void captureSegmentationSnapshotRuntime() {
@@ -296,6 +331,7 @@ class RuntimeWorker final : public QObject {
   void fftReady(fmcw::FftSnapshotPtr snapshot);
   void scanLineReady(fmcw::ScanLineSnapshotPtr snapshot);
   void bscanReady(fmcw::BScanSnapshotPtr snapshot);
+  void pointCloudReady(fmcw::PointCloudSnapshotPtr snapshot);
   void segmentationSnapshotReady(fmcw::WaveformSnapshotPtr snapshot);
   void logMessage(QString level, QString source, QString message);
   void commandFailed(QString command, QString message);
@@ -325,6 +361,8 @@ class RuntimeWorker final : public QObject {
       error = qString(core_error);
       return false;
     }
+    selected_record_index_ = std::min(selected_record_index_, config.digitizer.records_per_buffer - 1U);
+    processing_->setSelectedRecordIndex(selected_record_index_);
     if (!session_.configure(config, next_revision, core_error)) {
       processing_.reset();
       error = qString(core_error);
@@ -411,6 +449,7 @@ class RuntimeWorker final : public QObject {
     const auto fft = processing_->snapshots().latestFft();
     const auto line = processing_->snapshots().latestScanLine();
     const auto bscan = processing_->snapshots().latestBScan();
+    const auto point_cloud = processing_->snapshots().latestPointCloud();
     if (waveform != nullptr) {
       emit waveformReady(waveform);
     }
@@ -422,6 +461,9 @@ class RuntimeWorker final : public QObject {
     }
     if (bscan != nullptr) {
       emit bscanReady(bscan);
+    }
+    if (point_cloud != nullptr) {
+      emit pointCloudReady(point_cloud);
     }
   }
 
@@ -438,6 +480,7 @@ class RuntimeWorker final : public QObject {
       session_.stop(error);
     }
     stopProcessing(reason);
+    stopUdp();
     stopStorage(reason);
     running_ = false;
     recording_ = false;
@@ -455,6 +498,20 @@ class RuntimeWorker final : public QObject {
     processing_->requestStop(reason.toStdString());
     std::string error;
     processing_->waitUntilStopped(error);
+  }
+
+  void stopUdp() {
+    if (udp_ == nullptr) {
+      return;
+    }
+    udp_->stop();
+    const auto status = udp_->status();
+    emitLog(status.send_errors == 0U ? "INFO" : "ERROR", "UDP",
+            QString("UDP stopped: %1 frames, %2 packets, %3 dropped")
+                .arg(status.frames_sent)
+                .arg(status.packets_sent)
+                .arg(status.dropped_frames));
+    udp_.reset();
   }
 
   void stopStorage(const QString& reason) {
@@ -484,7 +541,14 @@ class RuntimeWorker final : public QObject {
     status.mcu_ready = telemetry.mcu.device.ready;
     status.mcu_bypassed = !config_.mcu.enabled;
     status.mcu_waveform_loaded = telemetry.mcu.waveform_points > 0U;
+    status.mcu_waveform_points = telemetry.mcu.waveform_points;
+    status.mcu_frame_time_ms = telemetry.mcu.waveform_points == 0U || !(config_.scan.scanner_sample_rate_hz > 0.0)
+        ? 0.0
+        : static_cast<double>(telemetry.mcu.waveform_points) * 1000.0 / config_.scan.scanner_sample_rate_hz;
     status.frames_received = telemetry.digitizer.frames_received;
+    status.dma_buffers_received = telemetry.digitizer.dma_buffers_received;
+    status.dma_bscan_rate_hz = telemetry.digitizer.dma_buffer_rate_hz;
+    status.dma_bscan_period_ms = telemetry.digitizer.dma_buffer_period_ms;
     if (processing_ != nullptr) {
       const auto processing_status = processing_->status();
       status.frames_processed = processing_status.frames_processed;
@@ -502,6 +566,16 @@ class RuntimeWorker final : public QObject {
       status.storage_queue_capacity = storage_status.queue_capacity;
       status.storage_throughput_mbps = storage_status.raw_writer.throughput_mbps +
                                        storage_status.processed_writer.throughput_mbps;
+    }
+    if (udp_ != nullptr) {
+      const auto udp_status = udp_->status();
+      status.udp_running = udp_status.running;
+      status.udp_frames_sent = udp_status.frames_sent;
+      status.udp_packets_sent = udp_status.packets_sent;
+      status.udp_dropped_frames = udp_status.dropped_frames;
+      status.udp_queue_size = udp_status.queue_size;
+      status.udp_queue_capacity = udp_status.queue_capacity;
+      status.udp_send_fps = udp_status.send_fps;
     }
     emit statusChanged(status);
   }
@@ -531,10 +605,12 @@ class RuntimeWorker final : public QObject {
   AcquisitionSession session_;
   std::unique_ptr<ProcessingService> processing_;
   std::unique_ptr<AsyncStorageService> storage_;
+  std::unique_ptr<UdpSenderService> udp_;
   SystemConfig config_;
   OperationState state_ = OperationState::Disconnected;
   std::uint64_t config_revision_ = 0;
   std::uint64_t processing_revision_ = 0;
+  std::uint32_t selected_record_index_ = 0;
   int snapshot_divider_ = 0;
   bool configured_ = false;
   bool connected_ = false;
@@ -549,6 +625,7 @@ ApplicationController::ApplicationController(QString platform_name, QObject* par
   qRegisterMetaType<FftSnapshotPtr>();
   qRegisterMetaType<ScanLineSnapshotPtr>();
   qRegisterMetaType<BScanSnapshotPtr>();
+  qRegisterMetaType<PointCloudSnapshotPtr>();
 
   worker_ = new RuntimeWorker(std::move(platform_name));
   worker_->moveToThread(&runtime_thread_);
@@ -559,6 +636,7 @@ ApplicationController::ApplicationController(QString platform_name, QObject* par
   connect(worker_, &RuntimeWorker::fftReady, this, &ApplicationController::fftReady);
   connect(worker_, &RuntimeWorker::scanLineReady, this, &ApplicationController::scanLineReady);
   connect(worker_, &RuntimeWorker::bscanReady, this, &ApplicationController::bscanReady);
+  connect(worker_, &RuntimeWorker::pointCloudReady, this, &ApplicationController::pointCloudReady);
   connect(worker_, &RuntimeWorker::segmentationSnapshotReady, this,
           &ApplicationController::segmentationSnapshotReady);
   connect(worker_, &RuntimeWorker::logMessage, this, &ApplicationController::logMessage);
@@ -605,6 +683,12 @@ void ApplicationController::emergencyStop() {
 void ApplicationController::updateProcessing(const ProcessingConfig& config) {
   QMetaObject::invokeMethod(worker_, [worker = worker_, config] { worker->updateProcessingRuntime(config); },
                             Qt::QueuedConnection);
+}
+
+void ApplicationController::setSelectedAScan(std::uint32_t record_index) {
+  QMetaObject::invokeMethod(worker_, [worker = worker_, record_index] {
+    worker->setSelectedAScanRuntime(record_index);
+  }, Qt::QueuedConnection);
 }
 
 void ApplicationController::setEdfaOutput(bool enabled) {

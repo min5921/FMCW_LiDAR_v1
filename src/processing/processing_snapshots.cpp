@@ -9,7 +9,9 @@ void ProcessingSnapshotStore::configure(std::uint32_t x_pixel_count, std::uint32
   std::lock_guard<std::mutex> lock(mutex_);
   width_ = x_pixel_count;
   height_ = y_line_count;
+  selected_record_index_ = width_ == 0U ? 0U : std::min(selected_record_index_, width_ - 1U);
   has_active_line_ = false;
+  scan_frame_index_ = 0;
   line_fill_count_ = 0;
   line_work_ = {};
   line_filled_.assign(width_, 0U);
@@ -18,10 +20,15 @@ void ProcessingSnapshotStore::configure(std::uint32_t x_pixel_count, std::uint32
   bscan_work_.height = height_;
   bscan_work_.z_m.assign(static_cast<std::size_t>(width_) * height_, 0.0F);
   bscan_work_.valid.assign(static_cast<std::size_t>(width_) * height_, 0U);
+  point_cloud_work_ = {};
+  point_cloud_work_.width = width_;
+  point_cloud_work_.height = height_;
+  point_cloud_work_.points.assign(static_cast<std::size_t>(width_) * height_, {});
   waveform_.reset();
   fft_.reset();
   scan_line_.reset();
   bscan_.reset();
+  point_cloud_.reset();
 }
 
 void ProcessingSnapshotStore::resetLine(std::uint32_t y_index) {
@@ -44,34 +51,66 @@ void ProcessingSnapshotStore::resetLine(std::uint32_t y_index) {
   line_filled_.assign(width_, 0U);
 }
 
-void ProcessingSnapshotStore::publish(const RawFrame& raw, const ProcessedFrame& processed) {
-  auto waveform = std::make_shared<WaveformSnapshot>();
-  waveform->frame_id = raw.metadata.frame_id;
-  waveform->config_revision = raw.metadata.config_revision;
-  waveform->channel = raw.metadata.channel;
-  waveform->sample_rate_hz = raw.metadata.sample_rate_hz;
-  waveform->up_segment = raw.metadata.up_segment;
-  waveform->down_segment = raw.metadata.down_segment;
-  waveform->normalized_samples.resize(raw.samples.size());
-  std::transform(raw.samples.begin(), raw.samples.end(), waveform->normalized_samples.begin(),
-                 [](std::int16_t value) { return static_cast<float>(value) / 32768.0F; });
-
-  auto fft = std::make_shared<FftSnapshot>();
-  fft->frame_id = processed.frame_id;
-  fft->processing_config_revision = processed.processing_config_revision;
-  fft->up_magnitude_db = processed.up_fft_magnitude_db;
-  fft->down_magnitude_db = processed.down_fft_magnitude_db;
-  fft->up_peak = processed.up_peak;
-  fft->down_peak = processed.down_peak;
-
+void ProcessingSnapshotStore::setSelectedRecordIndex(std::uint32_t record_index) {
   std::lock_guard<std::mutex> lock(mutex_);
-  waveform_ = std::move(waveform);
-  fft_ = std::move(fft);
+  selected_record_index_ = width_ == 0U ? 0U : std::min(record_index, width_ - 1U);
+  waveform_.reset();
+  fft_.reset();
+}
+
+std::uint32_t ProcessingSnapshotStore::selectedRecordIndex() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return selected_record_index_;
+}
+
+void ProcessingSnapshotStore::publish(const RawFrame& raw, const ProcessedFrame& processed) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (raw.metadata.record_index_in_buffer == selected_record_index_) {
+    auto waveform = std::make_shared<WaveformSnapshot>();
+    waveform->frame_id = raw.metadata.frame_id;
+    waveform->dma_buffer_sequence = raw.metadata.dma_buffer_sequence;
+    waveform->record_index_in_buffer = raw.metadata.record_index_in_buffer;
+    waveform->records_in_buffer = raw.metadata.records_in_buffer;
+    waveform->config_revision = raw.metadata.config_revision;
+    waveform->channel = raw.metadata.channel;
+    waveform->sample_rate_hz = raw.metadata.sample_rate_hz;
+    waveform->up_segment = raw.metadata.up_segment;
+    waveform->down_segment = raw.metadata.down_segment;
+    waveform->full_scale_samples.resize(raw.samples.size());
+    std::transform(raw.samples.begin(), raw.samples.end(), waveform->full_scale_samples.begin(),
+                   [](std::int16_t value) { return static_cast<float>(value) / 32768.0F; });
+
+    auto fft = std::make_shared<FftSnapshot>();
+    fft->frame_id = processed.frame_id;
+    fft->dma_buffer_sequence = raw.metadata.dma_buffer_sequence;
+    fft->record_index_in_buffer = raw.metadata.record_index_in_buffer;
+    fft->records_in_buffer = raw.metadata.records_in_buffer;
+    fft->processing_config_revision = processed.processing_config_revision;
+    fft->up_magnitude_db = processed.up_fft_magnitude_db;
+    fft->down_magnitude_db = processed.down_fft_magnitude_db;
+    fft->up_peak = processed.up_peak;
+    fft->down_peak = processed.down_peak;
+    waveform_ = std::move(waveform);
+    fft_ = std::move(fft);
+  }
   if (!processed.scan_position.valid || processed.scan_position.x_index >= width_ ||
       processed.scan_position.y_index >= height_ || width_ == 0U || height_ == 0U) {
     return;
   }
   if (!has_active_line_ || active_y_ != processed.scan_position.y_index) {
+    if (processed.scan_position.y_index == 0U) {
+      if (bscan_work_.last_frame_id != 0U) {
+        ++scan_frame_index_;
+      }
+      std::fill(bscan_work_.z_m.begin(), bscan_work_.z_m.end(), 0.0F);
+      std::fill(bscan_work_.valid.begin(), bscan_work_.valid.end(), 0U);
+      bscan_work_.completed_lines = 0U;
+      bscan_work_.scan_frame_index = scan_frame_index_;
+      std::fill(point_cloud_work_.points.begin(), point_cloud_work_.points.end(), PointXYZI{});
+      point_cloud_work_.completed_lines = 0U;
+      point_cloud_work_.complete = false;
+      point_cloud_work_.scan_frame_index = scan_frame_index_;
+    }
     resetLine(processed.scan_position.y_index);
   }
   const auto x = processed.scan_position.x_index;
@@ -91,6 +130,8 @@ void ProcessingSnapshotStore::publish(const RawFrame& raw, const ProcessedFrame&
   line_work_.up_peak_state[x] = static_cast<std::uint8_t>(processed.up_peak.state);
   line_work_.down_peak_state[x] = static_cast<std::uint8_t>(processed.down_peak.state);
   line_work_.valid[x] = processed.measurement_valid ? 1U : 0U;
+  const auto point_offset = static_cast<std::size_t>(processed.scan_position.y_index) * width_ + x;
+  point_cloud_work_.points[point_offset] = processed.point;
 
   if (line_fill_count_ != width_) {
     return;
@@ -107,6 +148,11 @@ void ProcessingSnapshotStore::publish(const RawFrame& raw, const ProcessedFrame&
   bscan_work_.processing_config_revision = processed.processing_config_revision;
   bscan_work_.completed_lines = std::min(height_, bscan_work_.completed_lines + 1U);
   bscan_ = std::make_shared<BScanSnapshot>(bscan_work_);
+  point_cloud_work_.last_frame_id = processed.frame_id;
+  point_cloud_work_.processing_config_revision = processed.processing_config_revision;
+  point_cloud_work_.completed_lines = bscan_work_.completed_lines;
+  point_cloud_work_.complete = point_cloud_work_.completed_lines == height_;
+  point_cloud_ = std::make_shared<PointCloudSnapshot>(point_cloud_work_);
   has_active_line_ = false;
 }
 
@@ -128,6 +174,11 @@ std::shared_ptr<const ScanLineSnapshot> ProcessingSnapshotStore::latestScanLine(
 std::shared_ptr<const BScanSnapshot> ProcessingSnapshotStore::latestBScan() const {
   std::lock_guard<std::mutex> lock(mutex_);
   return bscan_;
+}
+
+std::shared_ptr<const PointCloudSnapshot> ProcessingSnapshotStore::latestPointCloud() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return point_cloud_;
 }
 
 }  // namespace fmcw

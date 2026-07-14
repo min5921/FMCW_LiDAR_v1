@@ -57,6 +57,7 @@ class ProcessingService {
 
   ProcessingSnapshotStore& snapshots();
   const ProcessingSnapshotStore& snapshots() const;
+  void setSelectedRecordIndex(std::uint32_t record_index);
 
  private:
   struct Impl;

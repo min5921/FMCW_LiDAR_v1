@@ -11,7 +11,11 @@ One `RawFrame` means:
 - one complete captured laser period containing both the up and down chirps;
 - one record before software chirp segmentation.
 
-An Alazar DMA buffer may contain multiple raw frames. A scan line and a complete B-scan are higher-level groups of raw frames; they are not raw frames themselves.
+An Alazar DMA buffer contains the records for one B-scan line. Each record is one A-scan `RawFrame`, and a configured number of completed B-scan lines forms one complete raster frame.
+
+For the active scan contract, `records_per_buffer` is the A-scan count in one B-scan line. The operator sets B-scans per frame. The MCU waveform contains `records_per_buffer * B-scans_per_frame` points, while B-scan rate and period are measured from Alazar DMA buffer completion timestamps.
+
+Runtime metadata also carries `dma_buffer_sequence`, zero-based `record_index_in_buffer`, and `records_in_buffer`. Live Time Domain and FFT snapshots update only when `record_index_in_buffer` matches the operator-selected A-scan. This display filter does not remove frames from processing, peak analysis, B-scan assembly, UDP frame assembly, or raw storage.
 
 The v1 acquisition UI exposes only the `up_chirp_only` trigger mode. Legacy up/down trigger pairs may be imported by replay or migration tools, but are not an active hardware profile option.
 
@@ -42,7 +46,7 @@ Configuration and optical-state history map each revision to the first and last 
 
 ## Processed Frame Unit
 
-One `ProcessedFrame` is the result of processing one full-period `RawFrame` at one scan position. It carries independent up/down FFT magnitude arrays, peak/tracking results, one distance/velocity measurement, and one XYZ point. Invalid or held peaks remain visible for diagnostics but do not produce a valid measurement.
+One `ProcessedFrame` is the result of processing one full-period `RawFrame` at one scan position. It carries independent up/down FFT magnitude arrays, independently detected peak results, one distance/velocity measurement, and one XYZ point. A peak below threshold is invalid for that A-scan; no value is carried from a previous A-scan.
 
 Scan-line and B-scan arrays are derived immutable snapshots. They are not embedded back into every processed frame.
 
@@ -62,3 +66,23 @@ Scan-line and B-scan arrays are derived immutable snapshots. They are not embedd
 - Raw files use numbered parts named `<stem>.raw.0000.bin`, `<stem>.raw.0001.bin`, and so on.
 - Replay opened at part `0000` automatically continues through compatible numbered parts.
 - Processed binary and raw/processed JSON sidecars use the same session/config revision identity as the source raw frame.
+
+## UDP Point Packet V1
+
+Each complete raster frame is assembled from all scan positions and split into one or more UDP datagrams. Invalid measurements are omitted from the point array. Multi-byte fields and IEEE-754 floats use little-endian byte order.
+
+| Offset | Type | Field |
+|---:|---|---|
+| 0 | char[4] | magic `FMCW` |
+| 4 | uint16 | packet format version, currently 1 |
+| 6 | uint16 | header bytes, currently 40 |
+| 8 | uint64 | one-based raster frame ID |
+| 16 | uint64 | source timestamp in ns |
+| 24 | uint64 | config revision |
+| 32 | uint16 | total segment count |
+| 34 | uint16 | zero-based segment index |
+| 36 | uint16 | points in this datagram |
+| 38 | uint16 | point stride, currently 20 bytes |
+| 40 | float[5] x N | x, y, z, intensity, velocity |
+
+The maximum v1 datagram payload is 65,507 bytes, so `packet_point_count` is validated in the range 1..3273. The sender runs on its own worker thread and reports queue use, frames/packets sent, send FPS, dropped frames, and send errors.

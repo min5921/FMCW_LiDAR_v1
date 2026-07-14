@@ -4,14 +4,16 @@
 #include <QDir>
 #include <QEventLoop>
 #include <QFileInfo>
+#include <QPixmap>
 #include <QTimer>
 
 int main(int argc, char* argv[]) {
   QApplication app(argc, argv);
   fmcw::MainWindow window(QStringLiteral(FMCW_PLATFORM_NAME));
+  const auto arguments = app.arguments();
+  window.setDarkTheme();
   window.show();
 
-  const auto arguments = app.arguments();
   if (arguments.contains(QStringLiteral("--demo-run"))) {
     QTimer::singleShot(200, &window, &fmcw::MainWindow::startDemo);
   }
@@ -40,11 +42,18 @@ int main(int argc, char* argv[]) {
   }
   if (!screenshot_path.isEmpty()) {
     QTimer::singleShot(arguments.contains(QStringLiteral("--demo-run")) ? 5200 : 1000, &window,
-                       [&app, &window, screenshot_path] {
+                       [&app, &window, screenshot_path, live_tab_index] {
                          QDir().mkpath(QFileInfo(screenshot_path).absolutePath());
                          window.repaint();
                          QApplication::processEvents(QEventLoop::AllEvents, 100);
-                         app.exit(window.grab().save(screenshot_path, "PNG") ? 0 : 2);
+                         if (live_tab_index == 5) {
+                           app.exit(window.savePointCloudFramebuffer(screenshot_path) ? 0 : 2);
+                           return;
+                         }
+                         QPixmap capture(window.size());
+                         capture.fill(Qt::transparent);
+                         window.render(&capture);
+                         app.exit(capture.save(screenshot_path, "PNG") ? 0 : 2);
                        });
   } else if (arguments.contains(QStringLiteral("--smoke-test"))) {
     QTimer::singleShot(100, &app, &QApplication::quit);

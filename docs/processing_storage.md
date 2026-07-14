@@ -6,9 +6,9 @@ Phase 4 pipeline은 single-channel `RawFrame` 한 개를 다음 결과로 변환
 
 1. full-period raw record 검증
 2. up/down segment extraction
-3. DC removal, optional normalization, window, zero padding
+3. fixed ADC full-scale conversion, optional DC removal, window, zero padding
 4. FFTW 또는 CUDA/cuFFT R2C FFT
-5. dBFS magnitude와 peak detection/tracking
+5. dBFS magnitude와 independent peak detection
 6. distance, velocity, XYZ 변환
 7. scan line 및 B-scan Z matrix 누적
 8. immutable UI snapshot 발행
@@ -36,7 +36,6 @@ Profile의 `processing.fft_backend`와 전달된 backend 종류가 다르면 con
 
 - ADC `int16`를 `[-1, 1)` 범위로 변환한다.
 - `dc_removal=true`이면 segment 평균을 제거한다.
-- `normalize=true`이면 segment 최대 절댓값으로 정규화한다.
 - configured window를 실제 segment 길이에 적용한다.
 - `segment_fft_length`까지 zero padding한다.
 - down segment는 `invert_down` polarity를 적용한다.
@@ -47,19 +46,11 @@ Magnitude는 one-sided amplitude와 window coherent sum을 보정해 dBFS로 계
 magnitude_db = 20 log10(max(2 |FFT[k]| / sum(window), 1e-10))
 ```
 
-## 4. Peak Detection And Tracking
+## 4. Peak Detection
 
 Peak candidate는 configured search range에서 threshold 이상인 최대 magnitude bin이다. 좌우 bin이 있으면 parabolic interpolation으로 fractional bin을 계산한다.
 
-Tracking은 한 B-scan line 안의 acquisition 순서에서 up/down chirp를 독립적으로 수행한다.
-
-- `Detected`: line의 첫 valid peak 또는 tracking disabled
-- `Tracked`: 이전 valid peak와의 차이가 max delta 이내
-- `Reacquired`: local reacquire range 또는 global candidate로 track 재설정
-- `HeldLast`: 마지막 bin은 표시하지만 measurement validity는 false
-- `Lost`: candidate를 승인할 수 없음
-
-`stop_acquisition` lost policy는 `ProcessedFrame.stop_requested`와 `ProcessingServiceStatus.stop_requested`를 설정한다. `HeldLast`와 `Lost` 결과는 distance/velocity/UDP의 valid measurement로 사용하지 않는다.
+UP과 DOWN peak는 각 A-scan에서 독립적으로 검출한다. 이전 A-scan의 peak index를 추적하거나 유지하지 않는다. 한쪽이라도 threshold 이상 peak가 없으면 해당 A-scan의 measurement validity는 false이며 distance, velocity, XYZ를 생성하지 않는다.
 
 ## 5. Distance And Velocity
 
@@ -83,12 +74,18 @@ z = R cos(y_angle) cos(x_angle)
 
 `ProcessingSnapshotStore`는 다음 최신 immutable snapshot을 제공한다.
 
-- `WaveformSnapshot`: normalized full-period waveform과 up/down range
-- `FftSnapshot`: up/down magnitude와 detected/tracked peak
-- `ScanLineSnapshot`: X pixel별 peak index/value, distance, velocity, Z, tracking state, validity
+- `WaveformSnapshot`: ADC full-scale 기준 full-period waveform과 up/down range
+- `FftSnapshot`: up/down magnitude와 independently detected peak
+- `ScanLineSnapshot`: X pixel별 peak index/value, distance, velocity, Z, validity
 - `BScanSnapshot`: `width x height` Z matrix와 validity mask
 
 Waveform/FFT는 processed frame마다 교체한다. Scan line과 B-scan은 모든 X pixel이 채워졌을 때 publish한다. UI가 느리면 과거 snapshot을 누적하지 않고 최신 shared snapshot을 읽는다.
+
+### Selected Display And 3D Snapshot
+
+- `PointCloudSnapshot` carries raster XYZ/intensity/velocity points, completed-line count, frame index, and completion state.
+- `WaveformSnapshot` and `FftSnapshot` are published only for the configured zero-based `record_index_in_buffer`.
+- This is the legacy-compatible display selection. Every A-scan still passes through FFT, peak measurement, scan-line/B-scan/point-cloud aggregation, raw/processed storage, and UDP assembly.
 
 ## 7. Processing Service
 
@@ -97,7 +94,7 @@ Waveform/FFT는 processed frame마다 교체한다. Scan line과 B-scan은 모�
 - enqueue는 FFT 완료를 기다리지 않는다.
 - runtime peak setting은 다음 frame boundary에서 적용한다.
 - 적용된 `processing_config_revision`을 processed frame과 snapshot에 기록한다.
-- overflow, backend failure, peak stop policy는 stop reason을 보존하고 새 enqueue를 거부한다.
+- overflow와 backend failure는 stop reason을 보존하고 새 enqueue를 거부한다.
 - processed callback은 storage/UDP queue에 넘기는 non-blocking callback으로만 사용한다.
 
 ## 8. Binary Storage
@@ -111,7 +108,7 @@ Waveform/FFT는 processed frame마다 교체한다. Scan line과 B-scan은 모�
 
 Raw binary는 stream header 뒤에 frame record를 순차 기록한다. 각 record에는 frame/config/trigger/scan/optical/segment metadata와 full-period `int16` payload가 들어간다. Raw frame을 segment로 자른 뒤 저장하지 않는다.
 
-Processed binary에는 up/down FFT magnitude, peak와 tracking state, distance, velocity, XYZ, validity, latency, processing revision을 기록한다.
+Processed binary에는 up/down FFT magnitude, peak와 validity, distance, velocity, XYZ, latency, processing revision을 기록한다.
 
 JSON sidecar에는 다음을 기록한다.
 
@@ -136,6 +133,5 @@ Replay frame은 hardware frame과 같은 `SignalProcessor` 또는 `ProcessingSer
 - storage queue overflow: storage stop request
 - raw/processed write failure: writer failure stop request
 - FFT backend failure: processing stop request
-- peak lost with stop policy: processing stop request
 
 상위 session controller는 이 상태를 `OperationController`의 queue overflow, writer failure, device error stop cause로 변환하고 global STOP sequence를 수행해야 한다.

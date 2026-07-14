@@ -22,7 +22,6 @@ class SignalProcessor {
   bool updateRuntimeConfig(const ProcessingConfig& config, std::uint64_t processing_config_revision,
                            std::string& error);
   bool process(const RawFrame& raw, ProcessedFrame& processed, std::string& error);
-  void resetTracking();
 
   std::string backendName() const;
   std::uint64_t processingConfigRevision() const;

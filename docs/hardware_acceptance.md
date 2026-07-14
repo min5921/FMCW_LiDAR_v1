@@ -12,6 +12,8 @@
 
 ## Windows Alazar
 
+Current workstation discovery with ATS-SDK 25.1.0 reports one ATS9371 at System 1 / Board 1: 12-bit, serial 860928, FPGA 35.3, driver 7.13.12. The application treats this address and model as fixed and rejects a mismatch.
+
 1. 보드 모델에 맞는 AlazarTech Windows driver와 ATS-SDK를 설치한다.
 2. vendor utility에서 board가 정상 인식되고 self-test를 통과하는지 확인한다.
 3. x64 Developer Command Prompt에서 SDK root를 지정한다.
@@ -19,7 +21,7 @@
 ```powershell
 cmake --preset windows-msvc-release `
   -DCMAKE_PREFIX_PATH=C:\Qt\6.11.0\msvc2022_64 `
-  -DALAZAR_SDK_ROOT=C:\AlazarTech\ATS-SDK\26.2.0
+  -DALAZAR_SDK_ROOT=C:\AlazarTech\ATS-SDK\25.1.0
 cmake --build --preset windows-msvc-release
 ```
 

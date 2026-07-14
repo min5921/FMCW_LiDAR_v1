@@ -82,9 +82,15 @@ bool FakeDigitizer::start(std::string& error) {
   telemetry_.device.running = true;
   telemetry_.device.detail = "Generating up-triggered full-period frames";
   telemetry_.frames_received = 0;
+  telemetry_.dma_buffers_received = 0;
   telemetry_.dma_buffer_drops = 0;
   telemetry_.trigger_misses = 0;
   telemetry_.trigger_jitter_ns = 0.0;
+  telemetry_.dma_buffer_period_ms = static_cast<double>(config_.digitizer.records_per_buffer) *
+      config_.laser.chirp_period_us / 1000.0;
+  telemetry_.dma_buffer_rate_hz = telemetry_.dma_buffer_period_ms > 0.0
+      ? 1000.0 / telemetry_.dma_buffer_period_ms
+      : 0.0;
   next_frame_id_ = 1;
   aborted_ = false;
   error.clear();
@@ -111,6 +117,9 @@ FrameWaitResult FakeDigitizer::waitForFrame(RawFrame& frame, std::chrono::millis
 
   fillFrame(frame, next_frame_id_++);
   ++telemetry_.frames_received;
+  if (telemetry_.frames_received % config_.digitizer.records_per_buffer == 0U) {
+    ++telemetry_.dma_buffers_received;
+  }
   error.clear();
   return FrameWaitResult::FrameReady;
 }
@@ -149,6 +158,10 @@ void FakeDigitizer::fillFrame(RawFrame& frame, std::uint64_t frame_id) const {
   auto& metadata = frame.metadata;
   metadata.frame_kind = FrameKind::FullChirpPeriod;
   metadata.frame_id = frame_id;
+  metadata.dma_buffer_sequence = (frame_id - 1U) / config_.digitizer.records_per_buffer;
+  metadata.record_index_in_buffer = static_cast<std::uint32_t>(
+      (frame_id - 1U) % config_.digitizer.records_per_buffer);
+  metadata.records_in_buffer = config_.digitizer.records_per_buffer;
   metadata.host_timestamp_ns = nowNs();
   metadata.trigger.sequence = frame_id;
   metadata.trigger.timestamp_ns = metadata.host_timestamp_ns;

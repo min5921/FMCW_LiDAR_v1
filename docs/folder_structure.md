@@ -121,6 +121,7 @@ legacy/EDFA-Amplifier-V20240219/
 - `drivers/mcu/`: STM32 waveform command/ACK protocol과 controller
 - `drivers/serial/`: Win32 COM과 Jetson/Linux tty 공통 transport
 - `drivers/simulator/`: 장비 없는 full-period acquisition과 optional device simulator
+- `network/`: UDP point packet codec and asynchronous sender service
 - `processing/`: GPU FFT, CPU FFT, peak detection, distance/velocity
 - `storage/`: raw writer, processed writer
 - `visualization/`: 2D plot, heatmap, 3D point cloud 공통 로직
