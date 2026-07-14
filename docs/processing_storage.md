@@ -115,6 +115,8 @@ Waveform/FFT는 processed frame마다 교체한다. Scan line과 B-scan은 모�
 
 Raw binary는 stream header 뒤에 frame record를 순차 기록한다. 각 record에는 frame/config/trigger/scan/optical/segment metadata와 full-period `int16` payload가 들어간다. Raw frame을 segment로 자른 뒤 저장하지 않는다.
 
+Phase 7.1 결정으로 raw format v1과 `RawFrame`은 SDK의 left-aligned padding bit를 제거하고 signed full-scale로 변환한 `int16` 계약을 유지한다. 따라서 기존 FFT와 replay 파일의 의미는 바뀌지 않는다. 원본 Alazar DMA `uint16` 블록을 복사 없이 보존하는 고속 포맷은 Phase 7.4에서 raw format v2로 추가하며, v1 replay 호환성을 함께 유지한다.
+
 Processed binary에는 up/down FFT magnitude, peak와 validity, distance, velocity, XYZ, latency, processing revision을 기록한다.
 
 JSON sidecar에는 다음을 기록한다.

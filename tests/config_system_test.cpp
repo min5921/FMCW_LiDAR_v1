@@ -5,6 +5,7 @@
 #include "core/digitizer_capabilities.h"
 #include "core/operation_controller.h"
 
+#include <algorithm>
 #include <filesystem>
 #include <cmath>
 #include <iostream>
@@ -22,10 +23,19 @@ void expect(bool condition, const std::string& message) {
   }
 }
 
+bool hasIssue(const fmcw::ValidationResult& result, fmcw::ValidationSeverity severity,
+              const std::string& path) {
+  return std::any_of(result.issues.begin(), result.issues.end(),
+                     [&](const fmcw::ValidationIssue& issue) {
+                       return issue.severity == severity && issue.path == path;
+                     });
+}
+
 void testDefaultsAndRoundTrip() {
   const fmcw::SystemConfig defaults;
   const auto validation = fmcw::ConfigValidator::validate(defaults);
   expect(!validation.hasErrors(), "code defaults pass validation");
+  expect(!validation.hasWarnings(), "code defaults do not produce timing or performance warnings");
 
   const auto yaml = fmcw::ConfigProfileCodec::toYaml(defaults);
   const auto decoded = fmcw::ConfigProfileCodec::decodeYaml(yaml, "round-trip");
@@ -83,7 +93,9 @@ void testStrictYamlAndLayering() {
   expect(layered.config.profile.id == "lab-simulator", "user profile overrides the built-in profile id");
   expect(layered.config.processing.fft_backend == fmcw::FftBackendKind::Fftw,
          "user profile overrides the platform FFT backend");
-  expect(!fmcw::ConfigValidator::validate(layered.config).hasErrors(), "layered profile passes validation");
+  const auto layered_validation = fmcw::ConfigValidator::validate(layered.config);
+  expect(!layered_validation.hasErrors(), "layered profile passes validation");
+  expect(!layered_validation.hasWarnings(), "layered profile is warning-free");
 
   const auto jetson = fmcw::ConfigProfileCodec::loadLayered({
       source_root / "config" / "default.yaml",
@@ -92,7 +104,29 @@ void testStrictYamlAndLayering() {
   });
   expect(jetson.ok(), "Jetson platform layer loads");
   expect(jetson.config.ui.plot_update_hz == 20.0, "Jetson UI rate override is applied");
-  expect(!fmcw::ConfigValidator::validate(jetson.config).hasErrors(), "Jetson platform profile passes validation");
+  const auto jetson_validation = fmcw::ConfigValidator::validate(jetson.config);
+  expect(!jetson_validation.hasErrors(), "Jetson platform profile passes validation");
+  expect(!jetson_validation.hasWarnings(), "Jetson platform profile is warning-free");
+}
+
+void testLaserTimingValidation() {
+  fmcw::SystemConfig period_mismatch;
+  period_mismatch.laser.chirp_period_us = 20.0;
+  const auto period_validation = fmcw::ConfigValidator::validate(period_mismatch);
+  expect(hasIssue(period_validation, fmcw::ValidationSeverity::Warning, "laser.chirp_period_us"),
+         "laser period mismatch identifies the chirp-period field");
+
+  fmcw::SystemConfig slope_mismatch;
+  slope_mismatch.laser.sweep_rate_hz_per_s *= 0.5;
+  const auto slope_validation = fmcw::ConfigValidator::validate(slope_mismatch);
+  expect(hasIssue(slope_validation, fmcw::ValidationSeverity::Warning, "laser.sweep_rate_hz_per_s"),
+         "laser bandwidth, period, and slope mismatch identifies the sweep-rate field");
+
+  fmcw::SystemConfig invalid_slope;
+  invalid_slope.laser.sweep_rate_hz_per_s = 0.0;
+  expect(hasIssue(fmcw::ConfigValidator::validate(invalid_slope),
+                  fmcw::ValidationSeverity::Error, "laser"),
+         "non-positive sweep rate is rejected before distance processing");
 }
 
 void testPresentationAndChangePolicy() {
@@ -218,6 +252,7 @@ void testStartGateSnapshotAndOverflowStop() {
 int main() {
   testDefaultsAndRoundTrip();
   testStrictYamlAndLayering();
+  testLaserTimingValidation();
   testPresentationAndChangePolicy();
   testSchemaAndBoardCapabilityValidation();
   testActiveAndPendingConfiguration();

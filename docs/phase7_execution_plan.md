@@ -52,8 +52,8 @@ DMA buffer는 acquisition, processing, raw storage 사이의 기본 운반 단�
 
 | Subphase | Status | Main result | Hardware required |
 | --- | --- | --- | --- |
-| 7.1 ADC and configuration correctness | pending (next) | 정확한 ATS9371 sample과 일관된 chirp profile | 최종 capture 비교 시 필요 |
-| 7.2 Hardware runtime and DMA batch | pending | EXE에서 실제 ATS9371 연결 및 지속 DMA 수집 | Windows ATS9371 acceptance 필요 |
+| 7.1 ADC and configuration correctness | done | 정확한 ATS9371 sample과 일관된 chirp profile | 최종 capture 비교 시 필요 |
+| 7.2 Hardware runtime and DMA batch | pending (next) | EXE에서 실제 ATS9371 연결 및 지속 DMA 수집 | Windows ATS9371 acceptance 필요 |
 | 7.3A FFTW batch processing | pending | CPU batch 거리/B-scan/3D | reference raw로 검증 가능 |
 | 7.3B CUDA full pipeline | pending | GPU batch 전처리부터 peak/point까지 처리 | local RTX, 이후 Jetson 필요 |
 | 7.4 High-speed raw storage | pending | DMA-block recording과 replay | NVMe sustained test 필요 |
@@ -83,6 +83,16 @@ DMA buffer는 acquisition, processing, raw storage 사이의 기본 운반 단�
 
 - 실제 ATS9371 waveform의 DC, amplitude, FFT input scale을 신뢰할 수 있다.
 - legacy peak threshold 값은 그대로 복사하지 않고 현재 dBFS 기준으로 다시 설정한다.
+
+### Completion Record
+
+- ATS SDK 25.1.0 예제와 같은 right shift 규칙을 독립 sample helper에 적용했다.
+- 12-bit 전체 4096 code가 legacy `raw - 32768` signed full-scale 값과 일치함을 검증했다.
+- 기본 개발 profile은 `1 GS/s`, `3840 samples`, `3.84 us`, `1.04167e15 Hz/s`로 일관되며 Warning 없이 검증된다.
+- Laser UI에서 measured sweep rate를 `THz/s` 단위로 직접 설정할 수 있다.
+- raw format v1은 converted signed `int16`을 유지하고 original DMA `uint16` block은 Phase 7.4의 version 2로 추가한다.
+- Windows Release build에서 ATS-SDK, FFTW, CUDA/cuFFT가 활성화되었고 CTest 5/5가 통과했다.
+- Implementation commit: `pending`
 
 ## 6. Phase 7.2: Hardware Runtime and DMA Batch
 
@@ -283,6 +293,6 @@ Phase 7.7: complete Jetson integration and release
 
 ## 16. Next Action
 
-Current next subphase: **7.1 ADC and configuration correctness**.
+Current next subphase: **7.2 Hardware runtime and DMA batch**.
 
-7.1을 시작할 때 status를 `in_progress`로 바꾸고, 완료 후 검증 결과와 commit hash를 기록한 다음 7.2로 이동한다.
+7.2를 시작할 때 status를 `in_progress`로 바꾸고, EXE runtime source 선택과 DMA batch data contract부터 구현한다.

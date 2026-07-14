@@ -119,10 +119,23 @@ Verification:
 
 ## Phase 7: Hardware Integration and Release Hardening
 
-Status: next
+Status: in progress
 
 - Execution source of truth: [`phase7_execution_plan.md`](phase7_execution_plan.md)
-- Current next subphase: 7.1 ADC and configuration correctness
+- Phase 7.1 ADC and configuration correctness is complete.
+- Current next subphase: 7.2 Hardware runtime and DMA batch
 - Audit findings P7-001 through P7-008 must be closed before Phase 7 completion.
 - Replace the simulator runtime selection with the compiled Alazar/MCU/EDFA adapters.
 - Validate sustained ATS9371 DMA, NVMe raw recording, UDP throughput, and Jetson UI/thermal behavior on hardware.
+
+Phase 7.1 verification:
+
+- ATS9371 12-bit left-aligned DMA samples now use the SDK shift rule and signed full-scale conversion.
+- Minimum, midpoint, maximum, padding-bit, 16-bit endpoint, invalid-width, and all 4096 ATS9371 code tests pass.
+- Code defaults, layered Windows simulator profile, and Jetson profile validate with zero warnings.
+- The default development timing is internally consistent; actual laser timing remains a Phase 7.5 measurement input.
+- Laser Specification exposes measured sweep rate in `THz/s`.
+- Raw format v1 remains converted signed `int16`; original DMA `uint16` block storage is reserved for version 2 in Phase 7.4.
+- Windows MSVC Release built with ATS-SDK, FFTW, and CUDA/cuFFT enabled.
+- All five CTest targets passed.
+- Implementation commit: `pending`

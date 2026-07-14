@@ -137,6 +137,7 @@ class MainWindow final : public QMainWindow {
 
   QDoubleSpinBox* wavelength_ = nullptr;
   QDoubleSpinBox* sweep_bandwidth_ = nullptr;
+  QDoubleSpinBox* sweep_rate_ = nullptr;
   QDoubleSpinBox* chirp_period_ = nullptr;
   QDoubleSpinBox* laser_power_ = nullptr;
   QComboBox* edfa_mode_ = nullptr;

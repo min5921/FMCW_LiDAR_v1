@@ -711,6 +711,10 @@ QWidget* MainWindow::buildLaserEdfaPage() {
   sweep_bandwidth_->setRange(0.001, 1000.0);
   sweep_bandwidth_->setDecimals(3);
   sweep_bandwidth_->setSuffix(" GHz");
+  sweep_rate_ = new QDoubleSpinBox(laser);
+  sweep_rate_->setRange(0.001, 1000000.0);
+  sweep_rate_->setDecimals(3);
+  sweep_rate_->setSuffix(" THz/s");
   chirp_period_ = new QDoubleSpinBox(laser);
   chirp_period_->setRange(0.01, 100000.0);
   chirp_period_->setDecimals(3);
@@ -720,6 +724,7 @@ QWidget* MainWindow::buildLaserEdfaPage() {
   laser_power_->setSuffix(" mW");
   laser_form->addRow("Wavelength", wavelength_);
   laser_form->addRow("Sweep bandwidth", sweep_bandwidth_);
+  laser_form->addRow("Sweep rate", sweep_rate_);
   laser_form->addRow("Full chirp period", chirp_period_);
   laser_form->addRow("Laser power", laser_power_);
 
@@ -752,7 +757,7 @@ QWidget* MainWindow::buildLaserEdfaPage() {
   layout->setColumnStretch(0, 1);
   layout->setColumnStretch(1, 1);
   layout->setRowStretch(1, 1);
-  restart_required_controls_.append(QList<QWidget*>{wavelength_, sweep_bandwidth_, chirp_period_, laser_power_,
+  restart_required_controls_.append(QList<QWidget*>{wavelength_, sweep_bandwidth_, sweep_rate_, chirp_period_, laser_power_,
       edfa_mode_, edfa_port_, edfa_control_mode_, edfa_setpoint_, edfa_warmup_});
   return wrapInScrollArea(content);
 }
@@ -1185,8 +1190,7 @@ void MainWindow::connectUi() {
   const QList<QObject*> config_controls = {
       board_profile_, digitizer_channel_, sample_rate_, sample_point_, records_per_buffer_, dma_buffer_count_,
       input_range_, impedance_, coupling_, trigger_slope_, trigger_level_, trigger_delay_, pre_trigger_,
-      wavelength_, sweep_bandwidth_,
-      chirp_period_, laser_power_, edfa_mode_, edfa_port_,
+      wavelength_, sweep_bandwidth_, sweep_rate_, chirp_period_, laser_power_, edfa_mode_, edfa_port_,
       edfa_control_mode_, edfa_setpoint_, edfa_warmup_, x_start_, x_end_, y_start_, y_end_, y_lines_,
       bidirectional_, mcu_enabled_, mcu_port_, fft_backend_, window_function_, dc_removal_,
       peak_threshold_, peak_start_, peak_end_,
@@ -1366,6 +1370,7 @@ SystemConfig MainWindow::configFromControls() const {
       : 0U;
   config.laser.wavelength_nm = wavelength_->value();
   config.laser.sweep_bandwidth_hz = sweep_bandwidth_->value() * 1.0e9;
+  config.laser.sweep_rate_hz_per_s = sweep_rate_->value() * 1.0e12;
   config.laser.chirp_period_us = chirp_period_->value();
   config.laser.laser_power_mw = laser_power_->value();
   config.edfa.mode = static_cast<EdfaMode>(edfa_mode_->currentIndex());
@@ -1540,6 +1545,7 @@ void MainWindow::loadConfigToControls(const SystemConfig& config, bool mark_pend
   pre_trigger_->setValue(static_cast<int>(config.digitizer.pre_trigger_samples));
   wavelength_->setValue(config.laser.wavelength_nm);
   sweep_bandwidth_->setValue(config.laser.sweep_bandwidth_hz / 1.0e9);
+  sweep_rate_->setValue(config.laser.sweep_rate_hz_per_s / 1.0e12);
   chirp_period_->setValue(config.laser.chirp_period_us);
   laser_power_->setValue(config.laser.laser_power_mw);
   edfa_mode_->setCurrentIndex(static_cast<int>(config.edfa.mode));

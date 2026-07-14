@@ -7,6 +7,7 @@
 
 #include "core/config_validation.h"
 #include "core/digitizer_capabilities.h"
+#include "drivers/alazar/alazar_sample_conversion.h"
 
 #include <algorithm>
 #include <chrono>
@@ -331,10 +332,9 @@ FrameWaitResult AlazarDigitizer::waitForFrame(RawFrame& frame, std::chrono::mill
   frame = {};
   frame.samples.resize(config_.digitizer.sample_point);
   const auto offset = static_cast<std::size_t>(impl_->active_record) * config_.digitizer.sample_point;
-  const std::int32_t midpoint = 1 << (impl_->bits_per_sample - 1U);
   for (std::size_t index = 0; index < frame.samples.size(); ++index) {
-    const auto centered = static_cast<std::int32_t>(buffer[offset + index]) - midpoint;
-    frame.samples[index] = static_cast<std::int16_t>(std::clamp(centered, -32768, 32767));
+    frame.samples[index] = alazarLeftAlignedSampleToSignedInt16(
+        buffer[offset + index], impl_->bits_per_sample);
   }
 
   const auto frame_id = impl_->next_frame_id++;

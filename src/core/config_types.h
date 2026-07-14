@@ -94,7 +94,7 @@ struct ProfileMetadata {
   std::uint32_t schema_version = kConfigSchemaVersion;
   std::string id = "default";
   std::string name = "Default FMCW LiDAR";
-  std::string description = "Safe default full-period acquisition profile";
+  std::string description = "Self-consistent development full-period acquisition profile";
   std::string author = "FMCW LiDAR Team";
   std::string created_utc = "2026-07-10T00:00:00Z";
   std::string modified_utc = "2026-07-10T00:00:00Z";
@@ -129,8 +129,8 @@ struct DigitizerConfig {
 struct LaserConfig {
   double wavelength_nm = 1550.0;
   double sweep_bandwidth_hz = 2.0e9;
-  double sweep_rate_hz_per_s = 2.0e14;
-  double chirp_period_us = 20.0;
+  double sweep_rate_hz_per_s = 1.041666666666667e15;
+  double chirp_period_us = 3.84;
   double laser_power_mw = 10.0;
   double optical_path_factor = 1.0;
   double distance_scale_correction = 1.0;

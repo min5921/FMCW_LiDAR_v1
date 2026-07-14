@@ -2,7 +2,7 @@ profile:
   schema_version: 4
   id: default
   name: "Default FMCW LiDAR"
-  description: "Safe default full-period acquisition profile"
+  description: "Self-consistent development full-period acquisition profile"
   author: "FMCW LiDAR Team"
   created_utc: "2026-07-10T00:00:00Z"
   modified_utc: "2026-07-10T00:00:00Z"
@@ -33,8 +33,8 @@ digitizer:
 laser:
   wavelength_nm: 1550
   sweep_bandwidth_hz: 2000000000
-  sweep_rate_hz_per_s: 200000000000000
-  chirp_period_us: 20
+  sweep_rate_hz_per_s: 1041666666666667
+  chirp_period_us: 3.84
   laser_power_mw: 10
   optical_path_factor: 1
   distance_scale_correction: 1

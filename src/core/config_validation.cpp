@@ -205,16 +205,33 @@ ValidationResult ConfigValidator::validate(const SystemConfig& config) {
   }
 
   if (!(config.laser.wavelength_nm > 0.0) || !(config.laser.sweep_bandwidth_hz > 0.0) ||
-      !(config.laser.chirp_period_us > 0.0) || !(config.laser.optical_path_factor > 0.0)) {
-    add(result, ValidationSeverity::Error, "laser", "Laser wavelength, bandwidth, chirp period, and path factor must be positive",
+      !(config.laser.sweep_rate_hz_per_s > 0.0) || !(config.laser.chirp_period_us > 0.0) ||
+      !(config.laser.optical_path_factor > 0.0)) {
+    add(result, ValidationSeverity::Error, "laser",
+        "Laser wavelength, bandwidth, sweep rate, chirp period, and path factor must be positive",
         "Enter the measured laser specifications");
-  } else if (digitizer.sample_rate_hz > 0.0) {
-    const double expected_samples = digitizer.sample_rate_hz * config.laser.chirp_period_us * 1.0e-6;
-    const double difference = std::abs(expected_samples - chirp.chirp_period_samples);
-    if (difference > std::max(4.0, expected_samples * 0.01)) {
-      add(result, ValidationSeverity::Warning, "laser.chirp_period_us",
-          "Laser chirp period and configured period sample count differ by more than 1 percent",
-          "Verify the trigger timing with an oscilloscope and update either value");
+  } else {
+    if (digitizer.sample_rate_hz > 0.0) {
+      const double expected_samples = digitizer.sample_rate_hz * config.laser.chirp_period_us * 1.0e-6;
+      const double difference = std::abs(expected_samples - chirp.chirp_period_samples);
+      if (difference > std::max(4.0, expected_samples * 0.01)) {
+        std::ostringstream message;
+        message << "Laser chirp period implies " << std::llround(expected_samples)
+                << " samples, but chirp_period_samples is " << chirp.chirp_period_samples;
+        add(result, ValidationSeverity::Warning, "laser.chirp_period_us", message.str(),
+            "Verify the full-period trigger timing and update the measured period or sample count");
+      }
+    }
+
+    const double full_period_seconds = config.laser.chirp_period_us * 1.0e-6;
+    const double symmetric_triangular_slope =
+        2.0 * config.laser.sweep_bandwidth_hz / full_period_seconds;
+    const double slope_difference =
+        std::abs(config.laser.sweep_rate_hz_per_s - symmetric_triangular_slope);
+    if (slope_difference > symmetric_triangular_slope * 0.01) {
+      add(result, ValidationSeverity::Warning, "laser.sweep_rate_hz_per_s",
+          "Sweep rate differs by more than 1 percent from bandwidth divided by a half chirp period",
+          "Enter the measured sweep slope, or verify bandwidth and full chirp period for the laser waveform");
     }
   }
 

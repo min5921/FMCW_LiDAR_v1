@@ -1,5 +1,6 @@
 #include "core/acquisition_session.h"
 #include "drivers/alazar/alazar_digitizer.h"
+#include "drivers/alazar/alazar_sample_conversion.h"
 #include "drivers/edfa/edfa_protocol.h"
 #include "drivers/edfa/edfa_serial_controller.h"
 #include "drivers/mcu/mcu_protocol.h"
@@ -345,6 +346,35 @@ void testAlazarBuildGate() {
          "no-SDK Alazar adapter reports an actionable connection error");
 }
 
+void testAlazarLeftAlignedSampleConversion() {
+  expect(fmcw::alazarLeftAlignedSampleToSignedInt16(0x0000U, 12U) == -32768,
+         "12-bit Alazar minimum code maps to signed full-scale minimum");
+  expect(fmcw::alazarLeftAlignedSampleToSignedInt16(0x8000U, 12U) == 0,
+         "12-bit Alazar midpoint maps to signed zero");
+  expect(fmcw::alazarLeftAlignedSampleToSignedInt16(0xFFF0U, 12U) == 32752,
+         "12-bit Alazar maximum code preserves its signed full-scale step");
+  expect(fmcw::alazarLeftAlignedSampleToSignedInt16(0xFFFFU, 12U) == 32752 &&
+             fmcw::alazarLeftAlignedSampleToSignedInt16(0x800FU, 12U) == 0,
+         "12-bit conversion ignores the four DMA padding bits");
+  expect(fmcw::alazarLeftAlignedSampleToSignedInt16(0x0000U, 16U) == -32768 &&
+             fmcw::alazarLeftAlignedSampleToSignedInt16(0x8000U, 16U) == 0 &&
+             fmcw::alazarLeftAlignedSampleToSignedInt16(0xFFFFU, 16U) == 32767,
+         "16-bit conversion reaches both signed endpoints without overflow");
+  expect(fmcw::alazarLeftAlignedSampleToSignedInt16(0x8000U, 0U) == 0 &&
+             fmcw::alazarLeftAlignedSampleToSignedInt16(0x8000U, 17U) == 0,
+         "unsupported sample widths fail closed");
+
+  bool matches_legacy_full_scale = true;
+  for (std::uint32_t code = 0; code < 4096U; ++code) {
+    const auto raw = static_cast<std::uint16_t>(code << 4U);
+    const auto legacy_value = static_cast<std::int32_t>(raw) - 32768;
+    matches_legacy_full_scale = matches_legacy_full_scale &&
+        fmcw::alazarLeftAlignedSampleToSignedInt16(raw, 12U) == legacy_value;
+  }
+  expect(matches_legacy_full_scale,
+         "SDK 12-bit code conversion matches legacy raw-minus-32768 full-scale samples");
+}
+
 }  // namespace
 
 int main() {
@@ -356,6 +386,7 @@ int main() {
   testScannerStartFailureRollsBackArmedDevices();
   testFiniteFakeAcquisition();
   testAlazarBuildGate();
+  testAlazarLeftAlignedSampleConversion();
 
   if (failures == 0) {
     std::cout << "All acquisition and device driver tests passed.\n";

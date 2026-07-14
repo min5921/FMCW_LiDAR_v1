@@ -25,6 +25,7 @@ set(FMCW_CORE_SOURCES
   core/operation_controller.cpp
   core/system_state.cpp
   drivers/alazar/alazar_digitizer.cpp
+  drivers/alazar/alazar_sample_conversion.cpp
   drivers/edfa/edfa_protocol.cpp
   drivers/edfa/edfa_serial_controller.cpp
   drivers/mcu/mcu_protocol.cpp
