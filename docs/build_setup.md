@@ -54,7 +54,7 @@ The following CMake cache variables are used for dependency discovery:
 - `ALAZAR_SDK_ROOT`: AlazarTech headers and `ATSApi.lib`/`libATSApi.so` platform library.
 - `FFTW_ROOT`: FFTW headers and libraries when package discovery is insufficient.
 
-CUDA is discovered through the installed CMake CUDA toolkit support. EDFA/MCU serial support uses Win32 COM or POSIX tty directly; FTDI or USB-UART devices still require their operating system driver, but vendor control executables are not runtime dependencies.
+CUDA is enabled only when CMake finds both the `nvcc` CUDA compiler and `CUDAToolkit`. The active implementation is compiled from `src/processing/cuda/cuda_fft_backend.cu`. EDFA/MCU serial support uses Win32 COM or POSIX tty directly; FTDI or USB-UART devices still require their operating system driver, but vendor control executables are not runtime dependencies.
 
 ## Phase 4 FFT Backends
 
@@ -64,7 +64,7 @@ The CPU backend requires the single-precision FFTW3 library (`fftw3f`). Point `F
 cmake --preset windows-msvc-debug -DFFTW_ROOT=C:\path\to\fftw-prefix
 ```
 
-CUDA/cuFFT is enabled when `CUDAToolkit` is found. On Windows the build copies the discovered FFTW and cuFFT runtime DLLs next to the application and Phase 4 test executable. If a backend is not compiled or no CUDA device is available, the backend reports an actionable runtime error instead of silently selecting another backend.
+CUDA/cuFFT is enabled when `nvcc` and `CUDAToolkit` are found. On Windows the build copies the discovered FFTW and cuFFT runtime DLLs next to the application and Phase 4 test executable. If a backend is not compiled or no CUDA device is available, the backend reports an actionable runtime error instead of silently selecting another backend.
 
 The Windows Qt target is linked with the `Windows GUI` subsystem, so launching `fmcw_lidar_windows.exe` does not create a separate command window. Local SDK paths belong in ignored `CMakeUserPresets.json`; this workspace uses the `windows-local-debug` preset for ATS-SDK 25.1.0 and FFTW.
 

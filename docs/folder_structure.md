@@ -123,6 +123,8 @@ legacy/EDFA-Amplifier-V20240219/
 - `drivers/simulator/`: 장비 없는 full-period acquisition과 optional device simulator
 - `network/`: UDP point packet codec and asynchronous sender service
 - `processing/`: GPU FFT, CPU FFT, peak detection, distance/velocity
+- `processing/cpu/`: active FFTW implementation
+- `processing/cuda/`: active CUDA/cuFFT implementation compiled from `.cu`
 - `storage/`: raw writer, processed writer
 - `visualization/`: 2D plot, heatmap, 3D point cloud 공통 로직
 - `firmware/mcu/`: 새 MCU firmware, UART command, MEMS 제어 protocol 정리
@@ -136,3 +138,5 @@ FFT 비교, 설정 검증, 저장 포맷, replay, UDP 수신기, MCU protocol, E
 당분간 새 코드는 `src/` 아래에만 만든다.
 
 기존 코드는 `legacy/`에서 바로 수정하지 말고, 필요한 파일을 `src/` 아래 역할에 맞게 옮겨서 정리한다.
+
+`legacy/` paths must not appear in active CMake source lists, includes, or runtime calls.

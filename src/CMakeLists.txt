@@ -1,3 +1,16 @@
+set(FMCW_HAS_CUDA_FFT OFF)
+if(FMCW_WITH_CUDA)
+  include(CheckLanguage)
+  check_language(CUDA)
+  if(CMAKE_CUDA_COMPILER)
+    enable_language(CUDA)
+    find_package(CUDAToolkit QUIET)
+    if(CUDAToolkit_FOUND)
+      set(FMCW_HAS_CUDA_FFT ON)
+    endif()
+  endif()
+endif()
+
 set(FMCW_CORE_SOURCES
   core/acquisition_session.cpp
   core/app_version.cpp
@@ -22,6 +35,7 @@ set(FMCW_CORE_SOURCES
   drivers/simulator/fake_mcu.cpp
   network/udp_point_protocol.cpp
   network/udp_sender_service.cpp
+  processing/cpu/fftw_backend.cpp
   processing/fft_backends.cpp
   processing/processing_service.cpp
   processing/processing_snapshots.cpp
@@ -29,6 +43,10 @@ set(FMCW_CORE_SOURCES
   storage/async_storage_service.cpp
   storage/binary_storage.cpp
 )
+
+if(FMCW_HAS_CUDA_FFT)
+  list(APPEND FMCW_CORE_SOURCES processing/cuda/cuda_fft_backend.cu)
+endif()
 
 add_library(fmcw_core STATIC ${FMCW_CORE_SOURCES})
 target_include_directories(fmcw_core
@@ -42,9 +60,18 @@ if(WIN32)
 endif()
 
 if(MSVC)
-  target_compile_options(fmcw_core PRIVATE /W4 /permissive-)
+  target_compile_options(fmcw_core PRIVATE
+    $<$<COMPILE_LANGUAGE:CXX>:/W4>
+    $<$<COMPILE_LANGUAGE:CXX>:/permissive->
+    $<$<COMPILE_LANGUAGE:CXX>:/wd4819>
+    $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=/wd4819>
+  )
 else()
-  target_compile_options(fmcw_core PRIVATE -Wall -Wextra -Wpedantic)
+  target_compile_options(fmcw_core PRIVATE
+    $<$<COMPILE_LANGUAGE:CXX>:-Wall>
+    $<$<COMPILE_LANGUAGE:CXX>:-Wextra>
+    $<$<COMPILE_LANGUAGE:CXX>:-Wpedantic>
+  )
 endif()
 
 if(FMCW_TARGET_PLATFORM STREQUAL "WINDOWS")
@@ -131,23 +158,16 @@ else()
   message(STATUS "FFTW CPU backend: disabled (set FFTW_ROOT to enable)")
 endif()
 
-set(FMCW_HAS_CUDA_FFT OFF)
-if(FMCW_WITH_CUDA)
-  find_package(CUDAToolkit QUIET)
-  if(CUDAToolkit_FOUND)
-    set(FMCW_HAS_CUDA_FFT ON)
-    target_link_libraries(fmcw_core PRIVATE CUDA::cudart CUDA::cufft)
-    if(WIN32)
-      find_file(FMCW_CUFFT_RUNTIME_DLL NAMES cufft64_12.dll cufft64_11.dll
-        HINTS "${CUDAToolkit_BIN_DIR}" "${CUDAToolkit_BIN_DIR}/x64")
-      set(FMCW_CUFFT_RUNTIME_DLL "${FMCW_CUFFT_RUNTIME_DLL}" CACHE INTERNAL "cuFFT runtime DLL")
-    endif()
-  endif()
-endif()
-
 if(FMCW_HAS_CUDA_FFT)
+  target_link_libraries(fmcw_core PRIVATE CUDA::cudart CUDA::cufft)
+  set_target_properties(fmcw_core PROPERTIES CUDA_STANDARD 17 CUDA_STANDARD_REQUIRED ON)
+  if(WIN32)
+    find_file(FMCW_CUFFT_RUNTIME_DLL NAMES cufft64_13.dll cufft64_12.dll cufft64_11.dll
+      HINTS "${CUDAToolkit_BIN_DIR}" "${CUDAToolkit_BIN_DIR}/x64")
+    set(FMCW_CUFFT_RUNTIME_DLL "${FMCW_CUFFT_RUNTIME_DLL}" CACHE INTERNAL "cuFFT runtime DLL")
+  endif()
   target_compile_definitions(fmcw_core PRIVATE FMCW_HAS_CUDA_FFT=1)
-  message(STATUS "CUDA cuFFT backend: enabled")
+  message(STATUS "CUDA cuFFT backend: enabled from processing/cuda/cuda_fft_backend.cu")
 else()
   target_compile_definitions(fmcw_core PRIVATE FMCW_HAS_CUDA_FFT=0)
   unset(FMCW_CUFFT_RUNTIME_DLL CACHE)

@@ -30,6 +30,13 @@ Backend:
 - `FftwBackend`: FFTW3 single-precision `fftwf` R2C
 - `CudaFftBackend`: CUDA runtime buffer와 cuFFT R2C
 
+Implementation ownership:
+
+- `src/processing/cpu/fftw_backend.cpp`: active FFTW implementation
+- `src/processing/cuda/cuda_fft_backend.cu`: active CUDA runtime and cuFFT implementation
+- `src/processing/fft_backends.cpp`: backend factory and unavailable-backend stubs only
+- Files under `legacy/` are reference material and are never compiled or called by the runtime.
+
 Profile의 `processing.fft_backend`와 전달된 backend 종류가 다르면 configure를 거부한다. FFTW 또는 CUDA가 build에 없거나 runtime device가 없으면 Start 전에 actionable error를 반환한다.
 
 ## 3. Segment Preprocessing
