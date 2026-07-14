@@ -138,4 +138,4 @@ Phase 7.1 verification:
 - Raw format v1 remains converted signed `int16`; original DMA `uint16` block storage is reserved for version 2 in Phase 7.4.
 - Windows MSVC Release built with ATS-SDK, FFTW, and CUDA/cuFFT enabled.
 - All five CTest targets passed.
-- Implementation commit: `pending`
+- Implementation commit: `82b8369`

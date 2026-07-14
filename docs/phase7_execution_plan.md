@@ -92,7 +92,7 @@ DMA buffer는 acquisition, processing, raw storage 사이의 기본 운반 단�
 - Laser UI에서 measured sweep rate를 `THz/s` 단위로 직접 설정할 수 있다.
 - raw format v1은 converted signed `int16`을 유지하고 original DMA `uint16` block은 Phase 7.4의 version 2로 추가한다.
 - Windows Release build에서 ATS-SDK, FFTW, CUDA/cuFFT가 활성화되었고 CTest 5/5가 통과했다.
-- Implementation commit: `pending`
+- Implementation commit: `82b8369`
 
 ## 6. Phase 7.2: Hardware Runtime and DMA Batch
 
