@@ -365,7 +365,8 @@ void HeatmapWidget::paintEvent(QPaintEvent* event) {
   for (std::uint32_t y = 0; y < height_; ++y) {
     for (std::uint32_t x = 0; x < width_; ++x) {
       const auto index = static_cast<int>(y * width_ + x);
-      const bool is_valid = index < valid_.size() && valid_[index] != 0U;
+      const bool is_valid = index < valid_.size() && valid_[index] != 0U &&
+          std::isfinite(values_[index]);
       const auto normalized = is_valid ? (values_[index] - minimum) / (maximum - minimum) : 0.0F;
       image.setPixelColor(static_cast<int>(x), static_cast<int>(y),
                           is_valid ? heatColor(normalized) : palette().color(QPalette::AlternateBase));

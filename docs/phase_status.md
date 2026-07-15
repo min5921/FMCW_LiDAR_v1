@@ -61,7 +61,7 @@ Status: done
 
 - FFTW3f and CUDA/cuFFT implement a common FFT backend contract.
 - `SignalProcessor` extracts configured UP/DOWN segments and independently selects the highest threshold-qualified peak in each search range.
-- Every A-scan is independent; a below-threshold result is invalid and never carries a previous peak.
+- Every A-scan is independent; a peak that does not exceed threshold is invalid, uses `NaN` for floating-point peak/measurement fields, and never carries a previous value.
 - `ProcessingService` uses a bounded worker queue and applies runtime processing changes at frame boundaries.
 - Immutable waveform, FFT, scan-line, and X-by-B-scan Z snapshots are published to the UI.
 - Raw full-period and processed binary writers use bounded asynchronous storage with JSON sidecars and split-part replay.
@@ -176,3 +176,13 @@ TTL and laser distance contract refinement (2026-07-15):
 - Windows MSVC Release and CTest 5/5 passed. Digitizer and Laser pages were visually checked in the packaged GUI.
 - Packaged EXE SHA-256: `742DC9FE18BF0AA5B16CA72CC0FC70D8E279FA350ECE8601EEDD66C3E4275A40`.
 - Implementation commit: `315f374`
+
+Peak-threshold NaN contract refinement (2026-07-15):
+
+- A peak candidate must strictly exceed `peak_threshold_db`; equality does not pass detection.
+- A rejected peak keeps integer `discrete_bin = -1` and exposes `NaN` for interpolated bin and magnitude.
+- If either UP or DOWN peak is rejected, measurement validity is false and distance, velocity, intensity, and XYZ remain `NaN`.
+- Scan-line, B-scan, point-cloud, and processed binary paths preserve invalid values instead of converting them to zero.
+- Plot widgets skip non-finite samples, so an invalid A-scan appears as missing data rather than a false measurement.
+- Windows MSVC Release, CTest 5/5, and the packaged EXE smoke test passed.
+- Packaged EXE SHA-256: `BB4F66D48B3DFEDA3CEC0BBB5B5F2DB7D9067A0F5368493D1BF426A2E35043F5`.

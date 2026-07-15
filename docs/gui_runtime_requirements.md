@@ -154,10 +154,10 @@ Processing page의 필수 runtime 설정:
 - `peak_search_start_bin`
 - `peak_search_end_bin`
 
-- candidate는 threshold 이상이며 global search range 안에 있어야 한다.
+- candidate는 threshold를 초과하며 global search range 안에 있어야 한다.
 - UP과 DOWN은 각 A-scan에서 독립적으로 최대 peak를 검출한다.
 - 이전 A-scan의 peak index를 추적, 유지, 재탐색하지 않는다.
-- threshold 이상 candidate가 없으면 해당 chirp peak와 측정 결과를 invalid로 기록한다.
+- threshold를 초과하는 candidate가 없으면 해당 chirp peak와 측정 결과를 invalid로 기록하고, 실수형 값은 `NaN`으로 표시·저장한다.
 
 Peak Analysis 탭은 FFT spectrum을 다시 그리지 않는다. 다음 두 plot과 상태 요약만 표시한다.
 

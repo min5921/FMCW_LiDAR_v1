@@ -76,7 +76,7 @@ The `runtime` profile group selects `simulator`, `alazar`, or `replay`. Source c
 
 전역 Basic/Advanced mode는 schema version 2부터 사용하지 않는다. 모든 설정 페이지는 항상 접근 가능하며, field policy의 `primary`는 페이지에 바로 표시하고 `detailed`는 같은 페이지의 `Details` 영역에 표시한다. 이 구분은 접근 권한이나 별도 운용 mode가 아니다.
 
-Processing group은 `peak_threshold_db`, `peak_search_start_bin`, `peak_search_end_bin`만 runtime peak 설정으로 저장한다. 각 A-scan은 이전 결과를 추적하지 않고 search range 안의 threshold 이상 최대 peak를 독립적으로 검출한다.
+Processing group은 `peak_threshold_db`, `peak_search_start_bin`, `peak_search_end_bin`만 runtime peak 설정으로 저장한다. 각 A-scan은 이전 결과를 추적하지 않고 search range 안에서 threshold를 초과하는 최대 peak를 독립적으로 검출한다. 초과 peak가 없으면 실수형 peak 및 측정 필드는 `NaN`이다.
 
 Live View의 `Selected A-scan`은 profile 설정이 아니라 표시 상태다. 0부터 `records_per_buffer - 1` 사이의 record index를 acquisition 중에도 바꿀 수 있으며 digitizer 재설정이나 processing 결과에는 영향을 주지 않는다.
 

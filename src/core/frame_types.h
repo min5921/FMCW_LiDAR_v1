@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <string>
 #include <vector>
@@ -122,11 +123,11 @@ inline RawFramePtr rawFrameAt(const RawFrameBatchPtr& batch, std::size_t index) 
 }
 
 struct PointXYZI {
-  float x = 0.0F;
-  float y = 0.0F;
-  float z = 0.0F;
-  float intensity = 0.0F;
-  float velocity = 0.0F;
+  float x = std::numeric_limits<float>::quiet_NaN();
+  float y = std::numeric_limits<float>::quiet_NaN();
+  float z = std::numeric_limits<float>::quiet_NaN();
+  float intensity = std::numeric_limits<float>::quiet_NaN();
+  float velocity = std::numeric_limits<float>::quiet_NaN();
   bool valid = false;
 };
 
@@ -142,8 +143,8 @@ enum class PeakTrackState : std::uint8_t {
 
 struct PeakMeasurement {
   std::int32_t discrete_bin = -1;
-  float interpolated_bin = -1.0F;
-  float magnitude_db = 0.0F;
+  float interpolated_bin = std::numeric_limits<float>::quiet_NaN();
+  float magnitude_db = std::numeric_limits<float>::quiet_NaN();
   PeakTrackState state = PeakTrackState::Invalid;
   bool valid = false;
 };
@@ -158,8 +159,8 @@ struct ProcessedFrame {
   std::vector<float> down_fft_magnitude_db;
   PeakMeasurement up_peak;
   PeakMeasurement down_peak;
-  float distance_m = 0.0F;
-  float velocity_mps = 0.0F;
+  float distance_m = std::numeric_limits<float>::quiet_NaN();
+  float velocity_mps = std::numeric_limits<float>::quiet_NaN();
   PointXYZI point;
   bool measurement_valid = false;
   bool stop_requested = false;

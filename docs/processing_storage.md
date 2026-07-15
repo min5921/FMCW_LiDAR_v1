@@ -55,9 +55,9 @@ magnitude_db = 20 log10(max(2 |FFT[k]| / sum(window), 1e-10))
 
 ## 4. Peak Detection
 
-Peak candidate는 configured search range에서 threshold 이상인 최대 magnitude bin이다. 좌우 bin이 있으면 parabolic interpolation으로 fractional bin을 계산한다.
+Peak candidate는 configured search range에서 threshold를 초과하는 최대 magnitude bin이다. 좌우 bin이 있으면 parabolic interpolation으로 fractional bin을 계산한다.
 
-UP과 DOWN peak는 각 A-scan에서 독립적으로 검출한다. 이전 A-scan의 peak index를 추적하거나 유지하지 않는다. 한쪽이라도 threshold 이상 peak가 없으면 해당 A-scan의 measurement validity는 false이며 distance, velocity, XYZ를 생성하지 않는다.
+UP과 DOWN peak는 각 A-scan에서 독립적으로 검출한다. 이전 A-scan의 peak index를 추적하거나 유지하지 않는다. 한쪽이라도 threshold를 초과하는 peak가 없으면 해당 A-scan의 measurement validity는 false이며 실수형 peak, distance, velocity, intensity, XYZ는 `NaN`이다. 정수형 `discrete_bin`은 `-1`을 유지한다.
 
 ## 5. Distance And Velocity
 

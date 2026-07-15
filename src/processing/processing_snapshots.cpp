@@ -7,6 +7,7 @@ namespace fmcw {
 
 void ProcessingSnapshotStore::configure(std::uint32_t x_pixel_count, std::uint32_t y_line_count) {
   std::lock_guard<std::mutex> lock(mutex_);
+  const float invalid = std::numeric_limits<float>::quiet_NaN();
   width_ = x_pixel_count;
   height_ = y_line_count;
   selected_record_index_ = width_ == 0U ? 0U : std::min(selected_record_index_, width_ - 1U);
@@ -18,7 +19,7 @@ void ProcessingSnapshotStore::configure(std::uint32_t x_pixel_count, std::uint32
   bscan_work_ = {};
   bscan_work_.width = width_;
   bscan_work_.height = height_;
-  bscan_work_.z_m.assign(static_cast<std::size_t>(width_) * height_, 0.0F);
+  bscan_work_.z_m.assign(static_cast<std::size_t>(width_) * height_, invalid);
   bscan_work_.valid.assign(static_cast<std::size_t>(width_) * height_, 0U);
   point_cloud_work_ = {};
   point_cloud_work_.width = width_;
@@ -102,7 +103,8 @@ void ProcessingSnapshotStore::publish(const RawFrame& raw, const ProcessedFrame&
       if (bscan_work_.last_frame_id != 0U) {
         ++scan_frame_index_;
       }
-      std::fill(bscan_work_.z_m.begin(), bscan_work_.z_m.end(), 0.0F);
+      std::fill(bscan_work_.z_m.begin(), bscan_work_.z_m.end(),
+                std::numeric_limits<float>::quiet_NaN());
       std::fill(bscan_work_.valid.begin(), bscan_work_.valid.end(), 0U);
       bscan_work_.completed_lines = 0U;
       bscan_work_.scan_frame_index = scan_frame_index_;
@@ -139,9 +141,7 @@ void ProcessingSnapshotStore::publish(const RawFrame& raw, const ProcessedFrame&
   scan_line_ = std::make_shared<ScanLineSnapshot>(line_work_);
   const auto row_offset = static_cast<std::size_t>(active_y_) * width_;
   for (std::uint32_t index = 0; index < width_; ++index) {
-    bscan_work_.z_m[row_offset + index] = line_work_.valid[index] != 0U
-        ? line_work_.z_m[index]
-        : 0.0F;
+    bscan_work_.z_m[row_offset + index] = line_work_.z_m[index];
     bscan_work_.valid[row_offset + index] = line_work_.valid[index];
   }
   bscan_work_.last_frame_id = processed.frame_id;

@@ -401,7 +401,7 @@ CPU FFT 요구사항:
 - processing queue 길이, 처리 지연, drop count를 실시간 표시한다.
 - peak detection threshold와 search range는 실행 중 변경 가능해야 한다.
 - 각 A-scan의 UP/DOWN peak는 이전 A-scan과 독립적으로 search range 안의 최대값을 검출한다.
-- threshold 이상 peak가 없으면 이전 값을 유지하지 않고 해당 결과를 invalid로 기록한다.
+- threshold를 초과하는 peak가 없으면 이전 값을 유지하지 않고 해당 결과를 invalid로 기록하며, 모든 실수형 peak 및 측정값을 `NaN`으로 전달한다.
 - 설정 변경이 처리 결과에 반영된 frame 번호를 기록한다.
 - raw replay 모드에서도 동일한 processing pipeline을 사용한다.
 - GPU FFT와 CPU FFT 결과 차이를 검증하는 regression test를 제공한다.

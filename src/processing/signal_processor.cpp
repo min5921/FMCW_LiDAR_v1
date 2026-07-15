@@ -103,7 +103,7 @@ PeakMeasurement detectPeak(const std::vector<float>& magnitude, std::uint32_t st
     }
   }
   const auto best_index = static_cast<std::size_t>(std::distance(magnitude.begin(), best));
-  if (*best < static_cast<float>(threshold_db)) {
+  if (!std::isfinite(*best) || *best <= static_cast<float>(threshold_db)) {
     return result;
   }
   float interpolated = static_cast<float>(best_index);

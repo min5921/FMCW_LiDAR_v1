@@ -133,9 +133,21 @@ fmcw::ProcessedFrame testSignalProcessing(const fmcw::SystemConfig& config,
   expectNear(processed.distance_m, expected_distance_m, 1.0e-4,
              "distance uses bandwidth and sweep rate in Hz");
 
+  auto equality_config = config.processing;
+  equality_config.peak_threshold_db = std::max(processed.up_peak.magnitude_db,
+                                               processed.down_peak.magnitude_db);
+  expect(processor.updateRuntimeConfig(equality_config, 2, error),
+         "peak threshold accepts the detected peak magnitude for equality testing");
+  fmcw::ProcessedFrame equality_rejected;
+  expect(processor.process(*frames.front(), equality_rejected, error),
+         "threshold equality frame is processed without crashing");
+  expect(!equality_rejected.measurement_valid && !equality_rejected.up_peak.valid &&
+             !equality_rejected.down_peak.valid,
+         "a peak equal to the threshold is rejected because detection requires strict exceedance");
+
   auto runtime_config = config.processing;
   runtime_config.peak_threshold_db = -55.0;
-  expect(processor.updateRuntimeConfig(runtime_config, 2, error), "peak threshold updates at a frame boundary");
+  expect(processor.updateRuntimeConfig(runtime_config, 3, error), "peak threshold updates at a frame boundary");
   fmcw::RawFrame silent = *frames.at(1);
   std::fill(silent.samples.begin(), silent.samples.end(), 0);
   fmcw::ProcessedFrame invalid;
@@ -144,7 +156,18 @@ fmcw::ProcessedFrame testSignalProcessing(const fmcw::SystemConfig& config,
              invalid.up_peak.state == fmcw::PeakTrackState::Invalid &&
              invalid.down_peak.state == fmcw::PeakTrackState::Invalid,
          "each silent A-scan is independently marked invalid without carrying a previous peak");
-  expect(invalid.processing_config_revision == 2, "processed frame records the applied runtime revision");
+  expect(invalid.up_peak.discrete_bin == -1 && invalid.down_peak.discrete_bin == -1 &&
+             std::isnan(invalid.up_peak.interpolated_bin) &&
+             std::isnan(invalid.down_peak.interpolated_bin) &&
+             std::isnan(invalid.up_peak.magnitude_db) &&
+             std::isnan(invalid.down_peak.magnitude_db),
+         "threshold-rejected peaks expose NaN instead of numeric peak values");
+  expect(std::isnan(invalid.distance_m) && std::isnan(invalid.velocity_mps) &&
+             std::isnan(invalid.point.x) && std::isnan(invalid.point.y) &&
+             std::isnan(invalid.point.z) && std::isnan(invalid.point.intensity) &&
+             std::isnan(invalid.point.velocity),
+         "threshold-rejected measurements expose NaN for distance, velocity, and XYZ");
+  expect(invalid.processing_config_revision == 3, "processed frame records the applied runtime revision");
   return processed;
 }
 
@@ -471,6 +494,39 @@ void testBscanFrameBoundaryReset() {
          "new raster frame clears stale 3D points from unfinished rows");
 }
 
+void testInvalidMeasurementSnapshots() {
+  fmcw::ProcessingSnapshotStore snapshots;
+  snapshots.configure(1, 1);
+  fmcw::RawFrame raw;
+  raw.metadata.frame_id = 1;
+  raw.metadata.record_index_in_buffer = 0;
+  raw.metadata.records_in_buffer = 1;
+  fmcw::ProcessedFrame processed;
+  processed.frame_id = 1;
+  processed.scan_position.x_index = 0;
+  processed.scan_position.y_index = 0;
+  processed.scan_position.valid = true;
+  snapshots.publish(raw, processed);
+
+  const auto fft = snapshots.latestFft();
+  const auto line = snapshots.latestScanLine();
+  const auto bscan = snapshots.latestBScan();
+  const auto cloud = snapshots.latestPointCloud();
+  expect(fft && !fft->up_peak.valid && std::isnan(fft->up_peak.interpolated_bin) &&
+             std::isnan(fft->up_peak.magnitude_db),
+         "selected FFT snapshot preserves an invalid peak as NaN");
+  expect(line && line->valid[0] == 0U && std::isnan(line->up_peak_index[0]) &&
+             std::isnan(line->down_peak_index[0]) && std::isnan(line->up_peak_value_db[0]) &&
+             std::isnan(line->down_peak_value_db[0]) && std::isnan(line->distance_m[0]) &&
+             std::isnan(line->velocity_mps[0]) && std::isnan(line->z_m[0]),
+         "scan-line snapshot preserves threshold-rejected values as NaN");
+  expect(bscan && bscan->valid[0] == 0U && std::isnan(bscan->z_m[0]),
+         "B-scan snapshot preserves an invalid measurement as NaN");
+  expect(cloud && !cloud->points[0].valid && std::isnan(cloud->points[0].x) &&
+             std::isnan(cloud->points[0].y) && std::isnan(cloud->points[0].z),
+         "point-cloud snapshot preserves an invalid point as NaN");
+}
+
 void testSelectedAScanSnapshots() {
   fmcw::ProcessingSnapshotStore snapshots;
   snapshots.configure(2, 1);
@@ -542,6 +598,8 @@ void testStorageOverflow(fmcw::RawFramePtr raw) {
 int main() {
   std::cout << "[Phase5] Selected A-scan snapshots\n" << std::flush;
   testSelectedAScanSnapshots();
+  std::cout << "[Phase4] Invalid measurement NaN snapshots\n" << std::flush;
+  testInvalidMeasurementSnapshots();
   if (!fmcw::FftwBackend::available()) {
     std::cout << "Phase 4 FFT tests skipped: FFTW3f was not found at configure time.\n";
     return failures == 0 ? 0 : 1;
