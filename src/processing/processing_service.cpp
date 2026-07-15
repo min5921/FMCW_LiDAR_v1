@@ -80,12 +80,23 @@ struct ProcessingService::Impl {
       }
       bool batch_complete = true;
       std::uint64_t line_completed_timestamp_ns = 0U;
-      for (std::size_t record_index = 0; record_index < batch->records.size(); ++record_index) {
+      if (!processor.processBatch(*batch, snapshots.selectedRecordIndex(),
+                                  processed_batch_workspace, error) ||
+          processed_batch_workspace.size() != batch->records.size()) {
+        std::lock_guard<std::mutex> lock(mutex);
+        worker_error = error.empty() ? "DMA batch processing returned an invalid result count" : error;
+        stop_reason = "Signal processing failed";
+        stop_requested = true;
+        accepting = false;
+        queue.clear();
+        batch_complete = false;
+      }
+      for (std::size_t record_index = 0;
+           batch_complete && record_index < batch->records.size(); ++record_index) {
         const auto raw = rawFrameAt(batch, record_index);
-        auto processed = std::make_shared<ProcessedFrame>();
-        if (!raw || !processor.process(*raw, *processed, error)) {
+        if (!raw) {
           std::lock_guard<std::mutex> lock(mutex);
-          worker_error = error.empty() ? "DMA batch contains an invalid raw frame" : error;
+          worker_error = "DMA batch contains an invalid raw frame";
           stop_reason = "Signal processing failed";
           stop_requested = true;
           accepting = false;
@@ -93,6 +104,8 @@ struct ProcessingService::Impl {
           batch_complete = false;
           break;
         }
+        auto processed = std::make_shared<ProcessedFrame>(
+            std::move(processed_batch_workspace[record_index]));
         snapshots.publish(*raw, *processed);
         if (record_index + 1U == batch->records.size()) {
           line_completed_timestamp_ns = nowNs();
@@ -151,6 +164,7 @@ struct ProcessingService::Impl {
   std::thread worker;
   SignalProcessor processor;
   ProcessingSnapshotStore snapshots;
+  std::vector<ProcessedFrame> processed_batch_workspace;
   SystemConfig config;
   std::optional<PendingRuntimeConfig> pending_runtime_config;
   ProcessedFrameCallback callback;

@@ -66,7 +66,7 @@ DMA buffer는 acquisition, processing, raw storage 사이의 기본 운반 단�
 | 7.1 ADC and configuration correctness | done | 정확한 ATS9371 sample과 일관된 chirp profile | 최종 capture 비교 시 필요 |
 | 7.2 Hardware runtime and DMA batch | in_progress | EXE에서 실제 ATS9371 연결 및 지속 DMA 수집 | Windows ATS9371 acceptance 필요 |
 | 7.3A 998-record processing baseline | done | strict DMA simulator, 1996 FFT/998 XYZIV와 deadline 계측 | reference raw로 검증 가능 |
-| 7.3B FFTW processing optimization | pending | CPU 1996-transform batch 거리/B-scan/3D | target CPU benchmark 필요 |
+| 7.3B FFTW processing optimization | done | 16 fixed FFTW batches, parity and selected-spectrum copy | target CPU acceptance remains in 7.3D |
 | 7.3C CUDA processing optimization | pending | GPU batch 전처리부터 peak/point까지 처리 | local RTX, 이후 Jetson 필요 |
 | 7.3D 200 Hz performance acceptance | pending | 998-point B-scan line을 5 ms 안에 완료 | target Windows/Jetson 필요 |
 | 7.4 High-speed raw storage | pending | DMA-block recording과 replay | NVMe sustained test 필요 |
@@ -195,6 +195,17 @@ Phase 7.3은 batch API 구현만으로 완료하지 않는다. 7.3A부터 7.3D�
 - batch 결과가 single-record reference와 정의된 tolerance 안에서 일치한다.
 - output point count가 항상 998이고 invalid 결과는 `NaN`이다.
 - CPU mode의 B-scan, 3D, UDP, processed storage가 동일한 batch 결과를 사용한다.
+
+#### Software Verification Record (2026-07-15)
+
+- `SignalProcessor::processBatch` now preprocesses one DMA batch into reusable contiguous UP/DOWN workspaces and returns all peak, distance, velocity, and XYZIV results together.
+- FFTW uses a measured fixed chunk of 64 records, or 128 interleaved UP/DOWN transforms. The 998-record qualification workload therefore uses 16 FFT batch executions instead of 1,996 synchronous single-transform executions; the final chunk is zero padded to keep the plan fixed.
+- Each FFTW chunk is split across up to 16 independent plan/workspace lanes. OpenMP parallelizes preprocessing, lane execution, peak search, and geometry without changing the common FFTW/CUDA algorithm contract.
+- Only the selected record retains UP/DOWN magnitude spectra for Time Domain and FFT UI publication. All 998 records still produce independent peak and XYZIV results.
+- Automated parity tests compare batch results against the original single-record FFTW path for integer bins, dBFS magnitude, distance, velocity, XYZIV, and below-threshold `NaN` behavior. The 998-record execution-count test verifies exactly 16 FFT batch calls and 998 outputs.
+- The Release benchmark performs three warm-up batches, resets telemetry, and then measures 32 complete batches. Across four independent runs, average `SignalProcessor::processBatch` time was 2.46-3.11 ms and end-to-end p50 was 2.41-2.98 ms.
+- Short-run maximum end-to-end latency varied from 4.46 to 8.29 ms, with 0-2 deadline misses. Phase 7.3B is complete, but these measurements are not a Phase 7.3D pass because maximum latency is not yet deterministic and the required 10-minute run has not been completed.
+- Windows MSVC Release and CTest passed 6/6. The packaged EXE smoke test passed with SHA-256 `D1D6A6E75EC5C41DADADE1C1C37512B829F3286529EAD7C0061803C42C02AEB4`.
 
 ### 7.3C: CUDA Processing Optimization
 

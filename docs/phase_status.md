@@ -240,3 +240,13 @@ Phase 7.3A strict DMA simulation and processing baseline (2026-07-15):
 - The baseline still makes 1996 synchronous FFT calls and steady-state record-level temporary vector allocations; Phase 7.3B replaces these with one preallocated FFTW plan-many batch path.
 - Windows MSVC Release and CTest 6/6 passed, including exact qualification payload/cadence, bounded overflow, timing telemetry, and the full 998-record processing baseline.
 - Packaged EXE smoke test passed. SHA-256: `BE628C72E69EFEF613BE349B97A9446368793DB6651D5A5B5D1AF993F0948B23`.
+
+Phase 7.3B FFTW batch processing optimization (2026-07-15):
+
+- `SignalProcessor::processBatch` replaces the 998 repeated record calls with fixed 64-record chunks containing 128 interleaved UP/DOWN transforms.
+- FFTW uses up to 16 independent OpenMP execution lanes with persistent plans and workspaces. The strict 998-record workload now performs 16 FFT batch executions instead of 1,996 synchronous FFT calls.
+- Preprocessing, strict integer peak detection, distance, velocity, calibration, XYZIV, and invalid `NaN` propagation remain common with the single-record and CUDA contracts.
+- Only the operator-selected record copies complete UP/DOWN spectra; all records continue to generate B-scan and point-cloud results.
+- Automated tests confirm batch/single parity and exactly 998 outputs. After three warm-up batches, four independent 32-batch Release runs measured 2.46-3.11 ms average inside the batch processor, down from the 28.1651 ms baseline.
+- End-to-end p50 was 2.41-2.98 ms, but maximum latency varied from 4.46 to 8.29 ms and deadline misses ranged from 0 to 2. Phase 7.3D therefore remains pending and no sustained 5 ms real-time pass is claimed.
+- Windows MSVC Release and CTest passed 6/6. The packaged EXE smoke test passed with SHA-256 `D1D6A6E75EC5C41DADADE1C1C37512B829F3286529EAD7C0061803C42C02AEB4`.

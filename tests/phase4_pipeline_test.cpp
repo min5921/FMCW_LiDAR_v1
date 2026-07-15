@@ -180,6 +180,191 @@ void testSignalProcessingBackendParity(const fmcw::SystemConfig& base_config,
          "FFTW and CUDA preserve the same below-threshold NaN contract");
 }
 
+void expectBatchParity(const fmcw::ProcessedFrame& batch,
+                       const fmcw::ProcessedFrame& reference,
+                       const std::string& record_name) {
+  expect(batch.up_peak.valid == reference.up_peak.valid &&
+             batch.down_peak.valid == reference.down_peak.valid &&
+             batch.measurement_valid == reference.measurement_valid &&
+             batch.point.valid == reference.point.valid,
+         record_name + " preserves peak, measurement, and point validity");
+  expect(batch.up_peak.discrete_bin == reference.up_peak.discrete_bin &&
+             batch.down_peak.discrete_bin == reference.down_peak.discrete_bin,
+         record_name + " preserves integer UP/DOWN peak bins");
+  expect(!batch.processing_note.empty(), record_name + " records its batch processing backend");
+  if (reference.measurement_valid) {
+    expectNear(batch.up_peak.magnitude_db, reference.up_peak.magnitude_db, 1.0e-4,
+               record_name + " preserves UP dBFS magnitude");
+    expectNear(batch.down_peak.magnitude_db, reference.down_peak.magnitude_db, 1.0e-4,
+               record_name + " preserves DOWN dBFS magnitude");
+    expectNear(batch.distance_m, reference.distance_m, 1.0e-6,
+               record_name + " preserves distance");
+    expectNear(batch.velocity_mps, reference.velocity_mps, 1.0e-6,
+               record_name + " preserves velocity");
+    expectNear(batch.point.x, reference.point.x, 1.0e-6, record_name + " preserves X");
+    expectNear(batch.point.y, reference.point.y, 1.0e-6, record_name + " preserves Y");
+    expectNear(batch.point.z, reference.point.z, 1.0e-6, record_name + " preserves Z");
+    expectNear(batch.point.intensity, reference.point.intensity, 1.0e-4,
+               record_name + " preserves intensity");
+    expectNear(batch.point.velocity, reference.point.velocity, 1.0e-6,
+               record_name + " preserves point velocity");
+  } else {
+    expect(std::isnan(batch.up_peak.peak_bin) && std::isnan(batch.down_peak.peak_bin) &&
+               std::isnan(batch.up_peak.magnitude_db) && std::isnan(batch.down_peak.magnitude_db) &&
+               std::isnan(batch.distance_m) && std::isnan(batch.velocity_mps) &&
+               std::isnan(batch.point.x) && std::isnan(batch.point.y) &&
+               std::isnan(batch.point.z) && std::isnan(batch.point.intensity) &&
+               std::isnan(batch.point.velocity),
+           record_name + " preserves the below-threshold NaN contract");
+  }
+}
+
+void testFftwBatchParity(const fmcw::SystemConfig& config,
+                         const std::vector<fmcw::RawFramePtr>& frames) {
+  constexpr std::uint32_t selected_record_index = 2U;
+  fmcw::RawFrameBatch raw_batch;
+  for (std::size_t index = 0; index < frames.size(); ++index) {
+    raw_batch.records.push_back(*frames[index]);
+    raw_batch.records.back().metadata.record_index_in_buffer = static_cast<std::uint32_t>(index);
+    raw_batch.records.back().metadata.records_in_buffer = static_cast<std::uint32_t>(frames.size());
+  }
+  std::fill(raw_batch.records.back().samples.begin(), raw_batch.records.back().samples.end(), 0);
+
+  fmcw::SignalProcessor reference_processor(std::make_unique<fmcw::FftwBackend>());
+  fmcw::SignalProcessor batch_processor(std::make_unique<fmcw::FftwBackend>());
+  std::string error;
+  expect(reference_processor.configure(config, 11U, error) &&
+             batch_processor.configure(config, 11U, error),
+         "single-record and batch FFTW processors configure identically");
+  std::vector<fmcw::ProcessedFrame> reference_results(raw_batch.records.size());
+  bool references_ready = true;
+  for (std::size_t index = 0; index < raw_batch.records.size(); ++index) {
+    references_ready = reference_processor.process(raw_batch.records[index],
+                                                   reference_results[index], error) &&
+        references_ready;
+  }
+  std::vector<fmcw::ProcessedFrame> batch_results;
+  const bool batch_ready = batch_processor.processBatch(raw_batch, selected_record_index,
+                                                        batch_results, error);
+  expect(references_ready && batch_ready && batch_results.size() == reference_results.size(),
+         "FFTW plan-many batch returns one result per input record");
+  if (!references_ready || !batch_ready || batch_results.size() != reference_results.size()) {
+    return;
+  }
+
+  for (std::size_t index = 0; index < batch_results.size(); ++index) {
+    expectBatchParity(batch_results[index], reference_results[index],
+                      "batch record " + std::to_string(index));
+    const bool selected = index == selected_record_index;
+    expect((!batch_results[index].up_fft_magnitude_db.empty()) == selected &&
+               (!batch_results[index].down_fft_magnitude_db.empty()) == selected,
+           "only the selected record retains UI FFT spectra");
+  }
+  const auto& selected_batch = batch_results[selected_record_index];
+  const auto& selected_reference = reference_results[selected_record_index];
+  expect(selected_batch.up_fft_magnitude_db.size() == selected_reference.up_fft_magnitude_db.size() &&
+             selected_batch.down_fft_magnitude_db.size() == selected_reference.down_fft_magnitude_db.size(),
+         "selected record retains complete UP/DOWN spectra");
+  if (selected_batch.up_fft_magnitude_db.size() == selected_reference.up_fft_magnitude_db.size() &&
+      selected_batch.down_fft_magnitude_db.size() == selected_reference.down_fft_magnitude_db.size()) {
+    for (std::size_t index = 0; index < selected_batch.up_fft_magnitude_db.size(); ++index) {
+      expectNear(selected_batch.up_fft_magnitude_db[index],
+                 selected_reference.up_fft_magnitude_db[index], 1.0e-4,
+                 "selected UP spectrum matches single-record FFTW");
+      expectNear(selected_batch.down_fft_magnitude_db[index],
+                 selected_reference.down_fft_magnitude_db[index], 1.0e-4,
+                 "selected DOWN spectrum matches single-record FFTW");
+    }
+  }
+}
+
+struct CountingBatchFftState {
+  fmcw::FftPlan plan;
+  std::size_t prepare_calls = 0U;
+  std::size_t execute_calls = 0U;
+  std::size_t transforms_executed = 0U;
+};
+
+class CountingBatchFftBackend final : public fmcw::IFftBackend {
+ public:
+  explicit CountingBatchFftBackend(std::shared_ptr<CountingBatchFftState> state)
+      : state_(std::move(state)) {}
+
+  std::string name() const override { return "Counting FFTW batch backend"; }
+  fmcw::FftBackendKind kind() const override { return fmcw::FftBackendKind::Fftw; }
+
+  bool prepare(const fmcw::FftPlan& plan, std::string& error) override {
+    state_->plan = plan;
+    ++state_->prepare_calls;
+    error.clear();
+    return plan.length > 1U && plan.batch > 0U;
+  }
+
+  bool execute(const std::vector<float>& input,
+               std::vector<std::complex<float>>& output,
+               std::string& error) override {
+    if (input.size() != state_->plan.length * state_->plan.batch) {
+      error = "Counting FFT batch input does not match its plan";
+      return false;
+    }
+    ++state_->execute_calls;
+    state_->transforms_executed += state_->plan.batch;
+    const auto spectrum_length = state_->plan.length / 2U + 1U;
+    output.assign(spectrum_length * state_->plan.batch, {});
+    for (std::size_t transform = 0; transform < state_->plan.batch; ++transform) {
+      const std::size_t peak_bin = transform % 2U == 0U ? 37U : 43U;
+      output[transform * spectrum_length + peak_bin] = {4096.0F, 0.0F};
+    }
+    error.clear();
+    return true;
+  }
+
+ private:
+  std::shared_ptr<CountingBatchFftState> state_;
+};
+
+void testQualificationBatchExecutionCount() {
+  auto config = fmcw::makeAts9371QualificationSimulatorConfig();
+  auto state = std::make_shared<CountingBatchFftState>();
+  fmcw::SignalProcessor processor(std::make_unique<CountingBatchFftBackend>(state));
+  std::string error;
+  expect(processor.configure(config, 12U, error),
+         "998-record qualification batch processor configures");
+
+  fmcw::RawFrame template_frame;
+  template_frame.samples.assign(config.digitizer.sample_point, 0);
+  template_frame.metadata.frame_kind = fmcw::FrameKind::FullChirpPeriod;
+  template_frame.metadata.sample_rate_hz = config.digitizer.sample_rate_hz;
+  template_frame.metadata.record_length = config.digitizer.sample_point;
+  template_frame.metadata.up_segment = config.chirp_segmentation.up_segment;
+  template_frame.metadata.down_segment = config.chirp_segmentation.down_segment;
+  template_frame.metadata.records_in_buffer = config.digitizer.records_per_buffer;
+  template_frame.metadata.scan_position.valid = true;
+
+  fmcw::RawFrameBatch raw_batch;
+  raw_batch.records.resize(config.digitizer.records_per_buffer, template_frame);
+  for (std::size_t index = 0; index < raw_batch.records.size(); ++index) {
+    auto& record = raw_batch.records[index];
+    record.metadata.frame_id = index + 1U;
+    record.metadata.record_index_in_buffer = static_cast<std::uint32_t>(index);
+    record.metadata.scan_position.x_index = static_cast<std::uint32_t>(index);
+  }
+  raw_batch.metadata.record_count = config.digitizer.records_per_buffer;
+  raw_batch.metadata.record_length = config.digitizer.sample_point;
+
+  std::vector<fmcw::ProcessedFrame> results;
+  expect(processor.processBatch(raw_batch, 997U, results, error),
+         "998-record qualification workload executes as FFTW batches");
+  expect(results.size() == 998U && results.front().measurement_valid &&
+             results.back().measurement_valid,
+         "qualification workload produces all 998 measurement results");
+  expect(state->execute_calls == 16U && state->transforms_executed == 2048U,
+         "998 records use 16 fixed FFT batches instead of 1,996 synchronous FFT calls");
+  expect(results.front().up_fft_magnitude_db.empty() &&
+             !results.back().up_fft_magnitude_db.empty(),
+         "qualification workload retains spectra only for selected record 997");
+}
+
 fmcw::ProcessedFrame testSignalProcessing(const fmcw::SystemConfig& config,
                                           const std::vector<fmcw::RawFramePtr>& frames) {
   fmcw::SignalProcessor processor(std::make_unique<fmcw::FftwBackend>());
@@ -350,8 +535,9 @@ class BlockingFftBackend final : public fmcw::IFftBackend {
 
   bool prepare(const fmcw::FftPlan& plan, std::string& error) override {
     length_ = plan.length;
+    batch_ = plan.batch;
     error.clear();
-    return length_ > 1U && plan.batch == 1U;
+    return length_ > 1U && batch_ > 0U;
   }
 
   bool execute(const std::vector<float>& input, std::vector<std::complex<float>>& output,
@@ -364,11 +550,11 @@ class BlockingFftBackend final : public fmcw::IFftBackend {
         state_->condition.wait(lock, [this] { return state_->release; });
       }
     }
-    if (input.size() != length_) {
+    if (input.size() != length_ * batch_) {
       error = "Blocking FFT input length mismatch";
       return false;
     }
-    output.assign(length_ / 2U + 1U, {});
+    output.assign((length_ / 2U + 1U) * batch_, {});
     error.clear();
     return true;
   }
@@ -376,6 +562,7 @@ class BlockingFftBackend final : public fmcw::IFftBackend {
  private:
   std::shared_ptr<BlockingFftState> state_;
   std::size_t length_ = 0U;
+  std::size_t batch_ = 0U;
 };
 
 void testProcessingOverflow(fmcw::SystemConfig config, const std::vector<fmcw::RawFramePtr>& frames) {
@@ -730,6 +917,10 @@ int main() {
   if (frames.size() >= 2U) {
     std::cout << "[Phase4] FFTW/CUDA processing parity\n" << std::flush;
     testSignalProcessingBackendParity(config, *frames.front());
+    std::cout << "[Phase7.3B] FFTW batch parity\n" << std::flush;
+    testFftwBatchParity(config, frames);
+    std::cout << "[Phase7.3B] Qualification FFT batch execution count\n" << std::flush;
+    testQualificationBatchExecutionCount();
     std::cout << "[Phase4] Signal processor\n" << std::flush;
     const auto processed = testSignalProcessing(config, frames);
     std::cout << "[Phase4] Processing service\n" << std::flush;

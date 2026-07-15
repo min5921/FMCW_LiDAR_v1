@@ -60,6 +60,16 @@ target_include_directories(fmcw_core
 )
 target_compile_features(fmcw_core PUBLIC cxx_std_17)
 
+find_package(OpenMP QUIET COMPONENTS CXX)
+if(OpenMP_CXX_FOUND)
+  target_link_libraries(fmcw_core PRIVATE OpenMP::OpenMP_CXX)
+  target_compile_definitions(fmcw_core PRIVATE FMCW_HAS_OPENMP=1)
+  message(STATUS "OpenMP batch preprocessing: enabled")
+else()
+  target_compile_definitions(fmcw_core PRIVATE FMCW_HAS_OPENMP=0)
+  message(STATUS "OpenMP batch preprocessing: disabled")
+endif()
+
 if(WIN32)
   target_link_libraries(fmcw_core PRIVATE ws2_32)
 endif()

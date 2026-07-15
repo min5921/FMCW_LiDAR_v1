@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace fmcw {
 
@@ -22,6 +23,8 @@ class SignalProcessor {
   bool updateRuntimeConfig(const ProcessingConfig& config, std::uint64_t processing_config_revision,
                            std::string& error);
   bool process(const RawFrame& raw, ProcessedFrame& processed, std::string& error);
+  bool processBatch(const RawFrameBatch& raw_batch, std::uint32_t selected_record_index,
+                    std::vector<ProcessedFrame>& processed_batch, std::string& error);
 
   std::string backendName() const;
   std::uint64_t processingConfigRevision() const;
