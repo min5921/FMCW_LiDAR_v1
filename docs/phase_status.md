@@ -197,3 +197,4 @@ Signal-processing performance acceptance decision (2026-07-15):
 - FFTW and CUDA must each sustain at least 10 minutes with no batch over 5.00 ms, no deadline miss, no drop, no stale result, and no growing processing queue.
 - Disk, UDP, and Qt paint have separate subsystem acceptance and are not included in the 5 ms signal-processing timer.
 - Phase 7.3 is now explicitly split into baseline, FFTW optimization, CUDA optimization, and 200 Hz performance acceptance. Implementation remains pending.
+- Decision commit: `abc50aa`
