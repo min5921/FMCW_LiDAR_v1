@@ -187,3 +187,13 @@ Peak-threshold NaN contract refinement (2026-07-15):
 - Windows MSVC Release, CTest 5/5, and the packaged EXE smoke test passed.
 - Packaged EXE SHA-256: `BB4F66D48B3DFEDA3CEC0BBB5B5F2DB7D9067A0F5368493D1BF426A2E35043F5`.
 - Implementation commit: `b482cad`
+
+Signal-processing performance acceptance decision (2026-07-15):
+
+- The qualification workload is laser 200 kHz, digitizer 1 GS/s, 4992 samples/record, 998 records/DMA buffer, and 2048-sample UP plus 2048-sample DOWN segments.
+- One B-scan line requires 1996 length-2048 FFTs and produces exactly 998 peak pairs and points.
+- `998 / 200000 = 4.99 ms`; the hard processing deadline is the 200 Hz B-scan period of 5.00 ms.
+- Timing starts at DMA completion and ends when all 998 measurements and the B-scan line snapshot are complete.
+- FFTW and CUDA must each sustain at least 10 minutes with no batch over 5.00 ms, no deadline miss, no drop, no stale result, and no growing processing queue.
+- Disk, UDP, and Qt paint have separate subsystem acceptance and are not included in the 5 ms signal-processing timer.
+- Phase 7.3 is now explicitly split into baseline, FFTW optimization, CUDA optimization, and 200 Hz performance acceptance. Implementation remains pending.

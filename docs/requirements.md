@@ -406,6 +406,21 @@ CPU FFT 요구사항:
 - raw replay 모드에서도 동일한 processing pipeline을 사용한다.
 - GPU FFT와 CPU FFT 결과 차이를 검증하는 regression test를 제공한다.
 
+998-record 실시간 성능 합격 profile:
+
+- laser full-period rate: 200 kHz
+- digitizer sample rate: 1 GS/s
+- Alazar record length: 4992 samples
+- stable UP segment: 2048 samples
+- stable DOWN segment: 2048 samples
+- records per DMA buffer and B-scan line: 998
+- FFT workload per DMA buffer: 1996 transforms of length 2048
+- B-scan line rate and processing deadline: 200 Hz, 5.00 ms
+
+성능 시간은 DMA completion부터 998번째 distance/velocity/XYZ와 B-scan line snapshot 완성까지 측정한다. ATS sample conversion, ownership copy, segmentation, DC removal, window, FFT, magnitude dBFS, peak threshold/interpolation, `NaN` validity, geometry 계산을 포함한다. Disk write, UDP transmission, Qt paint는 이 5 ms signal-processing 측정에서 제외하고 별도 subsystem deadline으로 관리한다.
+
+FFTW와 CUDA는 각각 최소 10분 sustained test에서 모든 batch가 5.00 ms 이내여야 한다. p50/p95/p99/maximum과 deadline miss count를 기록하고, DMA/processing drop, stale result, 지속적인 queue 증가가 하나라도 있으면 불합격이다. Phase 7.3은 두 backend가 각 target platform에서 이 기준을 통과한 뒤에만 완료한다.
+
 처리 지연 목표:
 
 - UI plot update: 20-60 Hz 범위에서 설정 가능

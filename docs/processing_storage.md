@@ -106,7 +106,9 @@ Waveform/FFT는 processed frame마다 교체한다. Scan line과 B-scan은 모�
 
 ## 8. Binary Storage
 
-Phase 7.2 changes the `ProcessingService` queue item to an immutable `RawFrameBatch`. The worker currently processes every record in order with the existing single-record `SignalProcessor`; Phase 7.3A replaces those repeated FFT calls with one FFTW plan-many batch while preserving identical per-record peak and point results. Queue capacity and high-water telemetry are measured in DMA batches. The compatibility `enqueue(RawFramePtr)` entry point remains only for existing tests and narrow callers.
+Phase 7.2 changes the `ProcessingService` queue item to an immutable `RawFrameBatch`. The worker currently processes every record in order with the existing single-record `SignalProcessor`; Phase 7.3B replaces those repeated FFT calls with a preallocated FFTW plan-many path for 998 records and 1996 UP/DOWN transforms while preserving identical per-record peak and point results. Queue capacity and high-water telemetry are measured in DMA batches. The compatibility `enqueue(RawFramePtr)` entry point remains only for existing tests and narrow callers.
+
+Phase 7.3D의 real-time gate는 laser 200 kHz, digitizer 1 GS/s, 4992 samples/record, 998 records/buffer, UP/DOWN 각 2048 samples 조건이다. DMA completion부터 998 point와 한 B-scan line 완성까지 모든 signal processing이 5.00 ms 안에 끝나야 하며 평균이 아니라 maximum deadline miss로 합격을 판정한다.
 
 기본 파일:
 
