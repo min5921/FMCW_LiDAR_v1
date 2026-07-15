@@ -208,3 +208,4 @@ Backend-equivalent processing and integer-peak refinement (2026-07-15):
 - A runtime CUDA test on the local RTX compares the complete FFTW/CUDA processed result, including validity, integer peak bins, magnitude, distance, velocity, XYZ, and below-threshold `NaN` behavior.
 - Windows MSVC Release, CTest 5/5, the explicit FFTW/CUDA processing parity test, and the packaged EXE smoke test passed.
 - Packaged EXE SHA-256: `9D76895B37084DE83C846D82697C208A0B785C8D0255EAEADBCFA7EDAF3CDDD1`.
+- Implementation commit: `0181afb`
