@@ -107,6 +107,75 @@ void testFftBackends() {
   }
 }
 
+void testSignalProcessingBackendParity(const fmcw::SystemConfig& base_config,
+                                       const fmcw::RawFrame& raw) {
+  if (!fmcw::CudaFftBackend::available()) {
+    std::cout << "Full FFTW/CUDA processing parity skipped: no runtime CUDA device.\n";
+    return;
+  }
+
+  auto fftw_config = base_config;
+  fftw_config.processing.fft_backend = fmcw::FftBackendKind::Fftw;
+  auto cuda_config = base_config;
+  cuda_config.processing.fft_backend = fmcw::FftBackendKind::Cuda;
+  fmcw::SignalProcessor fftw_processor(std::make_unique<fmcw::FftwBackend>());
+  fmcw::SignalProcessor cuda_processor(std::make_unique<fmcw::CudaFftBackend>());
+  std::string error;
+  const bool configured = fftw_processor.configure(fftw_config, 7, error) &&
+      cuda_processor.configure(cuda_config, 7, error);
+  expect(configured, "FFTW and CUDA processors configure with the same algorithm settings");
+  if (!configured) {
+    return;
+  }
+
+  fmcw::ProcessedFrame fftw_result;
+  fmcw::ProcessedFrame cuda_result;
+  const bool processed = fftw_processor.process(raw, fftw_result, error) &&
+      cuda_processor.process(raw, cuda_result, error);
+  expect(processed, "FFTW and CUDA execute the same full signal-processing contract");
+  if (!processed) {
+    return;
+  }
+
+  expect(fftw_result.measurement_valid == cuda_result.measurement_valid &&
+             fftw_result.up_peak.valid == cuda_result.up_peak.valid &&
+             fftw_result.down_peak.valid == cuda_result.down_peak.valid,
+         "FFTW and CUDA produce identical measurement and peak validity");
+  expect(fftw_result.up_peak.discrete_bin == cuda_result.up_peak.discrete_bin &&
+             fftw_result.down_peak.discrete_bin == cuda_result.down_peak.discrete_bin &&
+             fftw_result.up_peak.peak_bin == cuda_result.up_peak.peak_bin &&
+             fftw_result.down_peak.peak_bin == cuda_result.down_peak.peak_bin,
+         "FFTW and CUDA select the same non-interpolated peak bins");
+  expectNear(cuda_result.up_peak.magnitude_db, fftw_result.up_peak.magnitude_db, 0.05,
+             "FFTW and CUDA UP peak magnitude agrees");
+  expectNear(cuda_result.down_peak.magnitude_db, fftw_result.down_peak.magnitude_db, 0.05,
+             "FFTW and CUDA DOWN peak magnitude agrees");
+  expectNear(cuda_result.distance_m, fftw_result.distance_m, 1.0e-6,
+             "FFTW and CUDA distance agrees");
+  expectNear(cuda_result.velocity_mps, fftw_result.velocity_mps, 1.0e-6,
+             "FFTW and CUDA velocity agrees");
+  expectNear(cuda_result.point.x, fftw_result.point.x, 1.0e-6,
+             "FFTW and CUDA X agrees");
+  expectNear(cuda_result.point.y, fftw_result.point.y, 1.0e-6,
+             "FFTW and CUDA Y agrees");
+  expectNear(cuda_result.point.z, fftw_result.point.z, 1.0e-6,
+             "FFTW and CUDA Z agrees");
+  expectNear(cuda_result.point.intensity, fftw_result.point.intensity, 0.05,
+             "FFTW and CUDA intensity agrees");
+
+  fmcw::RawFrame silent = raw;
+  std::fill(silent.samples.begin(), silent.samples.end(), 0);
+  fmcw::ProcessedFrame fftw_invalid;
+  fmcw::ProcessedFrame cuda_invalid;
+  expect(fftw_processor.process(silent, fftw_invalid, error) &&
+             cuda_processor.process(silent, cuda_invalid, error),
+         "FFTW and CUDA process the same below-threshold input");
+  expect(!fftw_invalid.measurement_valid && !cuda_invalid.measurement_valid &&
+             std::isnan(fftw_invalid.distance_m) && std::isnan(cuda_invalid.distance_m) &&
+             std::isnan(fftw_invalid.up_peak.peak_bin) && std::isnan(cuda_invalid.up_peak.peak_bin),
+         "FFTW and CUDA preserve the same below-threshold NaN contract");
+}
+
 fmcw::ProcessedFrame testSignalProcessing(const fmcw::SystemConfig& config,
                                           const std::vector<fmcw::RawFramePtr>& frames) {
   fmcw::SignalProcessor processor(std::make_unique<fmcw::FftwBackend>());
@@ -118,15 +187,18 @@ fmcw::ProcessedFrame testSignalProcessing(const fmcw::SystemConfig& config,
       config.chirp_segmentation.up_segment.length();
   const double down_expected = 43.0 * config.chirp_segmentation.segment_fft_length /
       config.chirp_segmentation.down_segment.length();
-  expectNear(processed.up_peak.interpolated_bin, up_expected, 0.75, "up chirp peak is detected");
-  expectNear(processed.down_peak.interpolated_bin, down_expected, 0.75, "down chirp peak is detected");
+  expectNear(processed.up_peak.peak_bin, up_expected, 0.75, "up chirp peak is detected");
+  expectNear(processed.down_peak.peak_bin, down_expected, 0.75, "down chirp peak is detected");
+  expect(processed.up_peak.peak_bin == static_cast<float>(processed.up_peak.discrete_bin) &&
+             processed.down_peak.peak_bin == static_cast<float>(processed.down_peak.discrete_bin),
+         "peak detection uses the maximum discrete bin without interpolation");
   expect(processed.measurement_valid && processed.point.valid, "valid paired peaks produce distance and XYZ");
   expect(processed.distance_m > 0.0F, "paired peaks produce positive distance");
   expect(processed.velocity_mps < 0.0F, "up/down peak difference preserves velocity sign");
   const double bin_frequency_hz = config.digitizer.sample_rate_hz /
       static_cast<double>(config.chirp_segmentation.segment_fft_length);
   const double expected_distance_m = 299792458.0 *
-      (processed.up_peak.interpolated_bin + processed.down_peak.interpolated_bin) *
+      (processed.up_peak.peak_bin + processed.down_peak.peak_bin) *
       bin_frequency_hz /
       (8.0 * config.laser.sweep_bandwidth_hz * config.laser.sweep_rate_hz) *
       config.calibration.distance_scale + config.calibration.distance_offset_m;
@@ -157,8 +229,8 @@ fmcw::ProcessedFrame testSignalProcessing(const fmcw::SystemConfig& config,
              invalid.down_peak.state == fmcw::PeakTrackState::Invalid,
          "each silent A-scan is independently marked invalid without carrying a previous peak");
   expect(invalid.up_peak.discrete_bin == -1 && invalid.down_peak.discrete_bin == -1 &&
-             std::isnan(invalid.up_peak.interpolated_bin) &&
-             std::isnan(invalid.down_peak.interpolated_bin) &&
+             std::isnan(invalid.up_peak.peak_bin) &&
+             std::isnan(invalid.down_peak.peak_bin) &&
              std::isnan(invalid.up_peak.magnitude_db) &&
              std::isnan(invalid.down_peak.magnitude_db),
          "threshold-rejected peaks expose NaN instead of numeric peak values");
@@ -512,7 +584,7 @@ void testInvalidMeasurementSnapshots() {
   const auto line = snapshots.latestScanLine();
   const auto bscan = snapshots.latestBScan();
   const auto cloud = snapshots.latestPointCloud();
-  expect(fft && !fft->up_peak.valid && std::isnan(fft->up_peak.interpolated_bin) &&
+  expect(fft && !fft->up_peak.valid && std::isnan(fft->up_peak.peak_bin) &&
              std::isnan(fft->up_peak.magnitude_db),
          "selected FFT snapshot preserves an invalid peak as NaN");
   expect(line && line->valid[0] == 0U && std::isnan(line->up_peak_index[0]) &&
@@ -612,6 +684,8 @@ int main() {
   std::cout << "[Phase4] Fake frames\n" << std::flush;
   const auto frames = makeFakeFrames(config, config.scan.x_pixel_count);
   if (frames.size() >= 2U) {
+    std::cout << "[Phase4] FFTW/CUDA processing parity\n" << std::flush;
+    testSignalProcessingBackendParity(config, *frames.front());
     std::cout << "[Phase4] Signal processor\n" << std::flush;
     const auto processed = testSignalProcessing(config, frames);
     std::cout << "[Phase4] Processing service\n" << std::flush;

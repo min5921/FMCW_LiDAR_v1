@@ -143,7 +143,7 @@ enum class PeakTrackState : std::uint8_t {
 
 struct PeakMeasurement {
   std::int32_t discrete_bin = -1;
-  float interpolated_bin = std::numeric_limits<float>::quiet_NaN();
+  float peak_bin = std::numeric_limits<float>::quiet_NaN();
   float magnitude_db = std::numeric_limits<float>::quiet_NaN();
   PeakTrackState state = PeakTrackState::Invalid;
   bool valid = false;

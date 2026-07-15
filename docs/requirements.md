@@ -396,11 +396,14 @@ CPU FFT 요구사항:
 
 - acquisition thread는 UI, UDP, disk write를 기다리지 않아야 한다.
 - FFT backend는 동일한 입력/출력 구조를 사용해 GPU/CPU를 런타임에서 선택할 수 있어야 한다.
+- FFTW와 CUDA/cuFFT는 연산 주체만 다르고 ADC conversion, segmentation, DC removal, polarity, window, zero padding, dBFS scaling, peak, distance/velocity, calibration, XYZ, validity의 순서와 수식은 동일해야 한다.
+- backend별로 다른 window, magnitude normalization, threshold 조건, peak 알고리즘 또는 calibration을 사용해서는 안 된다.
 - GPU FFT 실패 시 기본 정책은 acquisition stop으로 한다.
 - FFTW fallback은 디버그/검증 모드에서만 수동 선택한다.
 - processing queue 길이, 처리 지연, drop count를 실시간 표시한다.
 - peak detection threshold와 search range는 실행 중 변경 가능해야 한다.
 - 각 A-scan의 UP/DOWN peak는 이전 A-scan과 독립적으로 search range 안의 최대값을 검출한다.
+- 현재 version은 peak interpolation이나 sub-bin estimation을 사용하지 않고 threshold를 초과하는 최대 정수 FFT bin을 사용한다.
 - threshold를 초과하는 peak가 없으면 이전 값을 유지하지 않고 해당 결과를 invalid로 기록하며, 모든 실수형 peak 및 측정값을 `NaN`으로 전달한다.
 - 설정 변경이 처리 결과에 반영된 frame 번호를 기록한다.
 - raw replay 모드에서도 동일한 processing pipeline을 사용한다.
@@ -417,7 +420,7 @@ CPU FFT 요구사항:
 - FFT workload per DMA buffer: 1996 transforms of length 2048
 - B-scan line rate and processing deadline: 200 Hz, 5.00 ms
 
-성능 시간은 DMA completion부터 998번째 distance/velocity/XYZ와 B-scan line snapshot 완성까지 측정한다. ATS sample conversion, ownership copy, segmentation, DC removal, window, FFT, magnitude dBFS, peak threshold/interpolation, `NaN` validity, geometry 계산을 포함한다. Disk write, UDP transmission, Qt paint는 이 5 ms signal-processing 측정에서 제외하고 별도 subsystem deadline으로 관리한다.
+성능 시간은 DMA completion부터 998번째 distance/velocity/XYZ와 B-scan line snapshot 완성까지 측정한다. ATS sample conversion, ownership copy, segmentation, DC removal, window, FFT, magnitude dBFS, strict peak threshold와 최대 정수 bin 선택, `NaN` validity, geometry 계산을 포함한다. Disk write, UDP transmission, Qt paint는 이 5 ms signal-processing 측정에서 제외하고 별도 subsystem deadline으로 관리한다.
 
 FFTW와 CUDA는 각각 최소 10분 sustained test에서 모든 batch가 5.00 ms 이내여야 한다. p50/p95/p99/maximum과 deadline miss count를 기록하고, DMA/processing drop, stale result, 지속적인 queue 증가가 하나라도 있으면 불합격이다. Phase 7.3은 두 backend가 각 target platform에서 이 기준을 통과한 뒤에만 완료한다.
 

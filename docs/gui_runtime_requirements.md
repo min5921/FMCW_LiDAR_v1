@@ -156,6 +156,7 @@ Processing page의 필수 runtime 설정:
 
 - candidate는 threshold를 초과하며 global search range 안에 있어야 한다.
 - UP과 DOWN은 각 A-scan에서 독립적으로 최대 peak를 검출한다.
+- 현재 version은 peak interpolation이나 sub-bin estimation 없이 최대 정수 bin을 사용한다.
 - 이전 A-scan의 peak index를 추적, 유지, 재탐색하지 않는다.
 - threshold를 초과하는 candidate가 없으면 해당 chirp peak와 측정 결과를 invalid로 기록하고, 실수형 값은 `NaN`으로 표시·저장한다.
 

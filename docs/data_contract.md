@@ -48,7 +48,9 @@ Configuration and optical-state history map each revision to the first and last 
 
 ## Processed Frame Unit
 
-One `ProcessedFrame` is the result of processing one full-period `RawFrame` at one scan position. It carries independent up/down FFT magnitude arrays, independently detected peak results, one distance/velocity measurement, and one XYZ point. A peak that does not exceed the threshold is invalid for that A-scan; no value is carried from a previous A-scan. Invalid floating-point peak, distance, velocity, intensity, and XYZ fields are quiet `NaN`, while the integer `discrete_bin` sentinel remains `-1` and validity flags remain false.
+One `ProcessedFrame` is the result of processing one full-period `RawFrame` at one scan position. It carries independent up/down FFT magnitude arrays, independently detected peak results, one distance/velocity measurement, and one XYZ point. A peak that does not exceed the threshold is invalid for that A-scan; no value is carried from a previous A-scan. Invalid floating-point peak, distance, velocity, intensity, and XYZ fields are quiet `NaN`, while the integer `discrete_bin` sentinel remains `-1` and validity flags remain false. A valid `peak_bin` is exactly the selected integer `discrete_bin`; this version does not perform peak interpolation.
+
+FFTW and CUDA/cuFFT consume the same configuration and implement the same ordered signal-processing contract. Backend selection may change execution hardware and memory movement but must not change preprocessing, magnitude scaling, peak selection, distance/velocity, calibration, XYZ, or validity semantics.
 
 Scan-line and B-scan arrays are derived immutable snapshots. They are not embedded back into every processed frame.
 

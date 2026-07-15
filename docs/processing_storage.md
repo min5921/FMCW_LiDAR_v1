@@ -30,6 +30,8 @@ Backend:
 - `FftwBackend`: FFTW3 single-precision `fftwf` R2C
 - `CudaFftBackend`: CUDA runtime buffer와 cuFFT R2C
 
+FFTW와 CUDA/cuFFT의 차이는 연산을 수행하는 processor와 memory execution path뿐이다. ADC conversion, segmentation, DC removal, polarity, window, zero padding, one-sided dBFS scaling, threshold comparison, maximum-bin selection, distance/velocity, calibration, XYZ, validity 순서와 수식은 동일해야 한다. Backend별로 다른 window, scaling, peak rule, 보간, calibration을 사용하지 않는다. Full CUDA pipeline도 이 algorithm contract를 GPU kernel로 그대로 실행할 뿐 별도 신호처리 알고리즘을 정의하지 않는다.
+
 Implementation ownership:
 
 - `src/processing/cpu/fftw_backend.cpp`: active FFTW implementation
@@ -55,7 +57,7 @@ magnitude_db = 20 log10(max(2 |FFT[k]| / sum(window), 1e-10))
 
 ## 4. Peak Detection
 
-Peak candidate는 configured search range에서 threshold를 초과하는 최대 magnitude bin이다. 좌우 bin이 있으면 parabolic interpolation으로 fractional bin을 계산한다.
+Peak candidate는 configured search range에서 threshold를 초과하는 최대 magnitude bin이다. 현재 version은 peak interpolation이나 sub-bin estimation을 수행하지 않는다. `peak_bin`은 선택된 `discrete_bin`을 float로 표현한 값이며 유효할 때 항상 정수값이다.
 
 UP과 DOWN peak는 각 A-scan에서 독립적으로 검출한다. 이전 A-scan의 peak index를 추적하거나 유지하지 않는다. 한쪽이라도 threshold를 초과하는 peak가 없으면 해당 A-scan의 measurement validity는 false이며 실수형 peak, distance, velocity, intensity, XYZ는 `NaN`이다. 정수형 `discrete_bin`은 `-1`을 유지한다.
 

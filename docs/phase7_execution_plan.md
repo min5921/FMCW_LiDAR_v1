@@ -13,11 +13,12 @@ Last reviewed: 2026-07-15
 5. hardware trigger는 UP chirp 시작에서 한 번만 발생하고, Alazar record 하나가 전체 UP+DOWN chirp period를 포함한다.
 6. `records_per_buffer`는 한 B-scan line의 A-scan 수이고, `scan.y_line_count`는 사용자가 설정하는 B-scans/frame 수다.
 7. Time Domain과 FFT는 선택한 A-scan만 표시하지만 peak, distance/velocity, B-scan, 3D, UDP, raw/processed storage는 모든 A-scan을 처리한다.
-8. CPU backend는 FFTW3f, GPU backend는 CUDA/cuFFT를 사용한다. 두 backend는 같은 입력과 출력 계약을 공유한다.
-9. real-time queue overflow의 기본 정책은 acquisition `STOP`이다.
-10. EDFA는 `none`, `manual`, `controlled`를 지원하며 EDFA가 없어도 acquisition이 가능해야 한다.
-11. global START/STOP 하나가 processing, storage, digitizer, MCU, optional EDFA를 함께 제어한다.
-12. 각 subphase는 구현, 테스트, 문서 갱신 후 독립 commit/push한다.
+8. CPU backend는 FFTW3f, GPU backend는 CUDA/cuFFT를 사용한다. 두 backend는 실행 주체만 다르며 preprocessing부터 validity까지 동일한 신호처리 순서, 수식, 설정, 입력과 출력 계약을 사용한다.
+9. 현재 version의 peak는 threshold를 초과하는 최대 정수 FFT bin이며 interpolation이나 sub-bin estimation을 사용하지 않는다.
+10. real-time queue overflow의 기본 정책은 acquisition `STOP`이다.
+11. EDFA는 `none`, `manual`, `controlled`를 지원하며 EDFA가 없어도 acquisition이 가능해야 한다.
+12. global START/STOP 하나가 processing, storage, digitizer, MCU, optional EDFA를 함께 제어한다.
+13. 각 subphase는 구현, 테스트, 문서 갱신 후 독립 commit/push한다.
 
 ## 2. Active Data Contract
 
@@ -190,13 +191,14 @@ Phase 7.3은 batch API 구현만으로 완료하지 않는다. 7.3A부터 7.3D�
 - legacy two-slot stream/event 구조를 새 full-period record 계약에 맞게 재구성한다.
 - pinned host memory와 persistent device workspace를 사용한다.
 - ADC conversion, DC removal, UP/DOWN extraction, polarity, window를 CUDA kernel로 처리한다.
-- cuFFT plan-many batch 1996, magnitude dBFS, independent peak search, interpolation, distance/velocity/XYZ를 GPU에서 수행한다.
+- cuFFT plan-many batch 1996, magnitude dBFS, independent maximum integer-bin peak search, distance/velocity/XYZ를 GPU에서 수행한다.
+- CUDA kernel은 FFTW reference와 동일한 preprocessing 순서, dBFS scaling, strict threshold, 무보간 peak, calibration, `NaN` 규칙을 사용한다.
 - H2D, compute, D2H를 두 개 이상의 slot/stream으로 다음 DMA buffer와 overlap한다.
 - selected FFT 한 쌍과 998개 peak/point 결과만 host로 복사한다.
 
 #### Exit Criteria
 
-- FFTW와 CUDA의 peak bin, distance, velocity, XYZ, validity가 정의된 tolerance 안에서 일치한다.
+- FFTW와 CUDA의 validity와 integer peak bin은 정확히 일치하고 magnitude, distance, velocity, XYZ는 정의된 tolerance 안에서 일치한다.
 - 매 record 또는 UP/DOWN마다 stream synchronize를 호출하지 않는다.
 - selected FFT 외 전체 spectrum을 매 batch D2H하지 않는다.
 - local RTX와 Jetson에서 steady-state allocation과 memory growth가 없다.
@@ -210,7 +212,7 @@ Phase 7.3은 batch API 구현만으로 완료하지 않는다. 7.3A부터 7.3D�
 - ATS sample conversion and ownership copy
 - UP/DOWN segmentation, DC removal, polarity, and window
 - 1996 real-to-complex FFTs of length 2048
-- magnitude dBFS, threshold, peak interpolation, and `NaN` validity
+- magnitude dBFS, strict threshold, maximum integer-bin peak, and `NaN` validity
 - 998 distance/velocity/XYZ points and B-scan line assembly
 
 Disk write, UDP transmission, and Qt paint time은 이 5 ms signal-processing gate에서 제외하며 각 subsystem acceptance에서 별도로 측정한다.

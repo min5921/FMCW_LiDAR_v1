@@ -206,7 +206,7 @@ bool writeRawRecord(std::ostream& stream, const RawFrame& frame) {
 bool writePeak(std::ostream& stream, const PeakMeasurement& peak) {
   const auto state = static_cast<std::uint8_t>(peak.state);
   const auto valid = static_cast<std::uint8_t>(peak.valid ? 1U : 0U);
-  return writeScalar(stream, peak.discrete_bin) && writeScalar(stream, peak.interpolated_bin) &&
+  return writeScalar(stream, peak.discrete_bin) && writeScalar(stream, peak.peak_bin) &&
       writeScalar(stream, peak.magnitude_db) && writeScalar(stream, state) && writeScalar(stream, valid);
 }
 

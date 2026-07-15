@@ -122,8 +122,8 @@ void ProcessingSnapshotStore::publish(const RawFrame& raw, const ProcessedFrame&
   }
   line_work_.last_frame_id = processed.frame_id;
   line_work_.processing_config_revision = processed.processing_config_revision;
-  line_work_.up_peak_index[x] = processed.up_peak.interpolated_bin;
-  line_work_.down_peak_index[x] = processed.down_peak.interpolated_bin;
+  line_work_.up_peak_index[x] = processed.up_peak.peak_bin;
+  line_work_.down_peak_index[x] = processed.down_peak.peak_bin;
   line_work_.up_peak_value_db[x] = processed.up_peak.magnitude_db;
   line_work_.down_peak_value_db[x] = processed.down_peak.magnitude_db;
   line_work_.distance_m[x] = processed.distance_m;

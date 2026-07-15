@@ -106,18 +106,8 @@ PeakMeasurement detectPeak(const std::vector<float>& magnitude, std::uint32_t st
   if (!std::isfinite(*best) || *best <= static_cast<float>(threshold_db)) {
     return result;
   }
-  float interpolated = static_cast<float>(best_index);
-  if (best_index > 0U && best_index + 1U < magnitude.size()) {
-    const float left = magnitude[best_index - 1U];
-    const float center = magnitude[best_index];
-    const float right = magnitude[best_index + 1U];
-    const float denominator = left - 2.0F * center + right;
-    if (std::abs(denominator) > 1.0e-6F) {
-      interpolated += std::clamp(0.5F * (left - right) / denominator, -0.5F, 0.5F);
-    }
-  }
   result.discrete_bin = static_cast<std::int32_t>(best_index);
-  result.interpolated_bin = interpolated;
+  result.peak_bin = static_cast<float>(best_index);
   result.magnitude_db = *best;
   result.state = PeakTrackState::Detected;
   result.valid = true;
@@ -266,8 +256,8 @@ bool SignalProcessor::process(const RawFrame& raw, ProcessedFrame& processed, st
   if (processed.up_peak.valid && processed.down_peak.valid) {
     const double bin_frequency_hz = raw.metadata.sample_rate_hz /
         static_cast<double>(impl_->config.chirp_segmentation.segment_fft_length);
-    const double up_frequency_hz = processed.up_peak.interpolated_bin * bin_frequency_hz;
-    const double down_frequency_hz = processed.down_peak.interpolated_bin * bin_frequency_hz;
+    const double up_frequency_hz = processed.up_peak.peak_bin * bin_frequency_hz;
+    const double down_frequency_hz = processed.down_peak.peak_bin * bin_frequency_hz;
     const double wavelength_m = impl_->config.calibration.velocity_wavelength_nm * 1.0e-9;
     // A full triangular sweep has chirp slope 2 * bandwidth * repetition rate.
     const double raw_distance = kSpeedOfLightMps * (up_frequency_hz + down_frequency_hz) /

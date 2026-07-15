@@ -180,7 +180,7 @@ TTL and laser distance contract refinement (2026-07-15):
 Peak-threshold NaN contract refinement (2026-07-15):
 
 - A peak candidate must strictly exceed `peak_threshold_db`; equality does not pass detection.
-- A rejected peak keeps integer `discrete_bin = -1` and exposes `NaN` for interpolated bin and magnitude.
+- A rejected peak keeps integer `discrete_bin = -1` and exposes `NaN` for `peak_bin` and magnitude.
 - If either UP or DOWN peak is rejected, measurement validity is false and distance, velocity, intensity, and XYZ remain `NaN`.
 - Scan-line, B-scan, point-cloud, and processed binary paths preserve invalid values instead of converting them to zero.
 - Plot widgets skip non-finite samples, so an invalid A-scan appears as missing data rather than a false measurement.
@@ -198,3 +198,13 @@ Signal-processing performance acceptance decision (2026-07-15):
 - Disk, UDP, and Qt paint have separate subsystem acceptance and are not included in the 5 ms signal-processing timer.
 - Phase 7.3 is now explicitly split into baseline, FFTW optimization, CUDA optimization, and 200 Hz performance acceptance. Implementation remains pending.
 - Decision commit: `abc50aa`
+
+Backend-equivalent processing and integer-peak refinement (2026-07-15):
+
+- FFTW and CUDA/cuFFT now have an explicit common algorithm contract; backend selection changes the execution processor, not the signal-processing stages or equations.
+- ADC conversion, segmentation, DC removal, polarity, window, zero padding, dBFS scaling, strict threshold, peak selection, distance/velocity, calibration, XYZ, and validity semantics are backend invariant.
+- Parabolic interpolation was removed. A valid `peak_bin` is exactly the maximum threshold-qualified `discrete_bin`; invalid values remain `NaN` and `-1`.
+- The processed binary layout keeps the same float slot but its source field is now named `peak_bin` and carries no fractional estimate.
+- A runtime CUDA test on the local RTX compares the complete FFTW/CUDA processed result, including validity, integer peak bins, magnitude, distance, velocity, XYZ, and below-threshold `NaN` behavior.
+- Windows MSVC Release, CTest 5/5, the explicit FFTW/CUDA processing parity test, and the packaged EXE smoke test passed.
+- Packaged EXE SHA-256: `9D76895B37084DE83C846D82697C208A0B785C8D0255EAEADBCFA7EDAF3CDDD1`.
