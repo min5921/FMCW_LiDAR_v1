@@ -215,4 +215,29 @@ double derivedChirpPeriodSeconds(const SystemConfig& config) {
       config.digitizer.sample_rate_hz;
 }
 
+SystemConfig makeAts9371QualificationSimulatorConfig() {
+  SystemConfig config;
+  config.profile.id = "ats9371-200hz-simulator";
+  config.profile.name = "ATS9371 200 Hz Simulator";
+  config.profile.description = "4992 samples x 998 records strict real-time DMA workload";
+  config.profile.modified_utc = "2026-07-15T00:00:00Z";
+  config.runtime.acquisition_source = AcquisitionSource::Simulator;
+  config.runtime.simulator_realtime_dma = true;
+  config.digitizer.sample_rate_hz = 1.0e9;
+  config.digitizer.sample_point = 4992;
+  config.digitizer.records_per_buffer = 998;
+  config.digitizer.a_scan_count = 998;
+  config.digitizer.post_trigger_samples = 4992;
+  config.scan.x_pixel_count = 998;
+  config.chirp_segmentation.trigger_to_period_offset = 0;
+  config.chirp_segmentation.chirp_period_samples = 4992;
+  config.chirp_segmentation.up_segment = {0, 2048};
+  config.chirp_segmentation.down_segment = {2944, 4992};
+  config.chirp_segmentation.guard_samples = 448;
+  config.chirp_segmentation.segment_fft_length = 2048;
+  config.laser.sweep_rate_hz = 200.0e3;
+  config.ui.last_profile = "config/profiles/ats9371_200hz_simulator.yaml";
+  return config;
+}
+
 }  // namespace fmcw

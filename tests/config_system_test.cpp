@@ -140,6 +140,21 @@ void testStrictYamlAndLayering() {
   expect(issueCount(layered_validation, fmcw::ValidationSeverity::Warning) == 1U,
          "layered profile has no laser consistency warnings");
 
+  const auto qualification = fmcw::ConfigProfileCodec::loadLayered({
+      source_root / "config" / "default.yaml",
+      source_root / "config" / "windows.yaml",
+      source_root / "config" / "profiles" / "ats9371_200hz_simulator.yaml",
+      source_root / "config" / "calibration" / "default.yaml",
+  });
+  expect(qualification.ok() && qualification.config.runtime.simulator_realtime_dma &&
+             qualification.config.digitizer.sample_point == 4992U &&
+             qualification.config.digitizer.records_per_buffer == 998U &&
+             qualification.config.chirp_segmentation.up_segment.length() == 2048U &&
+             qualification.config.chirp_segmentation.down_segment.length() == 2048U,
+         "ATS9371 qualification profile loads the strict 4992 x 998 DMA workload");
+  expect(!fmcw::ConfigValidator::validate(qualification.config).hasErrors(),
+         "ATS9371 qualification profile passes full validation");
+
   const auto jetson = fmcw::ConfigProfileCodec::loadLayered({
       source_root / "config" / "default.yaml",
       source_root / "config" / "jetson.yaml",
@@ -161,6 +176,10 @@ void testLaserDistanceInputsAndRecordMargin() {
   exact_period_record.digitizer.sample_point = 3840;
   exact_period_record.digitizer.post_trigger_samples = 3840;
   exact_period_record.chirp_segmentation.trigger_to_period_offset = 0;
+  exact_period_record.chirp_segmentation.chirp_period_samples = 3840;
+  exact_period_record.chirp_segmentation.up_segment = {192, 1920};
+  exact_period_record.chirp_segmentation.down_segment = {2112, 3840};
+  exact_period_record.chirp_segmentation.guard_samples = 64;
   const auto exact_period_validation = fmcw::ConfigValidator::validate(exact_period_record);
   expect(!hasIssue(exact_period_validation, fmcw::ValidationSeverity::Warning,
                    "digitizer.sample_point"),

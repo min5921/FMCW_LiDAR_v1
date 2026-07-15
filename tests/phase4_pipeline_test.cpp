@@ -315,6 +315,10 @@ void testProcessingServiceBatch(const fmcw::SystemConfig& config,
   mutable_batch->metadata.sequence = 12;
   mutable_batch->metadata.record_count = static_cast<std::uint32_t>(mutable_batch->records.size());
   mutable_batch->metadata.record_length = config.digitizer.sample_point;
+  const auto timestamp_ns = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+      std::chrono::steady_clock::now().time_since_epoch()).count());
+  mutable_batch->metadata.completion_timestamp_ns = timestamp_ns - 10'000'000U;
+  mutable_batch->metadata.ownership_ready_timestamp_ns = timestamp_ns - 8'000'000U;
   fmcw::RawFrameBatchPtr batch = mutable_batch;
   expect(service.enqueueBatch(std::move(batch), error) == fmcw::ProcessingEnqueueResult::Accepted,
          "one immutable DMA batch enters the processing queue");
@@ -323,6 +327,11 @@ void testProcessingServiceBatch(const fmcw::SystemConfig& config,
   const auto status = service.status();
   expect(status.batches_processed == 1U && status.frames_processed == frames.size(),
          "processing service accounts for one batch and every record in it");
+  expect(status.last_ownership_copy_latency_ms >= 1.99 &&
+             status.last_batch_latency_ms >= 10.0 &&
+             status.batch_latency_p50_ms == status.batch_latency_p99_ms &&
+             status.batch_deadline_misses == 1U,
+         "processing telemetry reports DMA-copy, end-to-end percentile, and deadline miss timing");
 }
 
 struct BlockingFftState {

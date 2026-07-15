@@ -167,6 +167,7 @@ ConfigDocument ConfigProfileCodec::encode(const SystemConfig& config) {
   document.setString("runtime.acquisition_source", toString(config.runtime.acquisition_source));
   document.setString("runtime.replay_file", config.runtime.replay_file);
   document.setBoolean("runtime.replay_loop", config.runtime.replay_loop);
+  document.setBoolean("runtime.simulator_realtime_dma", config.runtime.simulator_realtime_dma);
 
   setUnsigned(document, "digitizer.system_id", config.digitizer.system_id);
   setUnsigned(document, "digitizer.board_id", config.digitizer.board_id);
@@ -299,6 +300,7 @@ bool ConfigProfileCodec::decode(const ConfigDocument& document, SystemConfig& co
   readEnum(document, "runtime.acquisition_source", config.runtime.acquisition_source, issues, source);
   readString(document, "runtime.replay_file", config.runtime.replay_file, issues, source);
   readBool(document, "runtime.replay_loop", config.runtime.replay_loop, issues, source);
+  readBool(document, "runtime.simulator_realtime_dma", config.runtime.simulator_realtime_dma, issues, source);
 
   readInteger(document, "digitizer.system_id", config.digitizer.system_id, issues, source);
   readInteger(document, "digitizer.board_id", config.digitizer.board_id, issues, source);

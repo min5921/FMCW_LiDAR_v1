@@ -101,6 +101,7 @@ struct DmaBufferMetadata {
   std::uint32_t format_version = kRawFrameBatchFormatVersion;
   std::uint64_t sequence = 0;
   std::uint64_t completion_timestamp_ns = 0;
+  std::uint64_t ownership_ready_timestamp_ns = 0;
   std::uint32_t record_count = 0;
   std::uint32_t record_length = 0;
   std::uint64_t dropped_buffer_count = 0;

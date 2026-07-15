@@ -65,7 +65,7 @@ DMA buffer는 acquisition, processing, raw storage 사이의 기본 운반 단�
 | --- | --- | --- | --- |
 | 7.1 ADC and configuration correctness | done | 정확한 ATS9371 sample과 일관된 chirp profile | 최종 capture 비교 시 필요 |
 | 7.2 Hardware runtime and DMA batch | in_progress | EXE에서 실제 ATS9371 연결 및 지속 DMA 수집 | Windows ATS9371 acceptance 필요 |
-| 7.3A 998-record processing baseline | pending | 1996 FFT workload와 5 ms deadline 계측 | reference raw로 검증 가능 |
+| 7.3A 998-record processing baseline | done | strict DMA simulator, 1996 FFT/998 XYZIV와 deadline 계측 | reference raw로 검증 가능 |
 | 7.3B FFTW processing optimization | pending | CPU 1996-transform batch 거리/B-scan/3D | target CPU benchmark 필요 |
 | 7.3C CUDA processing optimization | pending | GPU batch 전처리부터 peak/point까지 처리 | local RTX, 이후 Jetson 필요 |
 | 7.3D 200 Hz performance acceptance | pending | 998-point B-scan line을 5 ms 안에 완료 | target Windows/Jetson 필요 |
@@ -165,6 +165,18 @@ Phase 7.3은 batch API 구현만으로 완료하지 않는다. 7.3A부터 7.3D�
 - deterministic simulator/replay 입력이 항상 1996 FFT와 998 point를 생성한다.
 - timing telemetry가 p50, p95, p99, maximum, deadline miss count를 보고한다.
 - 현재 batch-1 병목과 allocation/copy 횟수가 수치로 기록된다.
+
+#### Software Verification Record (2026-07-15)
+
+- EXE 시작 profile과 `config/profiles/ats9371_200hz_simulator.yaml`은 1 GS/s, 4992 samples, 998 records, UP/DOWN 각 2048 samples, 8 DMA buffers, 200 kHz sweep를 고정한다.
+- 이 profile의 UP `[0, 2048)`와 DOWN `[2944, 4992)` 위치는 부하 및 parity 검증용 synthetic reference다. 실제 trigger 배선 후 측정한 안정 구간으로 교체하며 길이와 처리 계약만 이 단계에서 고정한다.
+- strict simulator는 소비 속도에 맞춰 느려지지 않는다. 4.99 ms 절대 주기로 DMA completion을 bounded ring에 넣고, 8개 buffer가 모두 차면 drop을 증가시킨 뒤 overflow를 latch하고 acquisition `STOP` 오류를 전달한다.
+- development simulator는 기존 UI/단위 테스트용 30 Hz pacing을 유지하며 strict 동작은 profile의 `runtime.simulator_realtime_dma: true`에서만 활성화된다.
+- DMA metadata는 completion과 ownership-copy 완료 timestamp를 각각 보존한다. Processing telemetry는 copy, signal, end-to-end batch latency와 최근 p50/p95/p99, 전체 max, 5 ms miss 누계를 보고한다.
+- deterministic Release baseline은 정확히 998 records, 1996 FFT, 998 valid XYZIV와 한 B-scan line을 생성했다.
+- 현재 single-record FFTW baseline은 `28.1651 ms/batch`였고 5 ms deadline miss 1회를 기록했다. record마다 UP/DOWN input 2개, spectrum 2개, magnitude 2개와 `ProcessedFrame`을 생성하고 FFT를 1996회 동기 호출하는 구조가 7.3B의 제거 대상이다.
+- Release build와 CTest 6/6이 통과했으며 strict 4992 x 998 payload, 4.99 ms cadence, 8-buffer overflow를 자동 검증한다.
+- Packaged EXE smoke test passed. SHA-256: `BE628C72E69EFEF613BE349B97A9446368793DB6651D5A5B5D1AF993F0948B23`.
 
 ### 7.3B: FFTW Processing Optimization
 

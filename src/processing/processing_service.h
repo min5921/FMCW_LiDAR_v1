@@ -32,6 +32,15 @@ struct ProcessingServiceStatus {
   std::uint64_t last_processed_frame_id = 0;
   std::uint64_t processing_config_revision = 0;
   double average_latency_ms = 0.0;
+  double last_batch_latency_ms = 0.0;
+  double last_ownership_copy_latency_ms = 0.0;
+  double last_signal_processing_latency_ms = 0.0;
+  double batch_latency_p50_ms = 0.0;
+  double batch_latency_p95_ms = 0.0;
+  double batch_latency_p99_ms = 0.0;
+  double maximum_batch_latency_ms = 0.0;
+  double batch_deadline_ms = 5.0;
+  std::uint64_t batch_deadline_misses = 0;
   std::string backend_name;
   std::string stop_reason;
 };

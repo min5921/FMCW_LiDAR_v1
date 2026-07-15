@@ -10,6 +10,7 @@ runtime:
   acquisition_source: simulator
   replay_file: ""
   replay_loop: false
+  simulator_realtime_dma: false
 digitizer:
   system_id: 1
   board_id: 1

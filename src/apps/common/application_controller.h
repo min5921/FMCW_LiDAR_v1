@@ -51,6 +51,15 @@ struct RuntimeStatus {
   std::size_t storage_queue_size = 0;
   std::size_t storage_queue_capacity = 0;
   double processing_latency_ms = 0.0;
+  double processing_batch_latency_ms = 0.0;
+  double processing_copy_latency_ms = 0.0;
+  double processing_signal_latency_ms = 0.0;
+  double processing_batch_p50_ms = 0.0;
+  double processing_batch_p95_ms = 0.0;
+  double processing_batch_p99_ms = 0.0;
+  double processing_batch_max_ms = 0.0;
+  double processing_deadline_ms = 5.0;
+  std::uint64_t processing_deadline_misses = 0;
   double storage_throughput_mbps = 0.0;
   bool udp_running = false;
   std::uint64_t udp_frames_sent = 0;

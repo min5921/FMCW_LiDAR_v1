@@ -16,12 +16,14 @@
 #include <algorithm>
 #include <chrono>
 #include <condition_variable>
+#include <cmath>
 #include <cstdint>
 #include <deque>
 #include <iostream>
 #include <memory>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -446,6 +448,9 @@ void testFakeDmaBatchSession() {
   expect(batch && batch->records.size() == 4U && batch->metadata.record_count == 4U &&
              batch->metadata.record_length == config.digitizer.sample_point,
          "DMA batch owns all configured records and record-length metadata");
+  expect(batch && batch->metadata.ownership_ready_timestamp_ns >=
+                         batch->metadata.completion_timestamp_ns,
+         "DMA batch timestamps completion before simulator ownership copy is ready");
   bool metadata_consistent = batch != nullptr;
   for (std::size_t index = 0; batch && index < batch->records.size(); ++index) {
     const auto frame = fmcw::rawFrameAt(batch, index);
@@ -457,6 +462,75 @@ void testFakeDmaBatchSession() {
   }
   expect(metadata_consistent, "all records retain immutable batch and session metadata");
   expect(session.stop(error), "batch session stops cleanly");
+}
+
+void testFakeDmaRingOverflow() {
+  fmcw::FakeDigitizer digitizer;
+  fmcw::SystemConfig config;
+  config.digitizer.records_per_buffer = 2;
+  config.digitizer.a_scan_count = 2;
+  config.digitizer.dma_buffer_count = 2;
+  config.scan.x_pixel_count = 2;
+  config.laser.sweep_rate_hz = 1000.0;
+  config.runtime.simulator_realtime_dma = true;
+  std::string error;
+
+  expect(digitizer.configure(config, error) && digitizer.connect(error) && digitizer.start(error),
+         "bounded fake DMA ring starts");
+  const auto overflow_deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(250);
+  while (digitizer.telemetry().dma_buffer_drops == 0U &&
+         std::chrono::steady_clock::now() < overflow_deadline) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  fmcw::MutableRawFrameBatchPtr batch;
+  expect(digitizer.waitForBatch(batch, std::chrono::milliseconds(20), error) ==
+             fmcw::FrameWaitResult::Error,
+         "fake DMA ring reports overflow instead of slowing the producer");
+  const auto telemetry = digitizer.telemetry();
+  expect(telemetry.dma_buffer_drops == 1U &&
+             telemetry.device.detail.find("overflow") != std::string::npos,
+         "fake DMA overflow is latched in digitizer telemetry");
+  expect(std::abs(telemetry.dma_buffer_period_ms - 2.0) < 0.01,
+         "fake DMA cadence is derived from records per buffer and laser sweep rate");
+  expect(digitizer.stop(error), "overflowed fake DMA ring stops cleanly");
+}
+
+void testAtsQualificationSimulatorLoad() {
+  fmcw::FakeDigitizer digitizer;
+  const auto config = fmcw::makeAts9371QualificationSimulatorConfig();
+  std::string error;
+
+  expect(config.runtime.simulator_realtime_dma &&
+             config.digitizer.sample_point == 4992U &&
+             config.digitizer.records_per_buffer == 998U &&
+             config.chirp_segmentation.up_segment.length() == 2048U &&
+             config.chirp_segmentation.down_segment.length() == 2048U,
+         "ATS qualification simulator fixes the 4992 x 998 full-period workload");
+  expect(digitizer.configure(config, error) && digitizer.connect(error) && digitizer.start(error),
+         "ATS qualification simulator starts at strict DMA cadence");
+
+  fmcw::MutableRawFrameBatchPtr batch;
+  expect(digitizer.waitForBatch(batch, std::chrono::milliseconds(100), error) ==
+             fmcw::FrameWaitResult::FrameReady,
+         "ATS qualification simulator publishes one complete DMA batch");
+  expect(batch && batch->records.size() == 998U &&
+             batch->metadata.record_count == 998U &&
+             batch->metadata.record_length == 4992U &&
+             batch->records.front().samples.size() == 4992U &&
+             batch->records.back().samples.size() == 4992U,
+         "qualification DMA batch contains 998 complete 4992-sample records");
+  const auto running_telemetry = digitizer.telemetry();
+  expect(std::abs(running_telemetry.dma_buffer_period_ms - 4.99) < 0.01 &&
+             std::abs(running_telemetry.dma_buffer_rate_hz - (1000.0 / 4.99)) < 0.5,
+         "qualification DMA batch arrives at the 998 / 200 kHz interval");
+
+  batch.reset();
+  std::this_thread::sleep_for(std::chrono::milliseconds(55));
+  expect(digitizer.waitForBatch(batch, std::chrono::milliseconds(20), error) ==
+             fmcw::FrameWaitResult::Error &&
+             digitizer.telemetry().dma_buffer_drops == 1U,
+         "unserviced qualification workload overflows the eight-buffer DMA ring");
+  expect(digitizer.stop(error), "qualification simulator stops after the overflow test");
 }
 
 void testGlobalStopDeviceOrder() {
@@ -677,6 +751,8 @@ int main() {
   testSerialControllers();
   testFakeFullPeriodSession();
   testFakeDmaBatchSession();
+  testFakeDmaRingOverflow();
+  testAtsQualificationSimulatorLoad();
   testGlobalStopDeviceOrder();
   testRawFrameBatchPoolLifetime();
   testContinuousAcquisitionWorker();

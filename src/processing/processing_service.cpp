@@ -5,12 +5,42 @@
 
 #include <condition_variable>
 #include <deque>
+#include <algorithm>
+#include <chrono>
+#include <cmath>
 #include <mutex>
 #include <optional>
 #include <thread>
 #include <utility>
+#include <vector>
 
 namespace fmcw {
+namespace {
+
+constexpr double kBatchDeadlineMs = 5.0;
+constexpr std::size_t kLatencyWindowSize = 4096U;
+
+std::uint64_t nowNs() {
+  return static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+      std::chrono::steady_clock::now().time_since_epoch()).count());
+}
+
+double elapsedMs(std::uint64_t start_ns, std::uint64_t end_ns) {
+  return start_ns == 0U || end_ns < start_ns ? 0.0 :
+      static_cast<double>(end_ns - start_ns) * 1.0e-6;
+}
+
+double percentile(std::vector<double> values, double quantile) {
+  if (values.empty()) {
+    return 0.0;
+  }
+  std::sort(values.begin(), values.end());
+  const auto index = static_cast<std::size_t>(std::ceil(
+      quantile * static_cast<double>(values.size()))) - 1U;
+  return values[std::min(index, values.size() - 1U)];
+}
+
+}  // namespace
 
 struct ProcessingService::Impl {
   explicit Impl(std::unique_ptr<IFftBackend> backend) : processor(std::move(backend)) {}
@@ -49,6 +79,7 @@ struct ProcessingService::Impl {
         break;
       }
       bool batch_complete = true;
+      std::uint64_t line_completed_timestamp_ns = 0U;
       for (std::size_t record_index = 0; record_index < batch->records.size(); ++record_index) {
         const auto raw = rawFrameAt(batch, record_index);
         auto processed = std::make_shared<ProcessedFrame>();
@@ -63,6 +94,9 @@ struct ProcessingService::Impl {
           break;
         }
         snapshots.publish(*raw, *processed);
+        if (record_index + 1U == batch->records.size()) {
+          line_completed_timestamp_ns = nowNs();
+        }
         {
           std::lock_guard<std::mutex> lock(mutex);
           ++frames_processed;
@@ -86,6 +120,21 @@ struct ProcessingService::Impl {
       }
       if (batch_complete) {
         std::lock_guard<std::mutex> lock(mutex);
+        const auto completion_ns = batch->metadata.completion_timestamp_ns;
+        const auto ownership_ns = batch->metadata.ownership_ready_timestamp_ns == 0U
+            ? completion_ns
+            : batch->metadata.ownership_ready_timestamp_ns;
+        last_ownership_copy_latency_ms = elapsedMs(completion_ns, ownership_ns);
+        last_signal_processing_latency_ms = elapsedMs(ownership_ns, line_completed_timestamp_ns);
+        last_batch_latency_ms = elapsedMs(completion_ns, line_completed_timestamp_ns);
+        maximum_batch_latency_ms = std::max(maximum_batch_latency_ms, last_batch_latency_ms);
+        if (last_batch_latency_ms > kBatchDeadlineMs) {
+          ++batch_deadline_misses;
+        }
+        batch_latency_window.push_back(last_batch_latency_ms);
+        if (batch_latency_window.size() > kLatencyWindowSize) {
+          batch_latency_window.pop_front();
+        }
         ++batches_processed;
       }
       if (!batch_complete) {
@@ -112,6 +161,12 @@ struct ProcessingService::Impl {
   std::uint64_t last_processed_frame_id = 0;
   std::uint64_t processing_config_revision = 0;
   double latency_total_ms = 0.0;
+  double last_batch_latency_ms = 0.0;
+  double last_ownership_copy_latency_ms = 0.0;
+  double last_signal_processing_latency_ms = 0.0;
+  double maximum_batch_latency_ms = 0.0;
+  std::uint64_t batch_deadline_misses = 0;
+  std::deque<double> batch_latency_window;
   bool configured = false;
   bool running = false;
   bool accepting = false;
@@ -160,6 +215,12 @@ bool ProcessingService::start(std::string& error) {
   impl_->frames_processed = 0;
   impl_->last_processed_frame_id = 0;
   impl_->latency_total_ms = 0.0;
+  impl_->last_batch_latency_ms = 0.0;
+  impl_->last_ownership_copy_latency_ms = 0.0;
+  impl_->last_signal_processing_latency_ms = 0.0;
+  impl_->maximum_batch_latency_ms = 0.0;
+  impl_->batch_deadline_misses = 0;
+  impl_->batch_latency_window.clear();
   impl_->stop_requested = false;
   impl_->stop_reason.clear();
   impl_->worker_error.clear();
@@ -265,23 +326,36 @@ bool ProcessingService::waitUntilStopped(std::string& error) {
 }
 
 ProcessingServiceStatus ProcessingService::status() const {
-  std::lock_guard<std::mutex> lock(impl_->mutex);
   ProcessingServiceStatus status;
-  status.configured = impl_->configured;
-  status.running = impl_->running;
-  status.stop_requested = impl_->stop_requested;
-  status.queue_size = impl_->queue.size();
-  status.queue_capacity = impl_->queue_capacity;
-  status.queue_high_water_mark = impl_->queue_high_water_mark;
-  status.batches_processed = impl_->batches_processed;
-  status.frames_processed = impl_->frames_processed;
-  status.last_processed_frame_id = impl_->last_processed_frame_id;
-  status.processing_config_revision = impl_->processing_config_revision;
-  status.average_latency_ms = impl_->frames_processed == 0U
-      ? 0.0
-      : impl_->latency_total_ms / static_cast<double>(impl_->frames_processed);
-  status.backend_name = impl_->processor.backendName();
-  status.stop_reason = impl_->stop_reason;
+  std::vector<double> latency_values;
+  {
+    std::lock_guard<std::mutex> lock(impl_->mutex);
+    status.configured = impl_->configured;
+    status.running = impl_->running;
+    status.stop_requested = impl_->stop_requested;
+    status.queue_size = impl_->queue.size();
+    status.queue_capacity = impl_->queue_capacity;
+    status.queue_high_water_mark = impl_->queue_high_water_mark;
+    status.batches_processed = impl_->batches_processed;
+    status.frames_processed = impl_->frames_processed;
+    status.last_processed_frame_id = impl_->last_processed_frame_id;
+    status.processing_config_revision = impl_->processing_config_revision;
+    status.average_latency_ms = impl_->frames_processed == 0U
+        ? 0.0
+        : impl_->latency_total_ms / static_cast<double>(impl_->frames_processed);
+    status.last_batch_latency_ms = impl_->last_batch_latency_ms;
+    status.last_ownership_copy_latency_ms = impl_->last_ownership_copy_latency_ms;
+    status.last_signal_processing_latency_ms = impl_->last_signal_processing_latency_ms;
+    status.maximum_batch_latency_ms = impl_->maximum_batch_latency_ms;
+    status.batch_deadline_ms = kBatchDeadlineMs;
+    status.batch_deadline_misses = impl_->batch_deadline_misses;
+    status.backend_name = impl_->processor.backendName();
+    status.stop_reason = impl_->stop_reason;
+    latency_values.assign(impl_->batch_latency_window.begin(), impl_->batch_latency_window.end());
+  }
+  status.batch_latency_p50_ms = percentile(latency_values, 0.50);
+  status.batch_latency_p95_ms = percentile(latency_values, 0.95);
+  status.batch_latency_p99_ms = percentile(latency_values, 0.99);
   return status;
 }
 

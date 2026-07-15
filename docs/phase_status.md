@@ -230,3 +230,13 @@ Complete-frame point-cloud publication refinement (2026-07-15):
 - Release CTest passed 5/5, including incomplete/complete/next-frame boundary assertions and the explicit CUDA/FFTW processing parity test.
 - Packaged GUI verification showed `Waiting for complete raster frame` at DMA 1 and switched only to `Frame 25 complete | 1600 points` after a full 64 x 25 raster was available.
 - Packaged EXE smoke test passed. SHA-256: `17E75E786E61F62838073B489F8C500C1975FDFE4CF58DFDBC0EE31B938F7021`.
+
+Phase 7.3A strict DMA simulation and processing baseline (2026-07-15):
+
+- The Windows EXE now starts with the ATS9371 qualification simulator profile: 1 GS/s, 4992 samples/record, 998 records/buffer, 2048 UP, 2048 DOWN, and 200 kHz full-period trigger rate.
+- Strict simulator mode produces one DMA completion every 4.99 ms into an eight-buffer ring. It never retimes to consumer speed; an unserviced ring reports one DMA drop, latches overflow, and follows the same acquisition error/STOP route as the Alazar adapter.
+- DMA completion, ownership-copy completion, and B-scan line completion timestamps drive copy, signal, and end-to-end batch telemetry. The Processing page reports last, p50, p95, p99, maximum, margin, and deadline misses.
+- The deterministic Release baseline produced 998 records, 1996 FFTs, 998 valid XYZIV values, and one complete B-scan line in 28.1651 ms. This correctly fails the 5.00 ms performance gate and establishes the Phase 7.3B comparison point.
+- The baseline still makes 1996 synchronous FFT calls and steady-state record-level temporary vector allocations; Phase 7.3B replaces these with one preallocated FFTW plan-many batch path.
+- Windows MSVC Release and CTest 6/6 passed, including exact qualification payload/cadence, bounded overflow, timing telemetry, and the full 998-record processing baseline.
+- Packaged EXE smoke test passed. SHA-256: `BE628C72E69EFEF613BE349B97A9446368793DB6651D5A5B5D1AF993F0948B23`.

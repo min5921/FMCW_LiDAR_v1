@@ -246,6 +246,7 @@ QString darkStyleSheet() {
 
 MainWindow::MainWindow(QString platform_name, QWidget* parent)
     : QMainWindow(parent), platform_name_(std::move(platform_name)) {
+  config_ = makeAts9371QualificationSimulatorConfig();
   setWindowTitle(QString("FMCW LiDAR v%1 - %2").arg(QString::fromStdString(versionString()), platform_name_));
   setMinimumSize(1180, 720);
   resize(1480, 900);
@@ -959,6 +960,23 @@ QWidget* MainWindow::buildProcessingPage() {
   peak_form->addRow("Method", detection_mode);
   peak_form->addRow("Runtime update", update_runtime);
 
+  auto* realtime = groupBox("Real-Time Batch", content);
+  auto* realtime_form = new QFormLayout(realtime);
+  tuneForm(realtime_form);
+  batch_workload_ = new QLabel("4992 samples x 998 records", realtime);
+  batch_workload_->setWordWrap(true);
+  batch_latency_ = new QLabel("Waiting for first complete batch", realtime);
+  batch_latency_->setWordWrap(true);
+  batch_percentiles_ = new QLabel("p50 -- | p95 -- | p99 -- | max --", realtime);
+  batch_percentiles_->setWordWrap(true);
+  batch_deadline_ = new QLabel("5.000 ms deadline", realtime);
+  batch_deadline_->setWordWrap(true);
+  batch_deadline_->setProperty("statusKind", "neutral");
+  realtime_form->addRow("Workload", batch_workload_);
+  realtime_form->addRow("Last", batch_latency_);
+  realtime_form->addRow("Latency", batch_percentiles_);
+  realtime_form->addRow("Deadline", batch_deadline_);
+
   auto* segmentation = groupBox("Chirp Segmentation Snapshot", content);
   auto* segmentation_layout = new QVBoxLayout(segmentation);
   segmentation_layout->setSpacing(8);
@@ -1003,9 +1021,11 @@ QWidget* MainWindow::buildProcessingPage() {
   restart_required_controls_.append(QList<QWidget*>{fft_backend_, window_function_, fft_length_});
   layout->addWidget(fft, 0, 0);
   layout->addWidget(peak, 0, 1);
-  layout->addWidget(segmentation, 1, 0, 1, 2);
+  layout->addWidget(realtime, 0, 2);
+  layout->addWidget(segmentation, 1, 0, 1, 3);
   layout->setColumnStretch(0, 1);
   layout->setColumnStretch(1, 1);
+  layout->setColumnStretch(2, 1);
   layout->setRowStretch(1, 1);
   connect(capture, &QPushButton::clicked, this, [this] { controller_->captureSegmentationSnapshot(); });
   connect(update_runtime, &QPushButton::clicked, this, [this] {
@@ -1859,6 +1879,28 @@ void MainWindow::updateStatus(RuntimeStatus status) {
   overview_latency_->setText(QString("%1 ms\nRevision %2")
                                  .arg(runtime_status_.processing_latency_ms, 0, 'f', 3)
                                  .arg(runtime_status_.processing_revision));
+  batch_workload_->setText(QString("%1 samples x %2 records\n%3 FFTs x %4")
+                               .arg(sample_point_->value())
+                               .arg(records_per_buffer_->value())
+                               .arg(records_per_buffer_->value() * 2)
+                               .arg(fft_length_->value()));
+  batch_latency_->setText(QString("%1 ms total\n%2 ms copy | %3 ms signal")
+                              .arg(runtime_status_.processing_batch_latency_ms, 0, 'f', 3)
+                              .arg(runtime_status_.processing_copy_latency_ms, 0, 'f', 3)
+                              .arg(runtime_status_.processing_signal_latency_ms, 0, 'f', 3));
+  batch_percentiles_->setText(QString("p50 %1 | p95 %2\np99 %3 | max %4 ms")
+                                  .arg(runtime_status_.processing_batch_p50_ms, 0, 'f', 3)
+                                  .arg(runtime_status_.processing_batch_p95_ms, 0, 'f', 3)
+                                  .arg(runtime_status_.processing_batch_p99_ms, 0, 'f', 3)
+                                  .arg(runtime_status_.processing_batch_max_ms, 0, 'f', 3));
+  const auto deadline_margin_ms = runtime_status_.processing_deadline_ms -
+      runtime_status_.processing_batch_latency_ms;
+  batch_deadline_->setText(QString("%1 ms margin | %2 misses")
+                               .arg(deadline_margin_ms, 0, 'f', 3)
+                               .arg(runtime_status_.processing_deadline_misses));
+  batch_deadline_->setProperty("statusKind",
+      runtime_status_.processing_deadline_misses == 0U ? "ready" : "error");
+  repolish(batch_deadline_);
   overview_recording_->setText(runtime_status_.recording
       ? QString("ACTIVE\n%1 frames").arg(runtime_status_.frames_written) : "OFF");
   if (runtime_status_.udp_running) {

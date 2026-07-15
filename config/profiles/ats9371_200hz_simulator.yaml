@@ -1,0 +1,45 @@
+profile:
+  id: ats9371-200hz-simulator
+  name: "ATS9371 200 Hz Simulator"
+  description: "4992 samples x 998 records strict real-time DMA workload"
+  modified_utc: "2026-07-15T00:00:00Z"
+runtime:
+  acquisition_source: simulator
+  simulator_realtime_dma: true
+digitizer:
+  sample_rate_hz: 1000000000
+  sample_point: 4992
+  records_per_buffer: 998
+  a_scan_count: 998
+  pre_trigger_samples: 0
+  post_trigger_samples: 4992
+  dma_buffer_count: 8
+scan:
+  x_pixel_count: 998
+chirp_segmentation:
+  trigger_to_period_offset: 0
+  chirp_period_samples: 4992
+  up_segment:
+    start_sample: 0
+    end_sample_exclusive: 2048
+  down_segment:
+    start_sample: 2944
+    end_sample_exclusive: 4992
+  guard_samples: 448
+  segment_fft_length: 2048
+laser:
+  sweep_rate_hz: 200000
+processing:
+  fft_backend: fftw
+  queue_capacity: 32
+  overflow_policy: stop_acquisition
+edfa:
+  mode: none
+  required_before_start: false
+mcu:
+  enabled: false
+storage:
+  raw_enabled: false
+  processed_enabled: false
+udp:
+  enabled: false

@@ -56,7 +56,7 @@ edfa:
 
 Laser 설정은 `sweep_bandwidth_hz`와 full triangular waveform의 `sweep_rate_hz` 두 값만 사용한다. 두 값은 거리 변환식 `c * (f_up + f_down) / (8 * bandwidth * sweep_rate)`에만 들어가며 sample point, chirp segmentation, trigger timing을 결정하지 않는다. 양수가 아닌 값은 거리 계산이 불가능하므로 Error지만, bandwidth와 sweep rate 사이의 추정 관계나 timing 일치 Warning은 만들지 않는다.
 
-Full-period timing은 Laser 설정과 독립적이다. `chirp_segmentation.chirp_period_samples / digitizer.sample_rate_hz`가 simulator, replay pacing, raw throughput estimate의 기준이며, 실제 장비에서는 trigger timestamp와 DMA completion timestamp를 telemetry로 측정한다.
+Full-period sample segmentation은 Laser 설정과 독립적이다. 일반 development simulator와 replay는 UI 확인을 위한 제한된 pacing을 사용한다. `runtime.simulator_realtime_dma: true`인 ATS qualification simulator만 실제 trigger 부하를 재현하기 위해 `records_per_buffer / laser.sweep_rate_hz`를 DMA completion 주기로 사용한다. 실제 장비에서는 trigger timestamp와 DMA completion timestamp를 telemetry로 측정한다.
 
 `digitizer.board_profile`은 선택 가능한 sampling rate, input range, impedance를 제한한다. SDK 25.1.0의 `AlazarSysInfo`로 확인한 장치는 `ATS9371`, System 1 / Board 1, 12-bit, FPGA 35.3이다. System/Board ID는 1로 고정한다. 내부 clock sampling rate는 SDK 보드 표의 1 kS/s부터 1 GS/s까지 20개 discrete 값만 ComboBox로 제공한다. 현재 입력 경로는 legacy와 실제 설정에 맞춰 `+/-400 mV`, DC coupling, `50 ohm`으로 제한한다.
 
@@ -72,7 +72,7 @@ Scan 계산에서 A-scans/B-scan은 별도 입력값이 아니라 `digitizer.rec
 
 ### Runtime Acquisition Source
 
-The `runtime` profile group selects `simulator`, `alazar`, or `replay`. Source changes are restart-required settings and are available directly on the Digitizer page. `alazar` creates the real ATS9371, MCU serial, and EDFA serial adapters; `simulator` creates deterministic fake adapters; `replay` reads raw format v1 through the same acquisition and processing pipeline. Replay requires `runtime.replay_file`, while `runtime.replay_loop` controls end-of-stream looping. Normal operation uses the GUI and saved profiles rather than command-line source options.
+The `runtime` profile group selects `simulator`, `alazar`, or `replay`. Source changes are restart-required settings and are available directly on the Digitizer page. `alazar` creates the real ATS9371, MCU serial, and EDFA serial adapters; `simulator` creates deterministic fake adapters; `replay` reads raw format v1 through the same acquisition and processing pipeline. Replay requires `runtime.replay_file`, while `runtime.replay_loop` controls end-of-stream looping. `runtime.simulator_realtime_dma` enables the bounded, absolute-cadence DMA ring used by `config/profiles/ats9371_200hz_simulator.yaml`; a full ring latches overflow instead of slowing or silently dropping input. Normal operation uses the GUI and saved profiles rather than command-line source options.
 
 전역 Basic/Advanced mode는 schema version 2부터 사용하지 않는다. 모든 설정 페이지는 항상 접근 가능하며, field policy의 `primary`는 페이지에 바로 표시하고 `detailed`는 같은 페이지의 `Details` 영역에 표시한다. 이 구분은 접근 권한이나 별도 운용 mode가 아니다.
 

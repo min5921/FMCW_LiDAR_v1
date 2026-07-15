@@ -659,6 +659,15 @@ class RuntimeWorker final : public QObject {
       status.processing_queue_size = processing_status.queue_size;
       status.processing_queue_capacity = processing_status.queue_capacity;
       status.processing_latency_ms = processing_status.average_latency_ms;
+      status.processing_batch_latency_ms = processing_status.last_batch_latency_ms;
+      status.processing_copy_latency_ms = processing_status.last_ownership_copy_latency_ms;
+      status.processing_signal_latency_ms = processing_status.last_signal_processing_latency_ms;
+      status.processing_batch_p50_ms = processing_status.batch_latency_p50_ms;
+      status.processing_batch_p95_ms = processing_status.batch_latency_p95_ms;
+      status.processing_batch_p99_ms = processing_status.batch_latency_p99_ms;
+      status.processing_batch_max_ms = processing_status.maximum_batch_latency_ms;
+      status.processing_deadline_ms = processing_status.batch_deadline_ms;
+      status.processing_deadline_misses = processing_status.batch_deadline_misses;
       status.backend_name = qString(processing_status.backend_name);
       status.processing_revision = processing_status.processing_config_revision;
     }

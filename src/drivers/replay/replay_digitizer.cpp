@@ -207,6 +207,7 @@ FrameWaitResult ReplayDigitizer::waitForBatch(MutableRawFrameBatchPtr& batch,
   }
   mutable_batch->metadata.sequence = sequence;
   mutable_batch->metadata.completion_timestamp_ns = completion_timestamp_ns;
+  mutable_batch->metadata.ownership_ready_timestamp_ns = nowNs();
   mutable_batch->metadata.record_count = record_count;
   mutable_batch->metadata.record_length = config_.digitizer.sample_point;
   mutable_batch->metadata.dropped_buffer_count = telemetry_.dma_buffer_drops;

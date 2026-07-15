@@ -110,6 +110,7 @@ struct RuntimeConfig {
   AcquisitionSource acquisition_source = AcquisitionSource::Simulator;
   std::string replay_file;
   bool replay_loop = false;
+  bool simulator_realtime_dma = false;
 };
 
 struct DigitizerConfig {
@@ -257,6 +258,8 @@ struct SystemConfig {
   CalibrationConfig calibration;
   McuConfig mcu;
 };
+
+SystemConfig makeAts9371QualificationSimulatorConfig();
 
 std::uint32_t derivedAScanCount(const SystemConfig& config);
 std::uint64_t derivedFramePointCount(const SystemConfig& config);

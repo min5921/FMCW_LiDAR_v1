@@ -179,6 +179,10 @@ class MainWindow final : public QMainWindow {
   QSpinBox* down_end_ = nullptr;
   QSpinBox* guard_samples_ = nullptr;
   QSpinBox* fft_length_ = nullptr;
+  QLabel* batch_workload_ = nullptr;
+  QLabel* batch_latency_ = nullptr;
+  QLabel* batch_percentiles_ = nullptr;
+  QLabel* batch_deadline_ = nullptr;
 
   QCheckBox* raw_enabled_ = nullptr;
   QCheckBox* processed_enabled_ = nullptr;
