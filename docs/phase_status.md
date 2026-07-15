@@ -132,7 +132,7 @@ Phase 7.1 verification:
 
 - ATS9371 12-bit left-aligned DMA samples now use the SDK shift rule and signed full-scale conversion.
 - Minimum, midpoint, maximum, padding-bit, 16-bit endpoint, invalid-width, and all 4096 ATS9371 code tests pass.
-- Code defaults, layered Windows simulator profile, and Jetson profile validate with zero warnings.
+- Code defaults, layered Windows simulator profile, and Jetson profile validate with zero errors; the intentional 4096-sample record margin is shown as a non-blocking warning.
 - The default development timing is internally consistent; actual laser timing remains a Phase 7.5 measurement input.
 - Laser Specification exposes measured sweep rate in `THz/s`.
 - Raw format v1 remains converted signed `int16`; original DMA `uint16` block storage is reserved for version 2 in Phase 7.4.
@@ -153,3 +153,12 @@ Phase 7.2 software verification:
 - `build/package/FMCW_LiDAR/FMCW_LiDAR.exe` matches the Release build SHA-256 `7ADB64661441A87C748D6D7B8D48EF36204588DB8791766D5895A08303DB2BB6`.
 - ATS9371 was not connected, so the 10-minute hardware acceptance remains pending and Phase 7.2 stays in progress.
 - Software implementation commit: `3cfcea3`
+
+Record-length policy refinement (2026-07-15):
+
+- `sample_point` is now an operator-selected Alazar record length and is never derived from optical sweep rate.
+- ATS9371 validation enforces minimum 256 samples, 128-sample record/pre-trigger alignment, 8176-sample maximum NPT pre-trigger, at least 64 post-trigger samples, and 16-sample single-channel trigger-delay alignment.
+- A record longer than one configured laser period produces a visible non-blocking warning; segment or full-period data outside the record remains an error.
+- The Digitizer page shows ATS validity, record duration, and excess time beyond one laser period next to the editable record count.
+- Windows MSVC Release and CTest 5/5 passed. The warning-state simulator START delivered 141 DMA batches / 9,024 records with queue 0/32 and no DMA drop or trigger miss.
+- Packaged EXE SHA-256: `B14C0CD37954367988305F8349F8BF9FDCF562FB297F2C8CB2566975EAACAA25`.

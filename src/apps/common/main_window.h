@@ -128,6 +128,7 @@ class MainWindow final : public QMainWindow {
   QLabel* board_address_ = nullptr;
   QComboBox* sample_rate_ = nullptr;
   QSpinBox* sample_point_ = nullptr;
+  QLabel* record_length_state_ = nullptr;
   QSpinBox* records_per_buffer_ = nullptr;
   QSpinBox* dma_buffer_count_ = nullptr;
   QComboBox* input_range_ = nullptr;

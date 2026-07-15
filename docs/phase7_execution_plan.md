@@ -88,7 +88,7 @@ DMA buffer는 acquisition, processing, raw storage 사이의 기본 운반 단�
 
 - ATS SDK 25.1.0 예제와 같은 right shift 규칙을 독립 sample helper에 적용했다.
 - 12-bit 전체 4096 code가 legacy `raw - 32768` signed full-scale 값과 일치함을 검증했다.
-- 기본 개발 profile은 `1 GS/s`, `3840 samples`, `3.84 us`, `1.04167e15 Hz/s`로 일관되며 Warning 없이 검증된다.
+- 기본 개발 profile은 `1 GS/s`, `3840 period samples`, `3.84 us`, `1.04167e15 Hz/s`로 일관된다. 4096-sample record의 256-sample capture margin은 의도 확인용 Warning으로 표시한다.
 - Laser UI에서 measured sweep rate를 `THz/s` 단위로 직접 설정할 수 있다.
 - raw format v1은 converted signed `int16`을 유지하고 original DMA `uint16` block은 Phase 7.4의 version 2로 추가한다.
 - Windows Release build에서 ATS-SDK, FFTW, CUDA/cuFFT가 활성화되었고 CTest 5/5가 통과했다.

@@ -638,9 +638,15 @@ QWidget* MainWindow::buildDigitizerPage() {
   digitizer_channel_ = new QComboBox(board);
   digitizer_channel_->addItems({"Channel A", "Channel B"});
   sample_rate_ = new QComboBox(board);
+  const auto& default_capabilities = digitizerBoardCapabilities().front();
   sample_point_ = new QSpinBox(board);
-  sample_point_->setRange(256, 16 * 1024 * 1024);
-  sample_point_->setSingleStep(static_cast<int>(kAts9371RecordResolution));
+  sample_point_->setRange(static_cast<int>(default_capabilities.minimum_record_samples),
+                          16 * 1024 * 1024);
+  sample_point_->setSingleStep(static_cast<int>(default_capabilities.record_resolution_samples));
+  sample_point_->setToolTip("User-selected Alazar record length");
+  record_length_state_ = new QLabel("ATS CHECK", board);
+  record_length_state_->setWordWrap(true);
+  record_length_state_->setProperty("statusKind", "neutral");
   input_range_ = new QComboBox(board);
   impedance_ = new QComboBox(board);
   coupling_ = new QComboBox(board);
@@ -654,7 +660,8 @@ QWidget* MainWindow::buildDigitizerPage() {
   board_form->addRow("Board address", board_address_);
   board_form->addRow("Input channel", digitizer_channel_);
   board_form->addRow("Sampling rate", sample_rate_);
-  board_form->addRow("Sample points", sample_point_);
+  board_form->addRow("Record samples", sample_point_);
+  board_form->addRow("Record check", record_length_state_);
   board_form->addRow("Input range", input_range_);
   board_form->addRow("Impedance", impedance_);
   board_form->addRow("Coupling", coupling_);
@@ -679,11 +686,12 @@ QWidget* MainWindow::buildDigitizerPage() {
   trigger_level_code_->setProperty("statusKind", "neutral");
   trigger_delay_ = new QSpinBox(dma);
   trigger_delay_->setRange(0, 9999999);
-  trigger_delay_->setSingleStep(static_cast<int>(kAts9371SingleChannelTriggerDelayAlignment));
+  trigger_delay_->setSingleStep(static_cast<int>(
+      default_capabilities.single_channel_trigger_delay_alignment_samples));
   trigger_delay_->setSuffix(" samples");
   pre_trigger_ = new QSpinBox(dma);
-  pre_trigger_->setRange(0, static_cast<int>(kAts9371MaxNptPretrigger));
-  pre_trigger_->setSingleStep(static_cast<int>(kAts9371RecordResolution));
+  pre_trigger_->setRange(0, static_cast<int>(default_capabilities.maximum_npt_pretrigger_samples));
+  pre_trigger_->setSingleStep(static_cast<int>(default_capabilities.pretrigger_alignment_samples));
   pre_trigger_->setSuffix(" samples");
   post_trigger_ = new QLabel("4096 samples | derived", dma);
   post_trigger_->setProperty("statusKind", "neutral");
@@ -735,6 +743,7 @@ QWidget* MainWindow::buildLaserEdfaPage() {
   sweep_rate_->setRange(0.001, 1000000.0);
   sweep_rate_->setDecimals(3);
   sweep_rate_->setSuffix(" THz/s");
+  sweep_rate_->setToolTip("Measured optical sweep slope used for distance conversion");
   chirp_period_ = new QDoubleSpinBox(laser);
   chirp_period_->setRange(0.01, 100000.0);
   chirp_period_->setDecimals(3);
@@ -744,7 +753,7 @@ QWidget* MainWindow::buildLaserEdfaPage() {
   laser_power_->setSuffix(" mW");
   laser_form->addRow("Wavelength", wavelength_);
   laser_form->addRow("Sweep bandwidth", sweep_bandwidth_);
-  laser_form->addRow("Sweep rate", sweep_rate_);
+  laser_form->addRow("Measured sweep rate", sweep_rate_);
   laser_form->addRow("Full chirp period", chirp_period_);
   laser_form->addRow("Laser power", laser_power_);
 
@@ -1235,6 +1244,8 @@ void MainWindow::connectUi() {
   connect(records_per_buffer_, &QSpinBox::valueChanged, this, [this] { updateDerivedAcquisitionLabels(); });
   connect(y_lines_, &QSpinBox::valueChanged, this, [this] { updateDerivedAcquisitionLabels(); });
   connect(sample_point_, &QSpinBox::valueChanged, this, [this] { updateDerivedAcquisitionLabels(); });
+  connect(sample_rate_, &QComboBox::currentIndexChanged, this, [this] { updateDerivedAcquisitionLabels(); });
+  connect(chirp_period_, &QDoubleSpinBox::valueChanged, this, [this] { updateDerivedAcquisitionLabels(); });
   connect(pre_trigger_, &QSpinBox::valueChanged, this, [this] { updateDerivedAcquisitionLabels(); });
   connect(trigger_level_, &QDoubleSpinBox::valueChanged, this, [this] { updateDerivedAcquisitionLabels(); });
   for (auto* control : config_controls) {
@@ -1461,6 +1472,9 @@ void MainWindow::populateDigitizerCapabilities(QString profile_id, double prefer
   const QSignalBlocker rate_blocker(sample_rate_);
   const QSignalBlocker range_blocker(input_range_);
   const QSignalBlocker impedance_blocker(impedance_);
+  const QSignalBlocker sample_point_blocker(sample_point_);
+  const QSignalBlocker pre_trigger_blocker(pre_trigger_);
+  const QSignalBlocker trigger_delay_blocker(trigger_delay_);
   const auto* capabilities = findDigitizerBoardCapabilities(profile_id.toStdString());
   if (capabilities == nullptr && !digitizerBoardCapabilities().empty()) {
     capabilities = &digitizerBoardCapabilities().front();
@@ -1471,6 +1485,11 @@ void MainWindow::populateDigitizerCapabilities(QString profile_id, double prefer
   if (capabilities == nullptr) {
     return;
   }
+  sample_point_->setMinimum(static_cast<int>(capabilities->minimum_record_samples));
+  sample_point_->setSingleStep(static_cast<int>(capabilities->record_resolution_samples));
+  pre_trigger_->setSingleStep(static_cast<int>(capabilities->pretrigger_alignment_samples));
+  trigger_delay_->setSingleStep(static_cast<int>(
+      capabilities->single_channel_trigger_delay_alignment_samples));
   int preferred_rate_index = 0;
   for (std::size_t index = 0; index < capabilities->sample_rates_hz.size(); ++index) {
     const auto rate = capabilities->sample_rates_hz[index];
@@ -1498,19 +1517,56 @@ void MainWindow::populateDigitizerCapabilities(QString profile_id, double prefer
   sample_rate_->setCurrentIndex(preferred_rate_index);
   input_range_->setCurrentIndex(preferred_range_index);
   impedance_->setCurrentIndex(preferred_impedance_index);
+  updateDerivedAcquisitionLabels();
 }
 
 void MainWindow::updateDerivedAcquisitionLabels() {
-  if (sample_point_ == nullptr || pre_trigger_ == nullptr) {
+  if (sample_point_ == nullptr || pre_trigger_ == nullptr || record_length_state_ == nullptr) {
     return;
   }
+  const auto* capabilities = findDigitizerBoardCapabilities(
+      board_profile_->currentData().toString().toStdString());
+  const auto sample_points = static_cast<std::uint32_t>(sample_point_->value());
   const QSignalBlocker pre_trigger_blocker(pre_trigger_);
-  pre_trigger_->setMaximum(std::min(sample_point_->value(), static_cast<int>(kAts9371MaxNptPretrigger)));
+  const auto maximum_pretrigger_from_record = sample_points > kAlazarMinimumPostTriggerSamples
+      ? sample_points - kAlazarMinimumPostTriggerSamples
+      : 0U;
+  const auto maximum_pretrigger = capabilities == nullptr
+      ? maximum_pretrigger_from_record
+      : std::min(maximum_pretrigger_from_record,
+                 capabilities->maximum_npt_pretrigger_samples);
+  pre_trigger_->setMaximum(static_cast<int>(maximum_pretrigger));
   if (pre_trigger_->value() > sample_point_->value()) {
     pre_trigger_->setValue(sample_point_->value());
   }
   const auto post_trigger = sample_point_->value() - pre_trigger_->value();
   post_trigger_->setText(QString("%1 samples | derived").arg(post_trigger));
+
+  const bool record_valid = capabilities != nullptr &&
+      supportsRecordLength(*capabilities, sample_points);
+  const double sample_rate_hz = sample_rate_->currentData().toDouble();
+  const double record_duration_us = sample_rate_hz > 0.0
+      ? static_cast<double>(sample_points) * 1.0e6 / sample_rate_hz
+      : 0.0;
+  if (!record_valid) {
+    record_length_state_->setText(capabilities == nullptr
+        ? "ATS ERROR | unknown board profile"
+        : QString("ATS ERROR | min %1 | multiple of %2")
+              .arg(capabilities->minimum_record_samples)
+              .arg(capabilities->record_resolution_samples));
+    record_length_state_->setProperty("statusKind", "error");
+  } else if (chirp_period_ != nullptr && record_duration_us > chirp_period_->value()) {
+    record_length_state_->setText(
+        QString("ATS VALID | %1 us | +%2 us beyond one laser period")
+            .arg(record_duration_us, 0, 'f', 3)
+            .arg(record_duration_us - chirp_period_->value(), 0, 'f', 3));
+    record_length_state_->setProperty("statusKind", "warn");
+  } else {
+    record_length_state_->setText(
+        QString("ATS VALID | %1 us record").arg(record_duration_us, 0, 'f', 3));
+    record_length_state_->setProperty("statusKind", "ready");
+  }
+  repolish(record_length_state_);
   trigger_level_code_->setText(QString("SDK code %1").arg(alazarTriggerLevelCode(trigger_level_->value())));
   const auto a_scans = records_per_buffer_->value();
   if (selected_a_scan_ != nullptr) {

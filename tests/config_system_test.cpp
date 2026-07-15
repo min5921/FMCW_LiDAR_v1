@@ -35,7 +35,8 @@ void testDefaultsAndRoundTrip() {
   const fmcw::SystemConfig defaults;
   const auto validation = fmcw::ConfigValidator::validate(defaults);
   expect(!validation.hasErrors(), "code defaults pass validation");
-  expect(!validation.hasWarnings(), "code defaults do not produce timing or performance warnings");
+  expect(hasIssue(validation, fmcw::ValidationSeverity::Warning, "digitizer.sample_point"),
+         "default record is ATS-valid and warns that its capture margin exceeds one laser period");
 
   const auto yaml = fmcw::ConfigProfileCodec::toYaml(defaults);
   const auto decoded = fmcw::ConfigProfileCodec::decodeYaml(yaml, "round-trip");
@@ -58,9 +59,17 @@ void testDefaultsAndRoundTrip() {
   expect(std::abs(fmcw::derivedMcuFrameTimeMs(defaults) - 16.0) < 1.0e-9,
          "MCU cycle time is derived from the full-frame waveform point count");
   const auto& board = fmcw::digitizerBoardCapabilities().front();
-  expect(board.display_name.find("ATS9371") != std::string::npos && board.sample_rates_hz.size() == 20,
-         "ATS9371 capability exposes the SDK discrete sample-rate list");
+  expect(board.display_name.find("ATS9371") != std::string::npos && board.sample_rates_hz.size() == 20 &&
+             board.minimum_record_samples == 256U && board.record_resolution_samples == 128U &&
+             board.pretrigger_alignment_samples == 128U &&
+             board.maximum_npt_pretrigger_samples == 8176U &&
+             board.single_channel_trigger_delay_alignment_samples == 16U,
+         "ATS9371 capability exposes the SDK sample-rate and record-size constraints");
   expect(fmcw::supportsSampleRate(board, 800.0e6), "ATS9371 supports the SDK 800 MS/s setting");
+  expect(fmcw::supportsRecordLength(board, 4096U) &&
+             !fmcw::supportsRecordLength(board, 128U) &&
+             !fmcw::supportsRecordLength(board, 4000U),
+         "ATS9371 accepts records of at least 256 samples in multiples of 128");
 }
 
 void testStrictYamlAndLayering() {
@@ -98,7 +107,9 @@ void testStrictYamlAndLayering() {
          "user profile overrides the platform FFT backend");
   const auto layered_validation = fmcw::ConfigValidator::validate(layered.config);
   expect(!layered_validation.hasErrors(), "layered profile passes validation");
-  expect(!layered_validation.hasWarnings(), "layered profile is warning-free");
+  expect(hasIssue(layered_validation, fmcw::ValidationSeverity::Warning,
+                  "digitizer.sample_point"),
+         "layered profile reports only the intentional record-margin warning");
 
   const auto jetson = fmcw::ConfigProfileCodec::loadLayered({
       source_root / "config" / "default.yaml",
@@ -109,15 +120,36 @@ void testStrictYamlAndLayering() {
   expect(jetson.config.ui.plot_update_hz == 20.0, "Jetson UI rate override is applied");
   const auto jetson_validation = fmcw::ConfigValidator::validate(jetson.config);
   expect(!jetson_validation.hasErrors(), "Jetson platform profile passes validation");
-  expect(!jetson_validation.hasWarnings(), "Jetson platform profile is warning-free");
+  expect(hasIssue(jetson_validation, fmcw::ValidationSeverity::Warning,
+                  "digitizer.sample_point"),
+         "Jetson profile reports the same record-margin warning");
 }
 
 void testLaserTimingValidation() {
   fmcw::SystemConfig period_mismatch;
   period_mismatch.laser.chirp_period_us = 20.0;
   const auto period_validation = fmcw::ConfigValidator::validate(period_mismatch);
-  expect(hasIssue(period_validation, fmcw::ValidationSeverity::Warning, "laser.chirp_period_us"),
-         "laser period mismatch identifies the chirp-period field");
+  expect(hasIssue(period_validation, fmcw::ValidationSeverity::Warning,
+                  "chirp_segmentation.chirp_period_samples"),
+         "laser period mismatch identifies the segmentation sample-count field");
+
+  fmcw::SystemConfig exact_period_record;
+  exact_period_record.digitizer.sample_point = 3840;
+  exact_period_record.digitizer.post_trigger_samples = 3840;
+  exact_period_record.chirp_segmentation.trigger_to_period_offset = 0;
+  const auto exact_period_validation = fmcw::ConfigValidator::validate(exact_period_record);
+  expect(!hasIssue(exact_period_validation, fmcw::ValidationSeverity::Warning,
+                   "digitizer.sample_point"),
+         "an ATS-aligned record equal to one laser period has no capture-margin warning");
+
+  fmcw::SystemConfig over_period_record = exact_period_record;
+  over_period_record.digitizer.sample_point = 3968;
+  over_period_record.digitizer.post_trigger_samples = 3968;
+  const auto over_period_validation = fmcw::ConfigValidator::validate(over_period_record);
+  expect(!over_period_validation.hasErrors() &&
+             hasIssue(over_period_validation, fmcw::ValidationSeverity::Warning,
+                      "digitizer.sample_point"),
+         "an ATS-valid record longer than one laser period remains startable with a warning");
 
   fmcw::SystemConfig slope_mismatch;
   slope_mismatch.laser.sweep_rate_hz_per_s *= 0.5;
@@ -169,6 +201,27 @@ void testSchemaAndBoardCapabilityValidation() {
   invalid.digitizer.sample_rate_hz = 750.0e6;
   const auto validation = fmcw::ConfigValidator::validate(invalid);
   expect(validation.hasErrors(), "unsupported board sampling rate is rejected");
+
+  fmcw::SystemConfig below_minimum_record;
+  below_minimum_record.digitizer.sample_point = 128;
+  below_minimum_record.digitizer.post_trigger_samples = 128;
+  expect(hasIssue(fmcw::ConfigValidator::validate(below_minimum_record),
+                  fmcw::ValidationSeverity::Error, "digitizer.sample_point"),
+         "ATS9371 records shorter than 256 samples are rejected");
+
+  fmcw::SystemConfig unaligned_record;
+  unaligned_record.digitizer.sample_point = 4000;
+  unaligned_record.digitizer.post_trigger_samples = 4000;
+  expect(hasIssue(fmcw::ConfigValidator::validate(unaligned_record),
+                  fmcw::ValidationSeverity::Error, "digitizer.sample_point"),
+         "ATS9371 records that are not multiples of 128 are rejected");
+
+  fmcw::SystemConfig insufficient_post_trigger;
+  insufficient_post_trigger.digitizer.pre_trigger_samples = 4096;
+  insufficient_post_trigger.digitizer.post_trigger_samples = 0;
+  expect(hasIssue(fmcw::ConfigValidator::validate(insufficient_post_trigger),
+                  fmcw::ValidationSeverity::Error, "digitizer.pre_trigger_samples"),
+         "Alazar records retain at least 64 post-trigger samples");
 
   fmcw::SystemConfig missing_replay_file;
   missing_replay_file.runtime.acquisition_source = fmcw::AcquisitionSource::Replay;

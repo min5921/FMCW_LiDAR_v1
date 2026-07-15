@@ -56,7 +56,7 @@ edfa:
 
 기본 profile의 laser timing은 실장비 측정값이 아니라 simulator와 설정 검증을 위한 self-consistent 개발 기준이다. `1 GS/s`, `3840 samples`, `3.84 us`가 한 full period를 나타내며, 대칭 삼각파 기준 `2 GHz` bandwidth에 대응하는 sweep rate는 약 `1.04167e15 Hz/s`다. 실제 laser profile은 Phase 7.5에서 oscilloscope로 측정한 period, stable UP/DOWN range, bandwidth, sweep slope로 반드시 교체한다.
 
-검증기는 `sample_rate_hz * chirp_period_us`와 `chirp_period_samples`의 차이, 그리고 대칭 삼각파 기준 bandwidth/period와 sweep slope의 차이가 각각 1%를 넘으면 해당 laser field에 Warning을 표시한다. 측정된 비대칭 chirp를 사용하는 경우에는 계산값 대신 실제 sweep slope를 유지하고 Warning 내용을 장비 측정 결과와 함께 검토한다.
+검증기는 `sample_rate_hz * chirp_period_us`와 `chirp_period_samples`의 차이, 그리고 대칭 삼각파 기준 bandwidth/period와 sweep slope의 차이가 각각 1%를 넘으면 해당 field에 Warning을 표시한다. 측정된 sweep rate는 거리 계산에 사용하는 독립 입력값이며 `sample_point`를 자동 결정하거나 변경하지 않는다. 측정된 비대칭 chirp를 사용하는 경우에는 계산값 대신 실제 sweep slope를 유지하고 Warning 내용을 장비 측정 결과와 함께 검토한다.
 
 `digitizer.board_profile`은 선택 가능한 sampling rate, input range, impedance를 제한한다. SDK 25.1.0의 `AlazarSysInfo`로 확인한 장치는 `ATS9371`, System 1 / Board 1, 12-bit, FPGA 35.3이다. System/Board ID는 1로 고정한다. 내부 clock sampling rate는 SDK 보드 표의 1 kS/s부터 1 GS/s까지 20개 discrete 값만 ComboBox로 제공한다. 현재 입력 경로는 legacy와 실제 설정에 맞춰 `+/-400 mV`, DC coupling, `50 ohm`으로 제한한다.
 
@@ -65,6 +65,10 @@ Trigger는 `TRIG IN`, External TTL, DC coupling을 고정 contract로 사용한�
 Scan 계산에서 A-scans/B-scan은 별도 입력값이 아니라 `digitizer.records_per_buffer`와 동일하다. B-scans/frame은 사용자가 지정하며, 한 프레임의 position 수는 두 값의 곱이다. B-scan rate와 period는 Alazar DMA buffer 완료 timestamp에서 실측하고, frame time은 실측 period와 B-scans/frame의 곱으로 계산한다. MCU의 100 kHz point rate는 전체 프레임 파형 cycle time 계산에만 사용한다.
 
 ## Single UI And Field Presentation
+
+### Alazar Record Length
+
+`digitizer.sample_point`는 사용자가 직접 정하는 Alazar record 길이다. ATS9371은 최소 256 samples, record resolution 128 samples, pre-trigger alignment 128 samples, NPT pre-trigger 최대 8176 samples, post-trigger 최소 64 samples를 적용한다. UI는 입력값의 ATS 유효성, sample rate로 계산한 실제 record 시간, laser 한 주기 초과 시간을 즉시 표시한다. Record 시간이 한 주기를 넘는 경우는 의도적인 capture margin일 수 있으므로 Warning만 발생하며 START는 허용한다. 설정된 full-period와 UP/DOWN segment가 record 밖으로 나가는 경우에는 처리가 불가능하므로 Error를 유지한다.
 
 ### Runtime Acquisition Source
 

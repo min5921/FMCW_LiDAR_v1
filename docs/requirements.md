@@ -176,16 +176,18 @@ UI에서 다음 항목을 설정할 수 있어야 한다.
 
 설정 검증:
 
-- `sample_point`는 FFT backend가 지원하는 범위여야 한다.
+- `sample_point`는 사용자가 Alazar record 길이로 직접 입력하며 laser sweep rate로부터 자동 계산하지 않는다.
+- ATS9371 record 길이는 최소 256 samples이고 128 samples의 배수여야 한다.
+- `sample_point / sample_rate_hz`가 laser 한 주기보다 길면 Warning을 표시하되 START를 차단하지 않는다.
 - v1 hardware acquisition에서는 trigger 1개가 전체 up+down chirp period 1개를 의미한다.
 - legacy `up_down_pair`는 hardware profile이나 UI에 노출하지 않고 replay/import 변환에서만 읽는다.
-- `up_chirp_only` 모드의 record length는 full chirp period와 margin을 포함해야 한다.
+- `up_chirp_only` 모드의 record length는 설정된 full chirp period와 UP/DOWN segment를 포함해야 하며 추가 margin은 선택 사항이다.
 - up/down segment 범위는 record 내부에 있어야 하며 서로 겹치지 않아야 한다.
 - up/down segment 길이는 같은 FFT length를 사용하거나 padding/resampling 정책이 명확해야 한다.
 - `B-scan count`는 scan setup의 Y line count와 일치해야 한다.
 - A-scan count는 `records_per_buffer`와 항상 같아야 하며 별도 입력값으로 관리하지 않는다.
 - sampling rate 선택값은 ATS9371 internal clock이 지원하는 discrete 값으로 제한한다.
-- ATS9371 record/pre-trigger alignment는 128 samples, single-channel trigger delay alignment는 16 samples를 사용한다.
+- ATS9371 record/pre-trigger alignment는 128 samples, NPT pre-trigger 최대값은 8176 samples, 최소 post-trigger는 64 samples, single-channel trigger delay alignment는 16 samples를 사용한다.
 - 초기 버전에서는 A+B 동시 수집을 지원하지 않는다.
 - 선택 가능한 채널은 단일 채널 A 또는 단일 채널 B로 제한한다.
 - selected channel이 바뀌면 buffer size, FFT batch, 저장 포맷을 다시 계산한다.

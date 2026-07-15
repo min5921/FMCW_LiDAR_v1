@@ -96,9 +96,13 @@ ValidationResult ConfigValidator::validate(const SystemConfig& config) {
     add(result, ValidationSeverity::Error, "digitizer", "This application uses Alazar System 1 / Board 1",
         "Set system_id and board_id to 1");
   }
-  if (!(digitizer.sample_rate_hz > 0.0) || digitizer.sample_point == 0) {
-    add(result, ValidationSeverity::Error, "digitizer.sample_rate_hz", "Sample rate and sample point must be positive",
-        "Select a supported Alazar sample rate and record length");
+  if (!(digitizer.sample_rate_hz > 0.0)) {
+    add(result, ValidationSeverity::Error, "digitizer.sample_rate_hz", "Sample rate must be positive",
+        "Select a board-supported Alazar sampling rate");
+  }
+  if (digitizer.sample_point == 0U) {
+    add(result, ValidationSeverity::Error, "digitizer.sample_point", "Record length must be positive",
+        "Enter a board-supported record sample count");
   }
   const auto* board_capabilities = findDigitizerBoardCapabilities(digitizer.board_profile);
   if (board_capabilities == nullptr) {
@@ -109,6 +113,13 @@ ValidationResult ConfigValidator::validate(const SystemConfig& config) {
       add(result, ValidationSeverity::Error, "digitizer.sample_rate_hz",
           "Sampling rate is not supported by the selected board profile",
           "Choose one of the board-specific sampling rates");
+    }
+    if (!supportsRecordLength(*board_capabilities, digitizer.sample_point)) {
+      add(result, ValidationSeverity::Error, "digitizer.sample_point",
+          "Record length is not accepted by the selected Alazar board",
+          "Use at least " + std::to_string(board_capabilities->minimum_record_samples) +
+              " samples and a multiple of " +
+              std::to_string(board_capabilities->record_resolution_samples));
     }
     if (!supportsInputRange(*board_capabilities, digitizer.input_range_volts) ||
         !supportsImpedance(*board_capabilities, digitizer.impedance_ohms)) {
@@ -122,17 +133,26 @@ ValidationResult ConfigValidator::validate(const SystemConfig& config) {
         "pre_trigger_samples + post_trigger_samples must equal sample_point",
         "Adjust the pre/post trigger split to cover exactly one record");
   }
-  if ((digitizer.sample_point % kAts9371RecordResolution) != 0U ||
-      (digitizer.pre_trigger_samples % kAts9371RecordResolution) != 0U ||
-      digitizer.pre_trigger_samples > kAts9371MaxNptPretrigger) {
-    add(result, ValidationSeverity::Error, "digitizer.sample_point",
-        "ATS9371 record resolution and pre-trigger alignment are 128 samples, with at most 8176 NPT pre-trigger samples",
-        "Use aligned sample counts within the ATS9371 NPT limit");
-  }
-  if ((digitizer.trigger_delay_samples % kAts9371SingleChannelTriggerDelayAlignment) != 0U) {
-    add(result, ValidationSeverity::Error, "digitizer.trigger_delay_samples",
-        "ATS9371 single-channel trigger delay alignment is 16 samples",
-        "Use a trigger delay divisible by 16");
+  if (board_capabilities != nullptr) {
+    if ((digitizer.pre_trigger_samples % board_capabilities->pretrigger_alignment_samples) != 0U ||
+        digitizer.pre_trigger_samples > board_capabilities->maximum_npt_pretrigger_samples ||
+        digitizer.post_trigger_samples < kAlazarMinimumPostTriggerSamples) {
+      add(result, ValidationSeverity::Error, "digitizer.pre_trigger_samples",
+          "Pre/post-trigger split is not accepted by the selected Alazar board",
+          "Align pre-trigger to " +
+              std::to_string(board_capabilities->pretrigger_alignment_samples) +
+              " samples, keep it at or below " +
+              std::to_string(board_capabilities->maximum_npt_pretrigger_samples) +
+              ", and leave at least " + std::to_string(kAlazarMinimumPostTriggerSamples) +
+              " post-trigger samples");
+    }
+    if ((digitizer.trigger_delay_samples %
+         board_capabilities->single_channel_trigger_delay_alignment_samples) != 0U) {
+      add(result, ValidationSeverity::Error, "digitizer.trigger_delay_samples",
+          "Trigger delay is not aligned for single-channel acquisition",
+          "Use a trigger delay divisible by " +
+              std::to_string(board_capabilities->single_channel_trigger_delay_alignment_samples));
+    }
   }
   if (digitizer.records_per_buffer == 0 || digitizer.dma_buffer_count == 0 || digitizer.timeout_ms == 0) {
     add(result, ValidationSeverity::Error, "digitizer.records_per_buffer", "DMA sizes and timeout must be non-zero",
@@ -220,12 +240,22 @@ ValidationResult ConfigValidator::validate(const SystemConfig& config) {
   } else {
     if (digitizer.sample_rate_hz > 0.0) {
       const double expected_samples = digitizer.sample_rate_hz * config.laser.chirp_period_us * 1.0e-6;
+      if (static_cast<double>(digitizer.sample_point) > expected_samples) {
+        const double record_duration_us =
+            static_cast<double>(digitizer.sample_point) * 1.0e6 / digitizer.sample_rate_hz;
+        std::ostringstream message;
+        message << "Record length captures " << digitizer.sample_point << " samples ("
+                << record_duration_us << " us), longer than one laser period ("
+                << config.laser.chirp_period_us << " us)";
+        add(result, ValidationSeverity::Warning, "digitizer.sample_point", message.str(),
+            "The ATS record length is valid; keep the extra capture margin only if intentional");
+      }
       const double difference = std::abs(expected_samples - chirp.chirp_period_samples);
       if (difference > std::max(4.0, expected_samples * 0.01)) {
         std::ostringstream message;
         message << "Laser chirp period implies " << std::llround(expected_samples)
                 << " samples, but chirp_period_samples is " << chirp.chirp_period_samples;
-        add(result, ValidationSeverity::Warning, "laser.chirp_period_us", message.str(),
+        add(result, ValidationSeverity::Warning, "chirp_segmentation.chirp_period_samples", message.str(),
             "Verify the full-period trigger timing and update the measured period or sample count");
       }
     }

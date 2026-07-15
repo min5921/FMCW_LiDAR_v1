@@ -18,7 +18,7 @@ const std::vector<DigitizerBoardCapabilities>& digitizerBoardCapabilities() {
        {1.0e3, 2.0e3, 5.0e3, 10.0e3, 20.0e3, 50.0e3, 100.0e3, 200.0e3, 500.0e3,
         1.0e6, 2.0e6, 5.0e6, 10.0e6, 20.0e6, 50.0e6, 100.0e6, 200.0e6, 500.0e6,
         800.0e6, 1.0e9},
-       {0.4}, {50U}},
+       {0.4}, {50U}, 256U, 128U, 128U, 8176U, 16U},
   };
   return capabilities;
 }
@@ -35,6 +35,13 @@ const DigitizerBoardCapabilities* findDigitizerBoardCapabilities(std::string_vie
 bool supportsSampleRate(const DigitizerBoardCapabilities& capabilities, double sample_rate_hz) {
   return std::any_of(capabilities.sample_rates_hz.begin(), capabilities.sample_rates_hz.end(),
                      [sample_rate_hz](double supported) { return nearlyEqual(sample_rate_hz, supported); });
+}
+
+bool supportsRecordLength(const DigitizerBoardCapabilities& capabilities,
+                          std::uint32_t record_samples) {
+  return capabilities.record_resolution_samples > 0U &&
+         record_samples >= capabilities.minimum_record_samples &&
+         (record_samples % capabilities.record_resolution_samples) == 0U;
 }
 
 bool supportsInputRange(const DigitizerBoardCapabilities& capabilities, double input_range_volts) {
