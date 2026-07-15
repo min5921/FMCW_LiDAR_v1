@@ -131,7 +131,7 @@ UI는 다음 snapshot만 읽는다.
 | `PeakAnalysisSnapshot` | per completed scan line | A-scan index, up/down peak index, magnitude, validity |
 | `DistanceVelocitySnapshot` | per completed scan line | pixel, distance, velocity, validity |
 | `BScanSnapshot` | 5-30 Hz | X pixel by B-scan line Z heatmap, min/max, validity mask |
-| `PointCloudSnapshot` | 5-30 Hz | XYZ, intensity/velocity color scalar, frame/scan revision |
+| `PointCloudSnapshot` | per complete raster frame, render capped at 5-30 Hz | XYZ, intensity/velocity color scalar, frame/scan revision |
 | `SegmentationSnapshot` | on demand | one frozen full-period frame and editable segment overlay metadata |
 
 UI가 느리면 intermediate snapshot은 버리고 최신 snapshot을 표시한다. raw writer와 processed writer는 이 표시 정책과 무관하게 별도 bounded queue를 사용한다.
@@ -171,6 +171,7 @@ Peak Analysis 탭은 FFT spectrum을 다시 그리지 않는다. 다음 두 plot
 - Time Domain과 FFT는 최신 frame 우선이다.
 - Peak Analysis, Distance/Velocity, B-scan은 scan line 또는 frame aggregation 완료 시 publish한다.
 - B-scan은 `X Pixel x B Scan` Z heatmap으로 표시한다.
+- 3D point cloud는 partial line을 표시하지 않고 모든 B-scan line이 완료된 raster frame만 교체한다. 다음 frame 수집 중에는 직전 complete frame을 유지한다.
 - freeze는 acquisition/processing/storage를 멈추지 않고 화면 snapshot만 고정한다.
 - auto/manual range, cursor readout, plot save를 공통 plot toolbar로 제공한다.
 - 3D는 Qt/OpenGL-backed point renderer를 사용하고 acquisition과 독립 rate로 갱신한다.
@@ -181,7 +182,7 @@ Peak Analysis 탭은 FFT spectrum을 다시 그리지 않는다. 다음 두 plot
 - Live Time Domain and FFT display the selected zero-based A-scan record from each Alazar DMA buffer.
 - Changing the selected A-scan is display-only and applies while acquisition is running; it does not restart or reconfigure the digitizer.
 - Peak Analysis, Distance/Velocity, B-scan, 3D, UDP, and raw/processed storage continue to consume all A-scans.
-- The 3D tab consumes immutable point-cloud snapshots at `ui.point_cloud_update_hz`, independently from acquisition.
+- The 3D tab consumes complete immutable point-cloud frames only. `ui.point_cloud_update_hz` caps rendering independently from acquisition and never exposes partial raster assembly.
 - The Qt/OpenGL-backed renderer supports rotate, pan, zoom, reset, point size, frame accumulation, color mode, freeze, PNG capture, and CSV point export.
 - UDP uses a dedicated bounded sender queue. Socket I/O never runs on the UI, acquisition, or processing thread.
 - Global STOP first stops device input, drains processing, then finalizes UDP and storage workers.

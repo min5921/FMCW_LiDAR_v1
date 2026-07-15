@@ -585,7 +585,7 @@ QWidget* MainWindow::buildLivePage() {
   auto* save_cloud = new QToolButton(point_cloud_page);
   save_cloud->setIcon(style()->standardIcon(QStyle::SP_DialogSaveButton));
   save_cloud->setToolTip("Save current point cloud as CSV");
-  point_cloud_status_ = new QLabel("Waiting for point cloud", point_cloud_page);
+  point_cloud_status_ = new QLabel("Waiting for complete raster frame", point_cloud_page);
   point_cloud_status_->setProperty("statusKind", "neutral");
   point_cloud_tools->addWidget(color_mode);
   point_cloud_tools->addWidget(new QLabel("Point size", point_cloud_page));
@@ -1232,7 +1232,7 @@ void MainWindow::connectUi() {
     }
   });
   connect(controller_, &ApplicationController::pointCloudReady, this, [this](PointCloudSnapshotPtr snapshot) {
-    if (freeze_live_ || snapshot == nullptr) {
+    if (freeze_live_ || snapshot == nullptr || !snapshot->complete) {
       return;
     }
     const auto update_interval_ms = static_cast<qint64>(
@@ -1248,12 +1248,10 @@ void MainWindow::connectUi() {
     point_cloud_plot_->setSnapshot(snapshot);
     const auto valid_points = std::count_if(snapshot->points.begin(), snapshot->points.end(),
                                             [](const PointXYZI& point) { return point.valid; });
-    point_cloud_status_->setText(QString("Frame %1 | %2 / %3 lines | %4 points")
+    point_cloud_status_->setText(QString("Frame %1 complete | %2 points")
                                      .arg(snapshot->scan_frame_index + 1U)
-                                     .arg(snapshot->completed_lines)
-                                     .arg(snapshot->height)
                                      .arg(valid_points));
-    point_cloud_status_->setProperty("statusKind", snapshot->complete ? "ready" : "neutral");
+    point_cloud_status_->setProperty("statusKind", "ready");
     repolish(point_cloud_status_);
   });
   connect(controller_, &ApplicationController::segmentationSnapshotReady, this,

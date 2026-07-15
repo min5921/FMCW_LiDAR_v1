@@ -152,7 +152,9 @@ void ProcessingSnapshotStore::publish(const RawFrame& raw, const ProcessedFrame&
   point_cloud_work_.processing_config_revision = processed.processing_config_revision;
   point_cloud_work_.completed_lines = bscan_work_.completed_lines;
   point_cloud_work_.complete = point_cloud_work_.completed_lines == height_;
-  point_cloud_ = std::make_shared<PointCloudSnapshot>(point_cloud_work_);
+  if (point_cloud_work_.complete) {
+    point_cloud_ = std::make_shared<PointCloudSnapshot>(point_cloud_work_);
+  }
   has_active_line_ = false;
 }
 

@@ -107,7 +107,7 @@ Status: done
 - Versioned `FMCW` UDP point packets carry raster frame ID, config revision, timestamp, segment indices, and little-endian XYZ/intensity/velocity arrays.
 - A bounded asynchronous sender assembles complete raster frames and applies `latest_frame`, `preserve_frames`, or `stop_sending` queue policy without network I/O in the acquisition or processing loop.
 - Live View includes a Qt/OpenGL-backed 3D point-cloud tab with color modes, rotate, pan, zoom, reset, point size, accumulation, freeze, and CSV export.
-- Point-cloud snapshots publish at completed B-scan line boundaries and clear unfinished rows at each new raster frame.
+- B-scan snapshots publish at completed line boundaries; point-cloud snapshots publish only for complete raster frames and remain unchanged while the next frame is assembled.
 - Storage / UDP exposes packet version, points per packet, sender queue, backpressure policy, send FPS, packet count, queue use, and dropped-frame telemetry.
 
 Verification:
@@ -220,3 +220,13 @@ ATS record-length and legacy XYZIV contract audit (2026-07-15):
 - Windows MSVC Release and CTest 5/5 passed, including the explicit local CUDA/FFTW full-result parity test. The packaged EXE smoke test passed.
 - Packaged GUI verification confirmed 4992 acceptance, 5000 input rejection, live B-scan depth output, and a nonblank XYZ point cloud with intensity, velocity, and distance color modes.
 - Packaged EXE SHA-256: `EB67F68B958C12FF6EE465715224C11DAE1C24385CFE1341B4B2F75053352C06`.
+
+Complete-frame point-cloud publication refinement (2026-07-15):
+
+- B-scan continues to publish every completed scan line, but the 3D point cloud now publishes only after all configured raster lines are complete.
+- During assembly of the next raster, the last complete immutable point-cloud frame remains visible; partial rows never replace it.
+- The 3D widget rejects incomplete and duplicate snapshot pointers, preventing both line-by-line unfolding and repeated Accumulate insertion of the same frame.
+- Raster mapping remains legacy compatible: record index advances X within a B-scan and B-scan line index advances the Y scanner angle. The completed cloud may therefore span vertical Z according to the configured Y field of view.
+- Release CTest passed 5/5, including incomplete/complete/next-frame boundary assertions and the explicit CUDA/FFTW processing parity test.
+- Packaged GUI verification showed `Waiting for complete raster frame` at DMA 1 and switched only to `Frame 25 complete | 1600 points` after a full 64 x 25 raster was available.
+- Packaged EXE smoke test passed. SHA-256: `17E75E786E61F62838073B489F8C500C1975FDFE4CF58DFDBC0EE31B938F7021`.

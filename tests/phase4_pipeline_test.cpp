@@ -571,6 +571,8 @@ void testBscanFrameBoundaryReset() {
 
   publish(1, 0, 0);
   publish(2, 1, 0);
+  expect(!snapshots.latestPointCloud(),
+         "an incomplete raster does not publish a 3D point-cloud snapshot");
   publish(3, 0, 1);
   publish(4, 1, 1);
   auto bscan = snapshots.latestBScan();
@@ -587,8 +589,16 @@ void testBscanFrameBoundaryReset() {
   expect(bscan && bscan->completed_lines == 1 && bscan->scan_frame_index == 1 && bscan->valid[2] == 0U,
          "new raster frame clears rows from the previous B-scan frame");
   const auto next_cloud = snapshots.latestPointCloud();
-  expect(next_cloud && !next_cloud->complete && !next_cloud->points[2].valid,
-         "new raster frame clears stale 3D points from unfinished rows");
+  expect(next_cloud == cloud && next_cloud->complete && next_cloud->scan_frame_index == 0 &&
+             next_cloud->points[3].valid,
+         "an incomplete next raster keeps the last complete 3D frame visible");
+
+  publish(7, 0, 1);
+  publish(8, 1, 1);
+  const auto completed_next_cloud = snapshots.latestPointCloud();
+  expect(completed_next_cloud && completed_next_cloud != cloud && completed_next_cloud->complete &&
+             completed_next_cloud->scan_frame_index == 1 && completed_next_cloud->completed_lines == 2,
+         "the 3D point cloud is replaced exactly when the next raster frame completes");
 }
 
 void testInvalidMeasurementSnapshots() {

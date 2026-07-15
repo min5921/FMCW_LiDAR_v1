@@ -13,6 +13,8 @@ One `RawFrame` means:
 
 An Alazar DMA buffer contains the records for one B-scan line. Each record is one A-scan `RawFrame`, and a configured number of completed B-scan lines forms one complete raster frame.
 
+Raster order follows the legacy acquisition contract: record index advances the X position within one B-scan line, and completed B-scan line index advances the Y scanner angle. B-scan may publish each completed line, but the 3D point-cloud snapshot publishes only after every configured line is complete. While the next raster is being assembled, consumers keep the previous complete point-cloud frame.
+
 For the active scan contract, `records_per_buffer` is the A-scan count in one B-scan line. The operator sets B-scans per frame. The MCU waveform contains `records_per_buffer * B-scans_per_frame` points, while B-scan rate and period are measured from Alazar DMA buffer completion timestamps.
 
 Runtime metadata also carries `dma_buffer_sequence`, zero-based `record_index_in_buffer`, and `records_in_buffer`. Live Time Domain and FFT snapshots update only when `record_index_in_buffer` matches the operator-selected A-scan. This display filter does not remove frames from processing, peak analysis, B-scan assembly, UDP frame assembly, or raw storage.

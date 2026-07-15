@@ -343,7 +343,7 @@ legacy 참고:
 10. Distance calculation
 11. Velocity calculation
 12. XYZ point 변환
-13. Heatmap/point cloud 갱신
+13. B-scan line heatmap 갱신 및 complete raster frame point-cloud publish
 
 ### 3.5.1 Chirp Segmentation
 
@@ -432,7 +432,7 @@ FFTW와 CUDA는 각각 최소 10분 sustained test에서 모든 batch가 5.00 ms
 
 - UI plot update: 20-60 Hz 범위에서 설정 가능
 - acquisition loop: DMA buffer 처리 지연을 최소화하고 block을 피한다.
-- 3D point cloud update: 필요 시 5-30 Hz로 throttling한다.
+- 3D point cloud는 complete raster frame에서만 교체하고 필요 시 rendering을 5-30 Hz로 throttling한다.
 - raw 저장: 별도 writer thread에서 처리하고 acquisition thread를 막지 않는다.
 
 ### 3.6 2D Plotting
@@ -490,6 +490,9 @@ UI 기능:
 
 실시간 3D 요구사항:
 
+- legacy와 동일하게 한 B-scan 내부 record index를 X, B-scan line index를 Y raster 순서로 사용한다.
+- Y scanner angle 범위는 Cartesian Z 방향 시야각으로 나타나므로 완성 cloud는 세로 방향으로 분포할 수 있지만, line별로 위아래로 펼쳐지는 partial animation은 표시하지 않는다.
+- 모든 B-scan line이 완료된 frame만 표시하고 다음 frame 조립 중에는 직전 complete frame을 유지한다.
 - point 수가 많을 때 decimation 또는 level-of-detail를 적용한다.
 - 3D viewer update rate를 acquisition rate와 독립적으로 설정한다.
 - 3D rendering이 느려져도 acquisition/processing/storage는 계속 동작해야 한다.

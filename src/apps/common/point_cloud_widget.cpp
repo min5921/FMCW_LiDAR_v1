@@ -53,7 +53,7 @@ PointCloudWidget::PointCloudWidget(QWidget* parent) : QOpenGLWidget(parent) {
 PointCloudWidget::~PointCloudWidget() = default;
 
 void PointCloudWidget::setSnapshot(std::shared_ptr<const PointCloudSnapshot> snapshot) {
-  if (!snapshot) {
+  if (!snapshot || !snapshot->complete || snapshot == snapshot_) {
     return;
   }
   snapshot_ = std::move(snapshot);
@@ -186,12 +186,10 @@ void PointCloudWidget::paintGL() {
 
   painter.setPen(QColor("#aebdc1"));
   const auto frame_text = snapshot_
-      ? QString("Frame %1 | %2 / %3 lines | %4 points")
+      ? QString("Frame %1 complete | %2 points")
             .arg(snapshot_->scan_frame_index + 1U)
-            .arg(snapshot_->completed_lines)
-            .arg(snapshot_->height)
-            .arg(vertices_.size())
-      : QString("Waiting for point cloud");
+            .arg(current_points_.size())
+      : QString("Waiting for complete raster frame");
   painter.drawText(QRect(14, 12, width() - 28, 24), Qt::AlignLeft | Qt::AlignVCenter, frame_text);
   painter.setPen(QColor("#71858b"));
   painter.drawText(QRect(14, height() - 34, width() - 28, 22), Qt::AlignLeft | Qt::AlignVCenter,
