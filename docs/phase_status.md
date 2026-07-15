@@ -162,3 +162,4 @@ Record-length policy refinement (2026-07-15):
 - The Digitizer page shows ATS validity, record duration, and excess time beyond one laser period next to the editable record count.
 - Windows MSVC Release and CTest 5/5 passed. The warning-state simulator START delivered 141 DMA batches / 9,024 records with queue 0/32 and no DMA drop or trigger miss.
 - Packaged EXE SHA-256: `B14C0CD37954367988305F8349F8BF9FDCF562FB297F2C8CB2566975EAACAA25`.
+- Implementation commit: `4fc5a1e`
