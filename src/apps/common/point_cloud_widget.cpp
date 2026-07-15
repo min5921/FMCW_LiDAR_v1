@@ -139,20 +139,20 @@ void PointCloudWidget::paintGL() {
   const auto sine_pitch = std::sin(pitch);
   const auto canvas_scale = static_cast<double>(std::min(width(), height())) * 0.72;
   const auto project = [&](double x, double y, double z) {
-    const auto rotated_x = cosine_yaw * x + sine_yaw * z;
-    const auto yaw_z = -sine_yaw * x + cosine_yaw * z;
-    const auto rotated_y = cosine_pitch * y - sine_pitch * yaw_z;
-    const auto rotated_z = sine_pitch * y + cosine_pitch * yaw_z;
-    const auto depth = std::max(0.2, 3.4 / static_cast<double>(zoom_) - rotated_z);
+    const auto rotated_x = cosine_yaw * x + sine_yaw * y;
+    const auto yaw_depth = -sine_yaw * x + cosine_yaw * y;
+    const auto rotated_vertical = cosine_pitch * z - sine_pitch * yaw_depth;
+    const auto rotated_depth = sine_pitch * z + cosine_pitch * yaw_depth;
+    const auto depth = std::max(0.2, 3.4 / static_cast<double>(zoom_) - rotated_depth);
     return QPointF(width() * (0.5 + 0.5 * pan_x_) + rotated_x * canvas_scale / depth,
-                   height() * (0.5 - 0.5 * pan_y_) - rotated_y * canvas_scale / depth);
+                   height() * (0.5 - 0.5 * pan_y_) - rotated_vertical * canvas_scale / depth);
   };
 
   painter.setPen(QPen(QColor(52, 72, 78, 120), 1.0));
   for (int index = -4; index <= 4; ++index) {
     const auto coordinate = static_cast<double>(index) / 4.0;
-    painter.drawLine(project(coordinate, -0.9, -1.0), project(coordinate, -0.9, 1.0));
-    painter.drawLine(project(-1.0, -0.9, coordinate), project(1.0, -0.9, coordinate));
+    painter.drawLine(project(coordinate, -1.0, -0.9), project(coordinate, 1.0, -0.9));
+    painter.drawLine(project(-1.0, coordinate, -0.9), project(1.0, coordinate, -0.9));
   }
 
   const auto origin = project(0.0, 0.0, 0.0);
@@ -195,7 +195,7 @@ void PointCloudWidget::paintGL() {
   painter.drawText(QRect(14, 12, width() - 28, 24), Qt::AlignLeft | Qt::AlignVCenter, frame_text);
   painter.setPen(QColor("#71858b"));
   painter.drawText(QRect(14, height() - 34, width() - 28, 22), Qt::AlignLeft | Qt::AlignVCenter,
-                   "X lateral | Y vertical | Z range | meters");
+                   "X lateral | Y range | Z vertical | meters");
 }
 
 void PointCloudWidget::mousePressEvent(QMouseEvent* event) {

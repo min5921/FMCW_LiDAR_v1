@@ -47,6 +47,8 @@ fmcw::SystemConfig testConfig() {
   config.scan.y_line_count = 2;
   config.digitizer.a_scan_count = 4;
   config.digitizer.b_scan_count = 2;
+  config.calibration.x_angle_offset_deg = 1.25;
+  config.calibration.y_angle_offset_deg = -0.75;
   return config;
 }
 
@@ -162,6 +164,8 @@ void testSignalProcessingBackendParity(const fmcw::SystemConfig& base_config,
              "FFTW and CUDA Z agrees");
   expectNear(cuda_result.point.intensity, fftw_result.point.intensity, 0.05,
              "FFTW and CUDA intensity agrees");
+  expectNear(cuda_result.point.velocity, fftw_result.point.velocity, 1.0e-6,
+             "FFTW and CUDA point velocity agrees");
 
   fmcw::RawFrame silent = raw;
   std::fill(silent.samples.begin(), silent.samples.end(), 0);
@@ -204,6 +208,26 @@ fmcw::ProcessedFrame testSignalProcessing(const fmcw::SystemConfig& config,
       config.calibration.distance_scale + config.calibration.distance_offset_m;
   expectNear(processed.distance_m, expected_distance_m, 1.0e-4,
              "distance uses bandwidth and sweep rate in Hz");
+  const double expected_velocity_mps = config.calibration.velocity_wavelength_nm * 1.0e-9 *
+      (processed.up_peak.peak_bin - processed.down_peak.peak_bin) * bin_frequency_hz / 4.0 *
+      config.calibration.velocity_scale + config.calibration.velocity_offset_mps;
+  expectNear(processed.velocity_mps, expected_velocity_mps, 1.0e-6,
+             "velocity uses wavelength and the UP/DOWN beat-frequency difference");
+  const double x_angle = (processed.scan_position.x_angle_deg + config.calibration.x_angle_offset_deg) *
+      3.14159265358979323846 / 180.0;
+  const double y_angle = (processed.scan_position.y_angle_deg + config.calibration.y_angle_offset_deg) *
+      3.14159265358979323846 / 180.0;
+  expectNear(processed.point.x, processed.distance_m * std::cos(y_angle) * std::sin(x_angle), 1.0e-5,
+             "Cartesian X matches the legacy lateral-axis conversion");
+  expectNear(processed.point.y, processed.distance_m * std::cos(y_angle) * std::cos(x_angle), 1.0e-5,
+             "Cartesian Y matches the legacy forward-axis conversion");
+  expectNear(processed.point.z, -processed.distance_m * std::sin(y_angle), 1.0e-5,
+             "Cartesian Z matches the legacy vertical-axis conversion");
+  expectNear(processed.point.intensity,
+             0.5 * (processed.up_peak.magnitude_db + processed.down_peak.magnitude_db), 1.0e-6,
+             "point intensity is the mean UP/DOWN peak magnitude");
+  expectNear(processed.point.velocity, processed.velocity_mps, 1.0e-6,
+             "point velocity carries the calibrated radial velocity");
 
   auto equality_config = config.processing;
   equality_config.peak_threshold_db = std::max(processed.up_peak.magnitude_db,
@@ -275,7 +299,7 @@ void testProcessingServiceSnapshots(const fmcw::SystemConfig& config,
          "completed scan line publishes peak and distance arrays");
   expect(bscan && bscan->width == config.scan.x_pixel_count && bscan->height == config.scan.y_line_count &&
              bscan->completed_lines == 1,
-         "completed line updates the X by B-scan Z matrix");
+         "completed line updates the X by B-scan forward-depth matrix");
 }
 
 void testProcessingServiceBatch(const fmcw::SystemConfig& config,
@@ -533,7 +557,7 @@ void testBscanFrameBoundaryReset() {
   fmcw::RawFrame raw;
   fmcw::ProcessedFrame processed;
   processed.measurement_valid = true;
-  processed.point.z = 1.0F;
+  processed.point.y = 1.0F;
   processed.point.valid = true;
 
   const auto publish = [&](std::uint64_t frame_id, std::uint32_t x, std::uint32_t y) {
@@ -550,8 +574,9 @@ void testBscanFrameBoundaryReset() {
   publish(3, 0, 1);
   publish(4, 1, 1);
   auto bscan = snapshots.latestBScan();
-  expect(bscan && bscan->completed_lines == 2 && bscan->scan_frame_index == 0,
-         "first raster frame completes both B-scan lines");
+  expect(bscan && bscan->completed_lines == 2 && bscan->scan_frame_index == 0 &&
+             bscan->depth_m[3] == 1.0F,
+         "first raster frame completes both B-scan lines with forward depth");
   const auto cloud = snapshots.latestPointCloud();
   expect(cloud && cloud->complete && cloud->points.size() == 4U && cloud->points[3].valid,
          "completed raster publishes an immutable 3D point-cloud snapshot");
@@ -590,9 +615,9 @@ void testInvalidMeasurementSnapshots() {
   expect(line && line->valid[0] == 0U && std::isnan(line->up_peak_index[0]) &&
              std::isnan(line->down_peak_index[0]) && std::isnan(line->up_peak_value_db[0]) &&
              std::isnan(line->down_peak_value_db[0]) && std::isnan(line->distance_m[0]) &&
-             std::isnan(line->velocity_mps[0]) && std::isnan(line->z_m[0]),
+             std::isnan(line->velocity_mps[0]) && std::isnan(line->depth_m[0]),
          "scan-line snapshot preserves threshold-rejected values as NaN");
-  expect(bscan && bscan->valid[0] == 0U && std::isnan(bscan->z_m[0]),
+  expect(bscan && bscan->valid[0] == 0U && std::isnan(bscan->depth_m[0]),
          "B-scan snapshot preserves an invalid measurement as NaN");
   expect(cloud && !cloud->points[0].valid && std::isnan(cloud->points[0].x) &&
              std::isnan(cloud->points[0].y) && std::isnan(cloud->points[0].z),

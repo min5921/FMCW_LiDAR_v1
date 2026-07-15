@@ -177,7 +177,8 @@ UI에서 다음 항목을 설정할 수 있어야 한다.
 설정 검증:
 
 - `sample_point`는 사용자가 Alazar record 길이로 직접 입력하며 laser sweep rate로부터 자동 계산하지 않는다.
-- ATS9371 record 길이는 최소 256 samples이고 128 samples의 배수여야 한다.
+- ATS-SDK 25.1.0 section 7.2 기준 ATS9371 record 길이는 최소 256 samples이고 128 samples의 배수여야 한다.
+- Record samples control은 지원되지 않는 정수를 확정하지 않으며, keyboard 입력과 step 조작 모두 위 SDK 규칙을 만족하는 값만 config에 반영한다. 예를 들어 4992는 유효하고 5000은 유효하지 않다.
 - `sample_point`가 `chirp_period_samples`보다 크면 Warning을 표시하되 START를 차단하지 않는다.
 - v1 hardware acquisition에서는 trigger 1개가 전체 up+down chirp period 1개를 의미한다.
 - legacy `up_down_pair`는 hardware profile이나 UI에 노출하지 않고 replay/import 변환에서만 읽는다.
@@ -405,6 +406,9 @@ CPU FFT 요구사항:
 - 각 A-scan의 UP/DOWN peak는 이전 A-scan과 독립적으로 search range 안의 최대값을 검출한다.
 - 현재 version은 peak interpolation이나 sub-bin estimation을 사용하지 않고 threshold를 초과하는 최대 정수 FFT bin을 사용한다.
 - threshold를 초과하는 peak가 없으면 이전 값을 유지하지 않고 해당 결과를 invalid로 기록하며, 모든 실수형 peak 및 측정값을 `NaN`으로 전달한다.
+- 유효한 peak pair는 distance와 velocity calibration을 거친 뒤 legacy와 동일한 `X lateral, Y forward, Z vertical` Cartesian 좌표로 변환하고 최종 point에 `x, y, z, intensity, velocity`를 모두 기록한다.
+- Cartesian 변환 전에 calibration profile의 `x_angle_offset_deg`, `y_angle_offset_deg`를 scanner angle에 더한다.
+- B-scan depth map은 legacy heatmap과 동일하게 Cartesian forward depth인 `point.y`를 사용하며, 3D/processed storage/UDP는 전체 XYZIV를 유지한다.
 - 설정 변경이 처리 결과에 반영된 frame 번호를 기록한다.
 - raw replay 모드에서도 동일한 processing pipeline을 사용한다.
 - GPU FFT와 CPU FFT 결과 차이를 검증하는 regression test를 제공한다.

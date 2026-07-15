@@ -123,6 +123,7 @@ inline RawFramePtr rawFrameAt(const RawFrameBatchPtr& batch, std::size_t index) 
 }
 
 struct PointXYZI {
+  // Legacy-compatible axes: X lateral, Y forward range, Z vertical.
   float x = std::numeric_limits<float>::quiet_NaN();
   float y = std::numeric_limits<float>::quiet_NaN();
   float z = std::numeric_limits<float>::quiet_NaN();

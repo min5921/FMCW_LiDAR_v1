@@ -245,7 +245,9 @@ ValidationResult ConfigValidator::validate(const SystemConfig& config) {
         "The ATS record length is valid; keep the extra capture margin only if intentional");
   }
 
-  if (config.scan.x_start_deg >= config.scan.x_end_deg || config.scan.y_start_deg >= config.scan.y_end_deg ||
+  if (!std::isfinite(config.scan.x_start_deg) || !std::isfinite(config.scan.x_end_deg) ||
+      !std::isfinite(config.scan.y_start_deg) || !std::isfinite(config.scan.y_end_deg) ||
+      config.scan.x_start_deg >= config.scan.x_end_deg || config.scan.y_start_deg >= config.scan.y_end_deg ||
       config.scan.x_pixel_count < 2 || config.scan.y_line_count < 2 ||
       !(config.scan.scanner_sample_rate_hz > 0.0)) {
     add(result, ValidationSeverity::Error, "scan", "Scan ranges, dimensions, or MCU point rate are invalid",
@@ -304,9 +306,14 @@ ValidationResult ConfigValidator::validate(const SystemConfig& config) {
     add(result, ValidationSeverity::Error, "ui.plot_update_hz", "UI update rates exceed the supported real-time range",
         "Use plot_update_hz in (0, 60] and point_cloud_update_hz in (0, 30]");
   }
-  if (config.calibration.version.empty() || !(config.calibration.distance_scale > 0.0) ||
+  if (config.calibration.version.empty() || !std::isfinite(config.calibration.distance_offset_m) ||
+      !std::isfinite(config.calibration.distance_scale) || !(config.calibration.distance_scale > 0.0) ||
+      !std::isfinite(config.calibration.velocity_wavelength_nm) ||
       !(config.calibration.velocity_wavelength_nm > 0.0) ||
-      !(config.calibration.velocity_scale > 0.0)) {
+      !std::isfinite(config.calibration.velocity_offset_mps) ||
+      !std::isfinite(config.calibration.velocity_scale) || !(config.calibration.velocity_scale > 0.0) ||
+      !std::isfinite(config.calibration.x_angle_offset_deg) ||
+      !std::isfinite(config.calibration.y_angle_offset_deg)) {
     add(result, ValidationSeverity::Error, "calibration", "Calibration version and positive scales are required",
         "Load a valid calibration layer");
   }

@@ -75,6 +75,7 @@ EDFA output on/off는 광 출력 안전 명령이므로 Laser / EDFA 페이지�
 - restart-required 설정은 global `STOP` 후 수정하고 `Apply Setup`을 누른다.
 - `Apply Setup`은 필요 시 disconnect, configure, reconnect까지 수행하고 Ready에서 멈춘다. 안전을 위해 acquisition을 자동 재시작하지 않는다.
 - Digitizer sampling rate, input range, impedance는 선택한 board capability가 제공하는 ComboBox 값만 허용한다.
+- Digitizer record samples는 ATS9371의 최소 256 및 128-sample resolution을 강제하는 aligned numeric control을 사용하며, 지원되지 않는 typed value는 config에 확정하지 않는다.
 - ATS9371 System ID와 Board ID는 모두 1로 고정하며 UI에서 변경하지 않는다.
 - A-scans/B-scan은 records per buffer에서 파생하고 B-scans/frame은 사용자가 설정한다.
 - B-scan rate와 period는 Alazar DMA buffer 완료 간격에서 실측하며, measured frame time은 `period * B-scans/frame`으로 계산한다.

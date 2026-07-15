@@ -327,7 +327,7 @@ void HeatmapWidget::clear() {
 void HeatmapWidget::paintEvent(QPaintEvent* event) {
   static_cast<void>(event);
   QPainter painter(this);
-  drawFrame(painter, *this, "B-scan Height Map", "X pixel", "B-scan line");
+  drawFrame(painter, *this, "B-scan Depth Map", "X pixel", "B-scan line");
   const auto area = plotRect(*this);
   const auto expected = static_cast<std::size_t>(width_) * static_cast<std::size_t>(height_);
   if (width_ == 0U || height_ == 0U || static_cast<std::size_t>(values_.size()) < expected) {
@@ -378,7 +378,7 @@ void HeatmapWidget::paintEvent(QPaintEvent* event) {
                 static_cast<double>(height_ - 1U), 0.0, true, true);
   painter.setPen(palette().color(QPalette::Text));
   painter.drawText(QRectF(area.left(), 10, area.width(), 24), Qt::AlignRight | Qt::AlignVCenter,
-                   QString("%1 / %2 lines   Z %3 to %4 m")
+                   QString("%1 / %2 lines   Depth %3 to %4 m")
                        .arg(completed_lines_)
                        .arg(height_)
                        .arg(minimum, 0, 'f', 3)
@@ -397,7 +397,7 @@ void HeatmapWidget::mouseMoveEvent(QMouseEvent* event) {
       (event->position().y() - area.top()) / area.height() * static_cast<double>(height_)));
   const auto index = static_cast<int>(y * width_ + x);
   const bool valid = index < valid_.size() && valid_[index] != 0U && index < values_.size();
-  const auto text = valid ? QString("X %1 | Line %2 | Z %3 m").arg(x).arg(y).arg(values_[index], 0, 'f', 5)
+  const auto text = valid ? QString("X %1 | Line %2 | Depth %3 m").arg(x).arg(y).arg(values_[index], 0, 'f', 5)
                           : QString("X %1 | Line %2 | Invalid").arg(x).arg(y);
   QToolTip::showText(event->globalPosition().toPoint(), text, this);
 }

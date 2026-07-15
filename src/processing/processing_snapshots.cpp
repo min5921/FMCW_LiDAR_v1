@@ -19,7 +19,7 @@ void ProcessingSnapshotStore::configure(std::uint32_t x_pixel_count, std::uint32
   bscan_work_ = {};
   bscan_work_.width = width_;
   bscan_work_.height = height_;
-  bscan_work_.z_m.assign(static_cast<std::size_t>(width_) * height_, invalid);
+  bscan_work_.depth_m.assign(static_cast<std::size_t>(width_) * height_, invalid);
   bscan_work_.valid.assign(static_cast<std::size_t>(width_) * height_, 0U);
   point_cloud_work_ = {};
   point_cloud_work_.width = width_;
@@ -45,7 +45,7 @@ void ProcessingSnapshotStore::resetLine(std::uint32_t y_index) {
   line_work_.down_peak_value_db.assign(width_, invalid);
   line_work_.distance_m.assign(width_, invalid);
   line_work_.velocity_mps.assign(width_, invalid);
-  line_work_.z_m.assign(width_, invalid);
+  line_work_.depth_m.assign(width_, invalid);
   line_work_.up_peak_state.assign(width_, static_cast<std::uint8_t>(PeakTrackState::Invalid));
   line_work_.down_peak_state.assign(width_, static_cast<std::uint8_t>(PeakTrackState::Invalid));
   line_work_.valid.assign(width_, 0U);
@@ -103,7 +103,7 @@ void ProcessingSnapshotStore::publish(const RawFrame& raw, const ProcessedFrame&
       if (bscan_work_.last_frame_id != 0U) {
         ++scan_frame_index_;
       }
-      std::fill(bscan_work_.z_m.begin(), bscan_work_.z_m.end(),
+      std::fill(bscan_work_.depth_m.begin(), bscan_work_.depth_m.end(),
                 std::numeric_limits<float>::quiet_NaN());
       std::fill(bscan_work_.valid.begin(), bscan_work_.valid.end(), 0U);
       bscan_work_.completed_lines = 0U;
@@ -128,7 +128,7 @@ void ProcessingSnapshotStore::publish(const RawFrame& raw, const ProcessedFrame&
   line_work_.down_peak_value_db[x] = processed.down_peak.magnitude_db;
   line_work_.distance_m[x] = processed.distance_m;
   line_work_.velocity_mps[x] = processed.velocity_mps;
-  line_work_.z_m[x] = processed.point.z;
+  line_work_.depth_m[x] = processed.point.y;
   line_work_.up_peak_state[x] = static_cast<std::uint8_t>(processed.up_peak.state);
   line_work_.down_peak_state[x] = static_cast<std::uint8_t>(processed.down_peak.state);
   line_work_.valid[x] = processed.measurement_valid ? 1U : 0U;
@@ -141,7 +141,7 @@ void ProcessingSnapshotStore::publish(const RawFrame& raw, const ProcessedFrame&
   scan_line_ = std::make_shared<ScanLineSnapshot>(line_work_);
   const auto row_offset = static_cast<std::size_t>(active_y_) * width_;
   for (std::uint32_t index = 0; index < width_; ++index) {
-    bscan_work_.z_m[row_offset + index] = line_work_.z_m[index];
+    bscan_work_.depth_m[row_offset + index] = line_work_.depth_m[index];
     bscan_work_.valid[row_offset + index] = line_work_.valid[index];
   }
   bscan_work_.last_frame_id = processed.frame_id;

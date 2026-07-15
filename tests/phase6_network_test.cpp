@@ -42,8 +42,12 @@ void testPacketRoundTrip() {
          "UDP point packet decodes");
   expect(decoded.raster_frame_id == 7U && decoded.segment_count == 3U &&
              decoded.segment_index == 1U && decoded.points.size() == 2U &&
-             std::abs(decoded.points.front().x - 2.0F) < 1.0e-6F,
-         "decoded UDP header and point payload match the source frame");
+             std::abs(decoded.points.front().x - 2.0F) < 1.0e-6F &&
+             std::abs(decoded.points.front().y - 3.0F) < 1.0e-6F &&
+             std::abs(decoded.points.front().z - 4.0F) < 1.0e-6F &&
+             std::abs(decoded.points.front().intensity + 28.0F) < 1.0e-6F &&
+             std::abs(decoded.points.front().velocity - 0.5F) < 1.0e-6F,
+         "decoded UDP header and complete XYZIV payload match the source frame");
 }
 
 void testAsyncSender() {
@@ -66,6 +70,10 @@ void testAsyncSender() {
     frame->scan_position.y_index = static_cast<std::uint32_t>(index / 2U);
     frame->scan_position.valid = true;
     frame->point.x = static_cast<float>(index);
+    frame->point.y = static_cast<float>(index + 1U);
+    frame->point.z = static_cast<float>(index + 2U);
+    frame->point.intensity = -30.0F;
+    frame->point.velocity = 0.25F;
     frame->point.valid = true;
     sender.enqueue(frame);
   }

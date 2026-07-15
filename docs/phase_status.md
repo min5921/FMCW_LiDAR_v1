@@ -63,7 +63,7 @@ Status: done
 - `SignalProcessor` extracts configured UP/DOWN segments and independently selects the highest threshold-qualified peak in each search range.
 - Every A-scan is independent; a peak that does not exceed threshold is invalid, uses `NaN` for floating-point peak/measurement fields, and never carries a previous value.
 - `ProcessingService` uses a bounded worker queue and applies runtime processing changes at frame boundaries.
-- Immutable waveform, FFT, scan-line, and X-by-B-scan Z snapshots are published to the UI.
+- Immutable waveform, FFT, scan-line, and X-by-B-scan forward-depth snapshots are published to the UI.
 - Raw full-period and processed binary writers use bounded asynchronous storage with JSON sidecars and split-part replay.
 
 Verification:
@@ -209,3 +209,14 @@ Backend-equivalent processing and integer-peak refinement (2026-07-15):
 - Windows MSVC Release, CTest 5/5, the explicit FFTW/CUDA processing parity test, and the packaged EXE smoke test passed.
 - Packaged EXE SHA-256: `9D76895B37084DE83C846D82697C208A0B785C8D0255EAEADBCFA7EDAF3CDDD1`.
 - Implementation commit: `0181afb`
+
+ATS record-length and legacy XYZIV contract audit (2026-07-15):
+
+- ATS9371 record length follows ATS-SDK 25.1.0 section 7.2: minimum 256 samples and exact 128-sample resolution. The Qt control only commits supported values; 4992 is accepted and unsupported 5000 is rejected without remaining in the profile.
+- Peak search remains strict-threshold, integer-bin processing with no interpolation. Invalid UP or DOWN detection propagates `NaN` through distance, velocity, intensity, and XYZ.
+- Distance and velocity equations were checked algebraically against the legacy CUDA pipeline while retaining the configured sweep rate instead of the legacy hard-coded 200 kHz value.
+- Cartesian conversion restores the legacy contract: X is lateral, Y is forward range, and Z is vertical. Configured X/Y angle offsets are applied before conversion.
+- The B-scan stores forward depth from `point.y`; the 3D viewer, processed storage, and UDP packet all use the same finite `x, y, z, intensity, velocity` output contract.
+- Windows MSVC Release and CTest 5/5 passed, including the explicit local CUDA/FFTW full-result parity test. The packaged EXE smoke test passed.
+- Packaged GUI verification confirmed 4992 acceptance, 5000 input rejection, live B-scan depth output, and a nonblank XYZ point cloud with intensity, velocity, and distance color modes.
+- Packaged EXE SHA-256: `EB67F68B958C12FF6EE465715224C11DAE1C24385CFE1341B4B2F75053352C06`.

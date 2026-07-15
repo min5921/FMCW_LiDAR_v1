@@ -114,16 +114,24 @@ PeakMeasurement detectPeak(const std::vector<float>& magnitude, std::uint32_t st
   return result;
 }
 
-PointXYZI toPoint(float distance_m, float velocity_mps, float intensity_db, const ScanPosition& position) {
+PointXYZI toPoint(float distance_m, float velocity_mps, float intensity_db,
+                  const ScanPosition& position, const CalibrationConfig& calibration) {
   PointXYZI point;
-  if (!position.valid || !std::isfinite(distance_m) || !std::isfinite(velocity_mps)) {
+  if (!position.valid || !std::isfinite(distance_m) || !std::isfinite(velocity_mps) ||
+      !std::isfinite(intensity_db) || !std::isfinite(position.x_angle_deg) ||
+      !std::isfinite(position.y_angle_deg) || !std::isfinite(calibration.x_angle_offset_deg) ||
+      !std::isfinite(calibration.y_angle_offset_deg)) {
     return point;
   }
-  const double x_angle = static_cast<double>(position.x_angle_deg) * kPi / 180.0;
-  const double y_angle = static_cast<double>(position.y_angle_deg) * kPi / 180.0;
-  point.x = static_cast<float>(distance_m * std::cos(y_angle) * std::sin(x_angle));
-  point.y = static_cast<float>(distance_m * std::sin(y_angle));
-  point.z = static_cast<float>(distance_m * std::cos(y_angle) * std::cos(x_angle));
+  const double x_angle = (static_cast<double>(position.x_angle_deg) + calibration.x_angle_offset_deg) *
+      kPi / 180.0;
+  const double y_angle = (static_cast<double>(position.y_angle_deg) + calibration.y_angle_offset_deg) *
+      kPi / 180.0;
+  // Algebraic form of the legacy 90-degree angle transforms: X lateral, Y forward, Z vertical.
+  const double horizontal_range = distance_m * std::cos(y_angle);
+  point.x = static_cast<float>(horizontal_range * std::sin(x_angle));
+  point.y = static_cast<float>(horizontal_range * std::cos(x_angle));
+  point.z = static_cast<float>(-distance_m * std::sin(y_angle));
   point.intensity = intensity_db;
   point.velocity = velocity_mps;
   point.valid = true;
@@ -270,7 +278,7 @@ bool SignalProcessor::process(const RawFrame& raw, ProcessedFrame& processed, st
     processed.measurement_valid = true;
     processed.point = toPoint(processed.distance_m, processed.velocity_mps,
                               0.5F * (processed.up_peak.magnitude_db + processed.down_peak.magnitude_db),
-                              processed.scan_position);
+                              processed.scan_position, impl_->config.calibration);
   }
   processed.processing_latency_ms = std::chrono::duration<double, std::milli>(
       std::chrono::steady_clock::now() - started).count();

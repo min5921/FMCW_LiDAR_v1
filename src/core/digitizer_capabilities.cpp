@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace fmcw {
 namespace {
@@ -42,6 +43,28 @@ bool supportsRecordLength(const DigitizerBoardCapabilities& capabilities,
   return capabilities.record_resolution_samples > 0U &&
          record_samples >= capabilities.minimum_record_samples &&
          (record_samples % capabilities.record_resolution_samples) == 0U;
+}
+
+std::uint32_t nearestSupportedRecordLength(const DigitizerBoardCapabilities& capabilities,
+                                           std::uint32_t requested_samples) {
+  const std::uint64_t resolution = capabilities.record_resolution_samples;
+  if (resolution == 0U) {
+    return capabilities.minimum_record_samples;
+  }
+
+  const std::uint64_t minimum = capabilities.minimum_record_samples;
+  const std::uint64_t aligned_minimum = ((minimum + resolution - 1U) / resolution) * resolution;
+  if (requested_samples <= aligned_minimum) {
+    return static_cast<std::uint32_t>(aligned_minimum);
+  }
+
+  const std::uint64_t requested = requested_samples;
+  const std::uint64_t lower = requested - (requested % resolution);
+  const std::uint64_t maximum = std::numeric_limits<std::uint32_t>::max();
+  const std::uint64_t upper = lower <= maximum - resolution ? lower + resolution : lower;
+  const bool use_lower = upper == lower || requested - lower < upper - requested;
+  const std::uint64_t nearest = use_lower ? lower : upper;
+  return static_cast<std::uint32_t>(std::max(nearest, aligned_minimum));
 }
 
 bool supportsInputRange(const DigitizerBoardCapabilities& capabilities, double input_range_volts) {

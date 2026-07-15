@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <cmath>
 #include <iostream>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -79,9 +80,15 @@ void testDefaultsAndRoundTrip() {
          "ATS9371 capability exposes the SDK sample-rate and record-size constraints");
   expect(fmcw::supportsSampleRate(board, 800.0e6), "ATS9371 supports the SDK 800 MS/s setting");
   expect(fmcw::supportsRecordLength(board, 4096U) &&
+             fmcw::supportsRecordLength(board, 4992U) &&
              !fmcw::supportsRecordLength(board, 128U) &&
-             !fmcw::supportsRecordLength(board, 4000U),
+             !fmcw::supportsRecordLength(board, 4000U) &&
+             !fmcw::supportsRecordLength(board, 5000U),
          "ATS9371 accepts records of at least 256 samples in multiples of 128");
+  expect(fmcw::nearestSupportedRecordLength(board, 128U) == 256U &&
+             fmcw::nearestSupportedRecordLength(board, 5000U) == 4992U &&
+             fmcw::nearestSupportedRecordLength(board, 5056U) == 5120U,
+         "unsupported record lengths normalize to the nearest ATS9371 setting");
 }
 
 void testStrictYamlAndLayering() {
@@ -261,6 +268,19 @@ void testSchemaAndBoardCapabilityValidation() {
   misaligned_trigger.digitizer.trigger_delay_samples = 401;
   expect(fmcw::ConfigValidator::validate(misaligned_trigger).hasErrors(),
          "ATS9371 trigger delay alignment is enforced");
+
+  fmcw::SystemConfig nonfinite_scan;
+  nonfinite_scan.scan.x_start_deg = std::numeric_limits<double>::quiet_NaN();
+  expect(hasIssue(fmcw::ConfigValidator::validate(nonfinite_scan),
+                  fmcw::ValidationSeverity::Error, "scan"),
+         "non-finite scanner angles are rejected before Cartesian conversion");
+
+  fmcw::SystemConfig nonfinite_calibration;
+  nonfinite_calibration.calibration.y_angle_offset_deg =
+      std::numeric_limits<double>::infinity();
+  expect(hasIssue(fmcw::ConfigValidator::validate(nonfinite_calibration),
+                  fmcw::ValidationSeverity::Error, "calibration"),
+         "non-finite Cartesian calibration values are rejected");
 
   fmcw::SystemConfig oversized_udp_packet;
   oversized_udp_packet.udp.enabled = true;

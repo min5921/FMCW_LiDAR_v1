@@ -44,7 +44,7 @@ struct ScanLineSnapshot {
   std::vector<float> down_peak_value_db;
   std::vector<float> distance_m;
   std::vector<float> velocity_mps;
-  std::vector<float> z_m;
+  std::vector<float> depth_m;
   std::vector<std::uint8_t> up_peak_state;
   std::vector<std::uint8_t> down_peak_state;
   std::vector<std::uint8_t> valid;
@@ -57,7 +57,7 @@ struct BScanSnapshot {
   std::uint32_t width = 0;
   std::uint32_t height = 0;
   std::uint32_t completed_lines = 0;
-  std::vector<float> z_m;
+  std::vector<float> depth_m;
   std::vector<std::uint8_t> valid;
 };
 

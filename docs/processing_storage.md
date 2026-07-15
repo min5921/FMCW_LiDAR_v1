@@ -10,7 +10,7 @@ Phase 4 pipeline은 single-channel `RawFrame` 한 개를 다음 결과로 변환
 4. FFTW 또는 CUDA/cuFFT R2C FFT
 5. dBFS magnitude와 independent peak detection
 6. distance, velocity, XYZ 변환
-7. scan line 및 B-scan Z matrix 누적
+7. scan line 및 B-scan forward-depth matrix 누적
 8. immutable UI snapshot 발행
 9. raw/processed binary 비동기 저장
 
@@ -71,13 +71,19 @@ distance      = c * (f_up + f_down) / (8 * sweep_bandwidth_hz * sweep_rate_hz)
 velocity      = calibration.velocity_wavelength * (f_up - f_down) / 4
 ```
 
-이후 laser correction과 calibration scale/offset을 적용한다. 좌표계는 `+Z` forward, `+X` horizontal, `+Y` vertical이다.
+Distance에는 calibration scale/offset을, velocity에는 wavelength와 scale/offset을 적용한다. 이후 scanner angle에 `x_angle_offset_deg`, `y_angle_offset_deg`를 더하고 Cartesian 좌표를 계산한다. 좌표계와 축 순서는 legacy `Dis_value` 및 UDP `PointXYZIV`와 동일한 `+X` lateral, `+Y` forward, `+Z` vertical이다. Positive scanner Y angle은 legacy 부호 규칙에 따라 negative Z 방향이다.
 
 ```text
-x = R cos(y_angle) sin(x_angle)
-y = R sin(y_angle)
-z = R cos(y_angle) cos(x_angle)
+x_angle = scan_x_angle + calibration.x_angle_offset_deg
+y_angle = scan_y_angle + calibration.y_angle_offset_deg
+x         = R cos(y_angle) sin(x_angle)
+y         = R cos(y_angle) cos(x_angle)
+z         = -R sin(y_angle)
+intensity = (up_peak_db + down_peak_db) / 2
+velocity  = calibrated_velocity
 ```
+
+이 식은 legacy가 사용한 `legacy_x = 90 deg - x_angle`, `legacy_y = 90 deg + y_angle` 변환을 최종 scanner angle 기준으로 전개한 식이다. 별도의 보간 또는 좌표 추정은 수행하지 않는다.
 
 ## 6. UI Snapshots
 
@@ -85,8 +91,8 @@ z = R cos(y_angle) cos(x_angle)
 
 - `WaveformSnapshot`: ADC full-scale 기준 full-period waveform과 up/down range
 - `FftSnapshot`: up/down magnitude와 independently detected peak
-- `ScanLineSnapshot`: X pixel별 peak index/value, distance, velocity, Z, validity
-- `BScanSnapshot`: `width x height` Z matrix와 validity mask
+- `ScanLineSnapshot`: X pixel별 peak index/value, radial distance, velocity, forward depth, validity
+- `BScanSnapshot`: `width x height` Cartesian forward-depth (`point.y`) matrix와 validity mask
 
 Waveform/FFT는 processed frame마다 교체한다. Scan line과 B-scan은 모든 X pixel이 채워졌을 때 publish한다. UI가 느리면 과거 snapshot을 누적하지 않고 최신 shared snapshot을 읽는다.
 
@@ -123,7 +129,7 @@ Raw binary는 stream header 뒤에 frame record를 순차 기록한다. 각 reco
 
 Phase 7.1 결정으로 raw format v1과 `RawFrame`은 SDK의 left-aligned padding bit를 제거하고 signed full-scale로 변환한 `int16` 계약을 유지한다. 따라서 기존 FFT와 replay 파일의 의미는 바뀌지 않는다. 원본 Alazar DMA `uint16` 블록을 복사 없이 보존하는 고속 포맷은 Phase 7.4에서 raw format v2로 추가하며, v1 replay 호환성을 함께 유지한다.
 
-Processed binary에는 up/down FFT magnitude, peak와 validity, distance, velocity, XYZ, latency, processing revision을 기록한다.
+Processed binary에는 up/down FFT magnitude, peak와 validity, distance, velocity, XYZ, intensity, point velocity, latency, processing revision을 기록한다. UDP point payload도 동일한 `x, y, z, intensity, velocity` 순서를 사용한다.
 
 JSON sidecar에는 다음을 기록한다.
 

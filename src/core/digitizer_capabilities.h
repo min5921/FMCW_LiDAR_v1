@@ -29,6 +29,8 @@ const std::vector<DigitizerBoardCapabilities>& digitizerBoardCapabilities();
 const DigitizerBoardCapabilities* findDigitizerBoardCapabilities(std::string_view profile_id);
 bool supportsSampleRate(const DigitizerBoardCapabilities& capabilities, double sample_rate_hz);
 bool supportsRecordLength(const DigitizerBoardCapabilities& capabilities, std::uint32_t record_samples);
+std::uint32_t nearestSupportedRecordLength(const DigitizerBoardCapabilities& capabilities,
+                                           std::uint32_t requested_samples);
 bool supportsInputRange(const DigitizerBoardCapabilities& capabilities, double input_range_volts);
 bool supportsImpedance(const DigitizerBoardCapabilities& capabilities, std::uint32_t impedance_ohms);
 

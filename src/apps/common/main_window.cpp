@@ -22,6 +22,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
+#include <QLocale>
 #include <QMessageBox>
 #include <QPalette>
 #include <QPlainTextEdit>
@@ -114,6 +115,78 @@ QString sampleRateText(double sample_rate_hz) {
   }
   return QString("%1 kS/s").arg(sample_rate_hz / 1.0e3, 0, 'g', 6);
 }
+
+class RecordLengthSpinBox final : public QSpinBox {
+ public:
+  explicit RecordLengthSpinBox(QWidget* parent = nullptr) : QSpinBox(parent) {
+    setRange(0, 16 * 1024 * 1024);
+    setKeyboardTracking(false);
+    setCorrectionMode(QAbstractSpinBox::CorrectToNearestValue);
+  }
+
+  void setBoardCapabilities(const DigitizerBoardCapabilities& capabilities) {
+    capabilities_ = &capabilities;
+    const auto resolution = std::max<std::uint32_t>(capabilities.record_resolution_samples, 1U);
+    const auto maximum_supported = static_cast<std::uint32_t>(maximum()) -
+        (static_cast<std::uint32_t>(maximum()) % resolution);
+    setRange(static_cast<int>(capabilities.minimum_record_samples),
+             static_cast<int>(maximum_supported));
+    setSingleStep(static_cast<int>(resolution));
+    setSupportedValue(static_cast<std::uint32_t>(value()));
+    setToolTip(QString("%1 record length: minimum %2, exact multiples of %3 only")
+                   .arg(QString::fromStdString(capabilities.display_name))
+                   .arg(capabilities.minimum_record_samples)
+                   .arg(capabilities.record_resolution_samples));
+  }
+
+  void setSupportedValue(std::uint32_t requested_samples) {
+    if (capabilities_ == nullptr) {
+      QSpinBox::setValue(static_cast<int>(std::min<std::uint32_t>(
+          requested_samples, static_cast<std::uint32_t>(maximum()))));
+      return;
+    }
+    const auto supported = nearestSupportedRecordLength(*capabilities_, requested_samples);
+    QSpinBox::setValue(static_cast<int>(std::clamp<std::uint32_t>(
+        supported, static_cast<std::uint32_t>(minimum()), static_cast<std::uint32_t>(maximum()))));
+  }
+
+ protected:
+  QValidator::State validate(QString& input, int& position) const override {
+    const auto base_state = QSpinBox::validate(input, position);
+    if (base_state == QValidator::Invalid || capabilities_ == nullptr) {
+      return base_state;
+    }
+    bool parsed = false;
+    const auto candidate = locale().toLongLong(input.trimmed(), &parsed);
+    if (!parsed || candidate < minimum()) {
+      return QValidator::Intermediate;
+    }
+    if (candidate > maximum()) {
+      return QValidator::Invalid;
+    }
+    return supportsRecordLength(*capabilities_, static_cast<std::uint32_t>(candidate))
+        ? QValidator::Acceptable
+        : QValidator::Intermediate;
+  }
+
+  void fixup(QString& input) const override {
+    if (capabilities_ == nullptr) {
+      QSpinBox::fixup(input);
+      return;
+    }
+    bool parsed = false;
+    const auto requested = locale().toLongLong(input.trimmed(), &parsed);
+    const auto bounded = parsed && requested > 0
+        ? static_cast<std::uint32_t>(std::min<qlonglong>(requested, maximum()))
+        : static_cast<std::uint32_t>(value());
+    const auto supported = nearestSupportedRecordLength(*capabilities_, bounded);
+    input = locale().toString(static_cast<int>(std::clamp<std::uint32_t>(
+        supported, static_cast<std::uint32_t>(minimum()), static_cast<std::uint32_t>(maximum()))));
+  }
+
+ private:
+  const DigitizerBoardCapabilities* capabilities_ = nullptr;
+};
 
 QString darkStyleSheet() {
   return QStringLiteral(R"(
@@ -639,11 +712,9 @@ QWidget* MainWindow::buildDigitizerPage() {
   digitizer_channel_->addItems({"Channel A", "Channel B"});
   sample_rate_ = new QComboBox(board);
   const auto& default_capabilities = digitizerBoardCapabilities().front();
-  sample_point_ = new QSpinBox(board);
-  sample_point_->setRange(static_cast<int>(default_capabilities.minimum_record_samples),
-                          16 * 1024 * 1024);
-  sample_point_->setSingleStep(static_cast<int>(default_capabilities.record_resolution_samples));
-  sample_point_->setToolTip("User-selected Alazar record length");
+  auto* record_length = new RecordLengthSpinBox(board);
+  record_length->setBoardCapabilities(default_capabilities);
+  sample_point_ = record_length;
   record_length_state_ = new QLabel("ATS CHECK", board);
   record_length_state_->setWordWrap(true);
   record_length_state_->setProperty("statusKind", "neutral");
@@ -1156,7 +1227,7 @@ void MainWindow::connectUi() {
   });
   connect(controller_, &ApplicationController::bscanReady, this, [this](BScanSnapshotPtr snapshot) {
     if (!freeze_live_ && snapshot != nullptr) {
-      bscan_plot_->setData(snapshot->width, snapshot->height, snapshot->z_m, snapshot->valid,
+      bscan_plot_->setData(snapshot->width, snapshot->height, snapshot->depth_m, snapshot->valid,
                            snapshot->completed_lines);
     }
   });
@@ -1461,8 +1532,7 @@ void MainWindow::populateDigitizerCapabilities(QString profile_id, double prefer
   if (capabilities == nullptr) {
     return;
   }
-  sample_point_->setMinimum(static_cast<int>(capabilities->minimum_record_samples));
-  sample_point_->setSingleStep(static_cast<int>(capabilities->record_resolution_samples));
+  static_cast<RecordLengthSpinBox*>(sample_point_)->setBoardCapabilities(*capabilities);
   pre_trigger_->setSingleStep(static_cast<int>(capabilities->pretrigger_alignment_samples));
   trigger_delay_->setSingleStep(static_cast<int>(
       capabilities->single_channel_trigger_delay_alignment_samples));
@@ -1611,7 +1681,7 @@ void MainWindow::loadConfigToControls(const SystemConfig& config, bool mark_pend
   populateDigitizerCapabilities(board_profile_->currentData().toString(), config.digitizer.sample_rate_hz,
                                 config.digitizer.input_range_volts, config.digitizer.impedance_ohms);
   digitizer_channel_->setCurrentIndex(config.digitizer.channel == DigitizerChannel::A ? 0 : 1);
-  sample_point_->setValue(static_cast<int>(config.digitizer.sample_point));
+  static_cast<RecordLengthSpinBox*>(sample_point_)->setSupportedValue(config.digitizer.sample_point);
   records_per_buffer_->setValue(static_cast<int>(config.digitizer.records_per_buffer));
   dma_buffer_count_->setValue(static_cast<int>(config.digitizer.dma_buffer_count));
   coupling_->setCurrentIndex(0);
