@@ -207,4 +207,12 @@ double derivedMcuFrameTimeMs(const SystemConfig& config) {
       config.scan.scanner_sample_rate_hz;
 }
 
+double derivedChirpPeriodSeconds(const SystemConfig& config) {
+  if (!(config.digitizer.sample_rate_hz > 0.0)) {
+    return 0.0;
+  }
+  return static_cast<double>(config.chirp_segmentation.chirp_period_samples) /
+      config.digitizer.sample_rate_hz;
+}
+
 }  // namespace fmcw

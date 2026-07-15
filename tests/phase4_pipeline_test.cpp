@@ -123,6 +123,15 @@ fmcw::ProcessedFrame testSignalProcessing(const fmcw::SystemConfig& config,
   expect(processed.measurement_valid && processed.point.valid, "valid paired peaks produce distance and XYZ");
   expect(processed.distance_m > 0.0F, "paired peaks produce positive distance");
   expect(processed.velocity_mps < 0.0F, "up/down peak difference preserves velocity sign");
+  const double bin_frequency_hz = config.digitizer.sample_rate_hz /
+      static_cast<double>(config.chirp_segmentation.segment_fft_length);
+  const double expected_distance_m = 299792458.0 *
+      (processed.up_peak.interpolated_bin + processed.down_peak.interpolated_bin) *
+      bin_frequency_hz /
+      (8.0 * config.laser.sweep_bandwidth_hz * config.laser.sweep_rate_hz) *
+      config.calibration.distance_scale + config.calibration.distance_offset_m;
+  expectNear(processed.distance_m, expected_distance_m, 1.0e-4,
+             "distance uses bandwidth and sweep rate in Hz");
 
   auto runtime_config = config.processing;
   runtime_config.peak_threshold_db = -55.0;

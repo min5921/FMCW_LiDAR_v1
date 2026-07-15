@@ -1,5 +1,5 @@
 profile:
-  schema_version: 4
+  schema_version: 5
   id: default
   name: "Default FMCW LiDAR"
   description: "Self-consistent development full-period acquisition profile"
@@ -25,7 +25,6 @@ digitizer:
   impedance_ohms: 50
   trigger_source: external
   trigger_slope: rising
-  trigger_level_percent: 17.3
   trigger_delay_samples: 400
   pre_trigger_samples: 0
   post_trigger_samples: 4096
@@ -35,14 +34,8 @@ digitizer:
   acquisition_mode: continuous
   finite_frame_count: 1
 laser:
-  wavelength_nm: 1550
   sweep_bandwidth_hz: 2000000000
-  sweep_rate_hz_per_s: 1041666666666667
-  chirp_period_us: 3.84
-  laser_power_mw: 10
-  optical_path_factor: 1
-  distance_scale_correction: 1
-  velocity_scale_correction: 1
+  sweep_rate_hz: 200000
 edfa:
   mode: none
   required_before_start: false

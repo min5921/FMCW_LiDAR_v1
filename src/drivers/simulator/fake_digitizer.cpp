@@ -90,7 +90,7 @@ bool FakeDigitizer::start(std::string& error) {
   telemetry_.trigger_misses = 0;
   telemetry_.trigger_jitter_ns = 0.0;
   telemetry_.dma_buffer_period_ms = static_cast<double>(config_.digitizer.records_per_buffer) *
-      config_.laser.chirp_period_us / 1000.0;
+      derivedChirpPeriodSeconds(config_) * 1000.0;
   telemetry_.dma_buffer_rate_hz = telemetry_.dma_buffer_period_ms > 0.0
       ? 1000.0 / telemetry_.dma_buffer_period_ms
       : 0.0;
@@ -167,7 +167,7 @@ FrameWaitResult FakeDigitizer::waitForBatch(MutableRawFrameBatchPtr& batch,
   telemetry_.frames_received += record_count;
   ++telemetry_.dma_buffers_received;
   const auto physical_period = std::chrono::duration<double>(
-      static_cast<double>(record_count) * config_.laser.chirp_period_us * 1.0e-6);
+      static_cast<double>(record_count) * derivedChirpPeriodSeconds(config_));
   const auto simulator_period = std::chrono::duration<double>(1.0 / kMaximumSimulatorBatchRateHz);
   const auto paced_period = std::max(physical_period, simulator_period);
   telemetry_.dma_buffer_period_ms =

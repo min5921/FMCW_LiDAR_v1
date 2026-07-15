@@ -65,8 +65,8 @@ UP과 DOWN peak는 각 A-scan에서 독립적으로 검출한다. 이전 A-scan�
 bin_frequency = sample_rate / fft_length
 f_up          = up_peak_bin * bin_frequency
 f_down        = down_peak_bin * bin_frequency
-distance      = c * (f_up + f_down) / (4 * sweep_rate)
-velocity      = wavelength * (f_up - f_down) / 4
+distance      = c * (f_up + f_down) / (8 * sweep_bandwidth_hz * sweep_rate_hz)
+velocity      = calibration.velocity_wavelength * (f_up - f_down) / 4
 ```
 
 이후 laser correction과 calibration scale/offset을 적용한다. 좌표계는 `+Z` forward, `+X` horizontal, `+Y` vertical이다.

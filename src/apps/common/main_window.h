@@ -135,18 +135,13 @@ class MainWindow final : public QMainWindow {
   QComboBox* impedance_ = nullptr;
   QComboBox* coupling_ = nullptr;
   QComboBox* trigger_slope_ = nullptr;
-  QDoubleSpinBox* trigger_level_ = nullptr;
   QSpinBox* trigger_delay_ = nullptr;
   QSpinBox* pre_trigger_ = nullptr;
-  QLabel* trigger_level_code_ = nullptr;
   QLabel* post_trigger_ = nullptr;
   QLabel* digitizer_lock_state_ = nullptr;
 
-  QDoubleSpinBox* wavelength_ = nullptr;
   QDoubleSpinBox* sweep_bandwidth_ = nullptr;
   QDoubleSpinBox* sweep_rate_ = nullptr;
-  QDoubleSpinBox* chirp_period_ = nullptr;
-  QDoubleSpinBox* laser_power_ = nullptr;
   QComboBox* edfa_mode_ = nullptr;
   QLineEdit* edfa_port_ = nullptr;
   QComboBox* edfa_control_mode_ = nullptr;

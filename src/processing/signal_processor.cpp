@@ -268,15 +268,15 @@ bool SignalProcessor::process(const RawFrame& raw, ProcessedFrame& processed, st
         static_cast<double>(impl_->config.chirp_segmentation.segment_fft_length);
     const double up_frequency_hz = processed.up_peak.interpolated_bin * bin_frequency_hz;
     const double down_frequency_hz = processed.down_peak.interpolated_bin * bin_frequency_hz;
-    const double wavelength_m = impl_->config.laser.wavelength_nm * 1.0e-9;
+    const double wavelength_m = impl_->config.calibration.velocity_wavelength_nm * 1.0e-9;
+    // A full triangular sweep has chirp slope 2 * bandwidth * repetition rate.
     const double raw_distance = kSpeedOfLightMps * (up_frequency_hz + down_frequency_hz) /
-        (4.0 * impl_->config.laser.sweep_rate_hz_per_s);
+        (8.0 * impl_->config.laser.sweep_bandwidth_hz * impl_->config.laser.sweep_rate_hz);
     const double raw_velocity = wavelength_m * (up_frequency_hz - down_frequency_hz) / 4.0;
-    processed.distance_m = static_cast<float>(raw_distance * impl_->config.laser.optical_path_factor *
-        impl_->config.laser.distance_scale_correction * impl_->config.calibration.distance_scale +
+    processed.distance_m = static_cast<float>(raw_distance * impl_->config.calibration.distance_scale +
         impl_->config.calibration.distance_offset_m);
-    processed.velocity_mps = static_cast<float>(raw_velocity * impl_->config.laser.velocity_scale_correction *
-        impl_->config.calibration.velocity_scale + impl_->config.calibration.velocity_offset_mps);
+    processed.velocity_mps = static_cast<float>(raw_velocity * impl_->config.calibration.velocity_scale +
+        impl_->config.calibration.velocity_offset_mps);
     processed.measurement_valid = true;
     processed.point = toPoint(processed.distance_m, processed.velocity_mps,
                               0.5F * (processed.up_peak.magnitude_db + processed.down_peak.magnitude_db),

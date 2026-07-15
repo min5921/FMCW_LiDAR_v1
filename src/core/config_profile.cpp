@@ -182,7 +182,6 @@ ConfigDocument ConfigProfileCodec::encode(const SystemConfig& config) {
   setUnsigned(document, "digitizer.impedance_ohms", config.digitizer.impedance_ohms);
   document.setString("digitizer.trigger_source", toString(config.digitizer.trigger_source));
   document.setString("digitizer.trigger_slope", toString(config.digitizer.trigger_slope));
-  document.setNumber("digitizer.trigger_level_percent", config.digitizer.trigger_level_percent);
   setUnsigned(document, "digitizer.trigger_delay_samples", config.digitizer.trigger_delay_samples);
   setUnsigned(document, "digitizer.pre_trigger_samples", config.digitizer.pre_trigger_samples);
   setUnsigned(document, "digitizer.post_trigger_samples", config.digitizer.post_trigger_samples);
@@ -192,14 +191,8 @@ ConfigDocument ConfigProfileCodec::encode(const SystemConfig& config) {
   document.setString("digitizer.acquisition_mode", toString(config.digitizer.acquisition_mode));
   setUnsigned(document, "digitizer.finite_frame_count", config.digitizer.finite_frame_count);
 
-  document.setNumber("laser.wavelength_nm", config.laser.wavelength_nm);
   document.setNumber("laser.sweep_bandwidth_hz", config.laser.sweep_bandwidth_hz);
-  document.setNumber("laser.sweep_rate_hz_per_s", config.laser.sweep_rate_hz_per_s);
-  document.setNumber("laser.chirp_period_us", config.laser.chirp_period_us);
-  document.setNumber("laser.laser_power_mw", config.laser.laser_power_mw);
-  document.setNumber("laser.optical_path_factor", config.laser.optical_path_factor);
-  document.setNumber("laser.distance_scale_correction", config.laser.distance_scale_correction);
-  document.setNumber("laser.velocity_scale_correction", config.laser.velocity_scale_correction);
+  document.setNumber("laser.sweep_rate_hz", config.laser.sweep_rate_hz);
 
   document.setString("edfa.mode", toString(config.edfa.mode));
   document.setBoolean("edfa.required_before_start", config.edfa.required_before_start);
@@ -273,6 +266,7 @@ ConfigDocument ConfigProfileCodec::encode(const SystemConfig& config) {
   document.setString("calibration.version", config.calibration.version);
   document.setNumber("calibration.distance_offset_m", config.calibration.distance_offset_m);
   document.setNumber("calibration.distance_scale", config.calibration.distance_scale);
+  document.setNumber("calibration.velocity_wavelength_nm", config.calibration.velocity_wavelength_nm);
   document.setNumber("calibration.velocity_offset_mps", config.calibration.velocity_offset_mps);
   document.setNumber("calibration.velocity_scale", config.calibration.velocity_scale);
   document.setNumber("calibration.x_angle_offset_deg", config.calibration.x_angle_offset_deg);
@@ -320,7 +314,6 @@ bool ConfigProfileCodec::decode(const ConfigDocument& document, SystemConfig& co
   readInteger(document, "digitizer.impedance_ohms", config.digitizer.impedance_ohms, issues, source);
   readEnum(document, "digitizer.trigger_source", config.digitizer.trigger_source, issues, source);
   readEnum(document, "digitizer.trigger_slope", config.digitizer.trigger_slope, issues, source);
-  readNumber(document, "digitizer.trigger_level_percent", config.digitizer.trigger_level_percent, issues, source);
   readInteger(document, "digitizer.trigger_delay_samples", config.digitizer.trigger_delay_samples, issues, source);
   readInteger(document, "digitizer.pre_trigger_samples", config.digitizer.pre_trigger_samples, issues, source);
   readInteger(document, "digitizer.post_trigger_samples", config.digitizer.post_trigger_samples, issues, source);
@@ -330,14 +323,8 @@ bool ConfigProfileCodec::decode(const ConfigDocument& document, SystemConfig& co
   readEnum(document, "digitizer.acquisition_mode", config.digitizer.acquisition_mode, issues, source);
   readInteger(document, "digitizer.finite_frame_count", config.digitizer.finite_frame_count, issues, source);
 
-  readNumber(document, "laser.wavelength_nm", config.laser.wavelength_nm, issues, source);
   readNumber(document, "laser.sweep_bandwidth_hz", config.laser.sweep_bandwidth_hz, issues, source);
-  readNumber(document, "laser.sweep_rate_hz_per_s", config.laser.sweep_rate_hz_per_s, issues, source);
-  readNumber(document, "laser.chirp_period_us", config.laser.chirp_period_us, issues, source);
-  readNumber(document, "laser.laser_power_mw", config.laser.laser_power_mw, issues, source);
-  readNumber(document, "laser.optical_path_factor", config.laser.optical_path_factor, issues, source);
-  readNumber(document, "laser.distance_scale_correction", config.laser.distance_scale_correction, issues, source);
-  readNumber(document, "laser.velocity_scale_correction", config.laser.velocity_scale_correction, issues, source);
+  readNumber(document, "laser.sweep_rate_hz", config.laser.sweep_rate_hz, issues, source);
 
   readEnum(document, "edfa.mode", config.edfa.mode, issues, source);
   readBool(document, "edfa.required_before_start", config.edfa.required_before_start, issues, source);
@@ -416,6 +403,7 @@ bool ConfigProfileCodec::decode(const ConfigDocument& document, SystemConfig& co
   readString(document, "calibration.version", config.calibration.version, issues, source);
   readNumber(document, "calibration.distance_offset_m", config.calibration.distance_offset_m, issues, source);
   readNumber(document, "calibration.distance_scale", config.calibration.distance_scale, issues, source);
+  readNumber(document, "calibration.velocity_wavelength_nm", config.calibration.velocity_wavelength_nm, issues, source);
   readNumber(document, "calibration.velocity_offset_mps", config.calibration.velocity_offset_mps, issues, source);
   readNumber(document, "calibration.velocity_scale", config.calibration.velocity_scale, issues, source);
   readNumber(document, "calibration.x_angle_offset_deg", config.calibration.x_angle_offset_deg, issues, source);

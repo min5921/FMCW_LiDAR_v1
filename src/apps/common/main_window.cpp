@@ -674,16 +674,11 @@ QWidget* MainWindow::buildDigitizerPage() {
   records_per_buffer_->setRange(2, 15000);
   dma_buffer_count_ = new QSpinBox(dma);
   dma_buffer_count_->setRange(2, 128);
-  auto* trigger_input = new QLabel("TRIG IN | External TTL | DC coupled", dma);
+  auto* trigger_input = new QLabel("TRIG IN | External TTL | fixed comparator | DC coupled", dma);
+  trigger_input->setWordWrap(true);
   trigger_input->setProperty("statusKind", "neutral");
   trigger_slope_ = new QComboBox(dma);
   trigger_slope_->addItems({"Rising edge", "Falling edge"});
-  trigger_level_ = new QDoubleSpinBox(dma);
-  trigger_level_->setRange(-100.0, 100.0);
-  trigger_level_->setDecimals(1);
-  trigger_level_->setSuffix(" % FS");
-  trigger_level_code_ = new QLabel("SDK code 150", dma);
-  trigger_level_code_->setProperty("statusKind", "neutral");
   trigger_delay_ = new QSpinBox(dma);
   trigger_delay_->setRange(0, 9999999);
   trigger_delay_->setSingleStep(static_cast<int>(
@@ -704,8 +699,6 @@ QWidget* MainWindow::buildDigitizerPage() {
   dma_form->addRow("DMA buffers", dma_buffer_count_);
   dma_form->addRow("Trigger input", trigger_input);
   dma_form->addRow("Trigger edge", trigger_slope_);
-  dma_form->addRow("Trigger threshold", trigger_level_);
-  dma_form->addRow("Threshold code", trigger_level_code_);
   dma_form->addRow("Trigger delay", trigger_delay_);
   dma_form->addRow("Pre-trigger", pre_trigger_);
   dma_form->addRow("Post-trigger", post_trigger_);
@@ -718,7 +711,7 @@ QWidget* MainWindow::buildDigitizerPage() {
   layout->setRowStretch(1, 1);
   restart_required_controls_.append(QList<QWidget*>{acquisition_source_, replay_file_, replay_browse_, replay_loop_,
       board_profile_, digitizer_channel_, sample_rate_, sample_point_,
-      input_range_, impedance_, coupling_, records_per_buffer_, dma_buffer_count_, trigger_slope_, trigger_level_,
+      input_range_, impedance_, coupling_, records_per_buffer_, dma_buffer_count_, trigger_slope_,
       trigger_delay_, pre_trigger_});
   return wrapInScrollArea(content);
 }
@@ -731,31 +724,20 @@ QWidget* MainWindow::buildLaserEdfaPage() {
   auto* laser = groupBox("Laser Specification", content);
   auto* laser_form = new QFormLayout(laser);
   tuneForm(laser_form);
-  wavelength_ = new QDoubleSpinBox(laser);
-  wavelength_->setRange(200.0, 3000.0);
-  wavelength_->setDecimals(2);
-  wavelength_->setSuffix(" nm");
   sweep_bandwidth_ = new QDoubleSpinBox(laser);
-  sweep_bandwidth_->setRange(0.001, 1000.0);
-  sweep_bandwidth_->setDecimals(3);
-  sweep_bandwidth_->setSuffix(" GHz");
+  sweep_bandwidth_->setRange(1.0, 1.0e12);
+  sweep_bandwidth_->setDecimals(0);
+  sweep_bandwidth_->setSingleStep(1.0e6);
+  sweep_bandwidth_->setSuffix(" Hz");
+  sweep_bandwidth_->setToolTip("Measured optical sweep bandwidth used for distance conversion");
   sweep_rate_ = new QDoubleSpinBox(laser);
-  sweep_rate_->setRange(0.001, 1000000.0);
-  sweep_rate_->setDecimals(3);
-  sweep_rate_->setSuffix(" THz/s");
-  sweep_rate_->setToolTip("Measured optical sweep slope used for distance conversion");
-  chirp_period_ = new QDoubleSpinBox(laser);
-  chirp_period_->setRange(0.01, 100000.0);
-  chirp_period_->setDecimals(3);
-  chirp_period_->setSuffix(" us");
-  laser_power_ = new QDoubleSpinBox(laser);
-  laser_power_->setRange(0.0, 10000.0);
-  laser_power_->setSuffix(" mW");
-  laser_form->addRow("Wavelength", wavelength_);
+  sweep_rate_->setRange(1.0, 1.0e9);
+  sweep_rate_->setDecimals(0);
+  sweep_rate_->setSingleStep(1000.0);
+  sweep_rate_->setSuffix(" Hz");
+  sweep_rate_->setToolTip("Measured full triangular sweep repetition rate used for distance conversion");
   laser_form->addRow("Sweep bandwidth", sweep_bandwidth_);
-  laser_form->addRow("Measured sweep rate", sweep_rate_);
-  laser_form->addRow("Full chirp period", chirp_period_);
-  laser_form->addRow("Laser power", laser_power_);
+  laser_form->addRow("Sweep rate", sweep_rate_);
 
   auto* edfa = groupBox("Optional EDFA", content);
   auto* edfa_form = new QFormLayout(edfa);
@@ -786,7 +768,7 @@ QWidget* MainWindow::buildLaserEdfaPage() {
   layout->setColumnStretch(0, 1);
   layout->setColumnStretch(1, 1);
   layout->setRowStretch(1, 1);
-  restart_required_controls_.append(QList<QWidget*>{wavelength_, sweep_bandwidth_, sweep_rate_, chirp_period_, laser_power_,
+  restart_required_controls_.append(QList<QWidget*>{sweep_bandwidth_, sweep_rate_,
       edfa_mode_, edfa_port_, edfa_control_mode_, edfa_setpoint_, edfa_warmup_});
   return wrapInScrollArea(content);
 }
@@ -1219,8 +1201,8 @@ void MainWindow::connectUi() {
   const QList<QObject*> config_controls = {
       acquisition_source_, replay_file_, replay_loop_, board_profile_, digitizer_channel_, sample_rate_,
       sample_point_, records_per_buffer_, dma_buffer_count_,
-      input_range_, impedance_, coupling_, trigger_slope_, trigger_level_, trigger_delay_, pre_trigger_,
-      wavelength_, sweep_bandwidth_, sweep_rate_, chirp_period_, laser_power_, edfa_mode_, edfa_port_,
+      input_range_, impedance_, coupling_, trigger_slope_, trigger_delay_, pre_trigger_,
+      sweep_bandwidth_, sweep_rate_, edfa_mode_, edfa_port_,
       edfa_control_mode_, edfa_setpoint_, edfa_warmup_, x_start_, x_end_, y_start_, y_end_, y_lines_,
       bidirectional_, mcu_enabled_, mcu_port_, fft_backend_, window_function_, dc_removal_,
       peak_threshold_, peak_start_, peak_end_,
@@ -1245,9 +1227,7 @@ void MainWindow::connectUi() {
   connect(y_lines_, &QSpinBox::valueChanged, this, [this] { updateDerivedAcquisitionLabels(); });
   connect(sample_point_, &QSpinBox::valueChanged, this, [this] { updateDerivedAcquisitionLabels(); });
   connect(sample_rate_, &QComboBox::currentIndexChanged, this, [this] { updateDerivedAcquisitionLabels(); });
-  connect(chirp_period_, &QDoubleSpinBox::valueChanged, this, [this] { updateDerivedAcquisitionLabels(); });
   connect(pre_trigger_, &QSpinBox::valueChanged, this, [this] { updateDerivedAcquisitionLabels(); });
-  connect(trigger_level_, &QDoubleSpinBox::valueChanged, this, [this] { updateDerivedAcquisitionLabels(); });
   for (auto* control : config_controls) {
     const auto changed = [this, restart_required = !runtime_controls.contains(control)] {
       if (restart_required) {
@@ -1408,17 +1388,13 @@ SystemConfig MainWindow::configFromControls() const {
   config.digitizer.coupling = Coupling::Dc;
   config.digitizer.trigger_source = TriggerSource::External;
   config.digitizer.trigger_slope = trigger_slope_->currentIndex() == 0 ? TriggerSlope::Rising : TriggerSlope::Falling;
-  config.digitizer.trigger_level_percent = trigger_level_->value();
   config.digitizer.trigger_delay_samples = static_cast<std::uint32_t>(trigger_delay_->value());
   config.digitizer.pre_trigger_samples = static_cast<std::uint32_t>(pre_trigger_->value());
   config.digitizer.post_trigger_samples = config.digitizer.sample_point > config.digitizer.pre_trigger_samples
       ? config.digitizer.sample_point - config.digitizer.pre_trigger_samples
       : 0U;
-  config.laser.wavelength_nm = wavelength_->value();
-  config.laser.sweep_bandwidth_hz = sweep_bandwidth_->value() * 1.0e9;
-  config.laser.sweep_rate_hz_per_s = sweep_rate_->value() * 1.0e12;
-  config.laser.chirp_period_us = chirp_period_->value();
-  config.laser.laser_power_mw = laser_power_->value();
+  config.laser.sweep_bandwidth_hz = sweep_bandwidth_->value();
+  config.laser.sweep_rate_hz = sweep_rate_->value();
   config.edfa.mode = static_cast<EdfaMode>(edfa_mode_->currentIndex());
   config.edfa.port = edfa_port_->text().trimmed().toStdString();
   config.edfa.control_mode = edfa_control_mode_->currentIndex() == 0 ? EdfaControlMode::Apc
@@ -1548,6 +1524,10 @@ void MainWindow::updateDerivedAcquisitionLabels() {
   const double record_duration_us = sample_rate_hz > 0.0
       ? static_cast<double>(sample_points) * 1.0e6 / sample_rate_hz
       : 0.0;
+  const auto chirp_period_samples = config_.chirp_segmentation.chirp_period_samples;
+  const double period_duration_us = sample_rate_hz > 0.0
+      ? static_cast<double>(chirp_period_samples) * 1.0e6 / sample_rate_hz
+      : 0.0;
   if (!record_valid) {
     record_length_state_->setText(capabilities == nullptr
         ? "ATS ERROR | unknown board profile"
@@ -1555,11 +1535,11 @@ void MainWindow::updateDerivedAcquisitionLabels() {
               .arg(capabilities->minimum_record_samples)
               .arg(capabilities->record_resolution_samples));
     record_length_state_->setProperty("statusKind", "error");
-  } else if (chirp_period_ != nullptr && record_duration_us > chirp_period_->value()) {
+  } else if (sample_points > chirp_period_samples) {
     record_length_state_->setText(
-        QString("ATS VALID | %1 us | +%2 us beyond one laser period")
+        QString("ATS VALID | %1 us | +%2 us beyond one chirp period")
             .arg(record_duration_us, 0, 'f', 3)
-            .arg(record_duration_us - chirp_period_->value(), 0, 'f', 3));
+            .arg(record_duration_us - period_duration_us, 0, 'f', 3));
     record_length_state_->setProperty("statusKind", "warn");
   } else {
     record_length_state_->setText(
@@ -1567,7 +1547,6 @@ void MainWindow::updateDerivedAcquisitionLabels() {
     record_length_state_->setProperty("statusKind", "ready");
   }
   repolish(record_length_state_);
-  trigger_level_code_->setText(QString("SDK code %1").arg(alazarTriggerLevelCode(trigger_level_->value())));
   const auto a_scans = records_per_buffer_->value();
   if (selected_a_scan_ != nullptr) {
     selected_a_scan_->setMaximum(std::max(0, a_scans - 1));
@@ -1637,14 +1616,10 @@ void MainWindow::loadConfigToControls(const SystemConfig& config, bool mark_pend
   dma_buffer_count_->setValue(static_cast<int>(config.digitizer.dma_buffer_count));
   coupling_->setCurrentIndex(0);
   trigger_slope_->setCurrentIndex(config.digitizer.trigger_slope == TriggerSlope::Rising ? 0 : 1);
-  trigger_level_->setValue(config.digitizer.trigger_level_percent);
   trigger_delay_->setValue(static_cast<int>(config.digitizer.trigger_delay_samples));
   pre_trigger_->setValue(static_cast<int>(config.digitizer.pre_trigger_samples));
-  wavelength_->setValue(config.laser.wavelength_nm);
-  sweep_bandwidth_->setValue(config.laser.sweep_bandwidth_hz / 1.0e9);
-  sweep_rate_->setValue(config.laser.sweep_rate_hz_per_s / 1.0e12);
-  chirp_period_->setValue(config.laser.chirp_period_us);
-  laser_power_->setValue(config.laser.laser_power_mw);
+  sweep_bandwidth_->setValue(config.laser.sweep_bandwidth_hz);
+  sweep_rate_->setValue(config.laser.sweep_rate_hz);
   edfa_mode_->setCurrentIndex(static_cast<int>(config.edfa.mode));
   edfa_port_->setText(QString::fromStdString(config.edfa.port));
   edfa_control_mode_->setCurrentIndex(config.edfa.control_mode == EdfaControlMode::Apc ? 0

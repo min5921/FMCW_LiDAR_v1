@@ -160,7 +160,7 @@ UI에서 다음 항목을 설정할 수 있어야 한다.
 - Impedance
 - Trigger source: `TRIG IN`, External TTL, DC coupling으로 고정
 - Trigger slope
-- Trigger threshold: signed full-scale percent와 ATS SDK code를 함께 표시
+- Trigger threshold: 사용자 설정에서 제외. ATS SDK level 인자는 legacy와 동일한 내부 code `150`, external range는 `ETR_TTL`로 고정
 - Trigger delay
 - Laser trigger mode: `up_chirp_only`로 고정
 - Full-period acquisition: 항상 enable
@@ -178,7 +178,7 @@ UI에서 다음 항목을 설정할 수 있어야 한다.
 
 - `sample_point`는 사용자가 Alazar record 길이로 직접 입력하며 laser sweep rate로부터 자동 계산하지 않는다.
 - ATS9371 record 길이는 최소 256 samples이고 128 samples의 배수여야 한다.
-- `sample_point / sample_rate_hz`가 laser 한 주기보다 길면 Warning을 표시하되 START를 차단하지 않는다.
+- `sample_point`가 `chirp_period_samples`보다 크면 Warning을 표시하되 START를 차단하지 않는다.
 - v1 hardware acquisition에서는 trigger 1개가 전체 up+down chirp period 1개를 의미한다.
 - legacy `up_down_pair`는 hardware profile이나 UI에 노출하지 않고 replay/import 변환에서만 읽는다.
 - `up_chirp_only` 모드의 record length는 설정된 full chirp period와 UP/DOWN segment를 포함해야 하며 추가 margin은 선택 사항이다.
@@ -213,25 +213,18 @@ UI에서 다음 항목을 설정할 수 있어야 한다.
 
 ### 3.3 Laser Setup
 
-UI에서 레이저 및 FMCW 파라미터를 설정할 수 있어야 한다.
+UI의 Laser Specification은 거리 계산에 필요한 두 항목만 제공한다.
 
-- Wavelength
-- Sweep bandwidth
-- Sweep rate
-- Chirp direction
-- Chirp period
-- Trigger output mode: up chirp start only
-- Full period capture mode
-- Laser power
-- Optical path calibration factor
-- Distance scale correction
-- Velocity scale correction
+- Sweep bandwidth: `Hz`
+- Sweep rate: full triangular waveform repetition rate, `Hz`
 
 주의:
 
-- 현재 코드에서는 `Sweeprate`를 읽지만 거리 계산에는 하드코딩 값이 사용된다.
-- 개선 버전에서는 모든 계산 파라미터가 설정값에서 오도록 해야 한다.
-- sweep rate, bandwidth, wavelength, sample rate, sample point가 바뀌면 distance/velocity scale을 즉시 재계산한다.
+- legacy 코드는 `Sweeprate`를 읽고도 거리 계산에서 `200000`을 하드코딩했지만, 개선 버전은 두 UI 설정값을 직접 사용한다.
+- 거리식은 `c * (f_up + f_down) / (8 * bandwidth * sweep_rate)`를 사용한다.
+- bandwidth와 sweep rate는 sample point, chirp period, segmentation 또는 trigger timing을 결정하지 않는다.
+- bandwidth/period/sweep slope 상호 일치 Warning은 생성하지 않는다.
+- velocity wavelength와 scale/offset은 Laser UI가 아니라 calibration profile에서 관리한다.
 - 레이저 trigger는 up/down chirp마다 각각 발생하지 않고 up chirp 시작점에서만 발생하는 모드를 지원한다.
 - up chirp trigger 1개에 대해 digitizer는 전체 up+down chirp 주기를 캡처해야 한다.
 - UI는 trigger 위치, up 구간, down 구간, guard 구간을 waveform 위에 표시해야 한다.

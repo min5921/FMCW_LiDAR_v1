@@ -2,6 +2,7 @@ calibration:
   version: default-v1
   distance_offset_m: 0
   distance_scale: 1
+  velocity_wavelength_nm: 1550
   velocity_offset_mps: 0
   velocity_scale: 1
   x_angle_offset_deg: 0

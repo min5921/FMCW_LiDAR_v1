@@ -54,16 +54,4 @@ bool supportsImpedance(const DigitizerBoardCapabilities& capabilities, std::uint
          capabilities.impedances_ohms.end();
 }
 
-std::uint32_t alazarTriggerLevelCode(double percent_full_scale) {
-  const auto percent = std::clamp(percent_full_scale, -100.0, 100.0);
-  const auto scale = percent >= 0.0 ? 127.0 : 128.0;
-  return static_cast<std::uint32_t>(std::clamp(std::lround(128.0 + percent * scale / 100.0), 0L, 255L));
-}
-
-double alazarTriggerLevelPercent(std::uint32_t code) {
-  const auto clamped = std::min(code, 255U);
-  const auto delta = static_cast<double>(clamped) - 128.0;
-  return delta * 100.0 / (clamped >= 128U ? 127.0 : 128.0);
-}
-
 }  // namespace fmcw

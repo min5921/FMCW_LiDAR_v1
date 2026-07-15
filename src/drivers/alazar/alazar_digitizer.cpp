@@ -474,7 +474,7 @@ bool AlazarDigitizer::configureBoard(std::string& error) {
                                   IMPEDANCE_50_OHM), "AlazarInputControlEx", error) ||
       !check(AlazarSetTriggerOperation(impl_->board, TRIG_ENGINE_OP_J, TRIG_ENGINE_J, TRIG_EXTERNAL,
                                        triggerSlopeId(config_.digitizer.trigger_slope),
-                                       alazarTriggerLevelCode(config_.digitizer.trigger_level_percent),
+                                       kAlazarExternalTtlTriggerLevelCode,
                                        TRIG_ENGINE_K, TRIG_DISABLE, TRIGGER_SLOPE_POSITIVE, 128),
              "AlazarSetTriggerOperation", error) ||
       !check(AlazarSetExternalTrigger(impl_->board, DC_COUPLING, ETR_TTL),

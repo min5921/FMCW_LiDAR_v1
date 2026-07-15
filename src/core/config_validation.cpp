@@ -172,11 +172,6 @@ ValidationResult ConfigValidator::validate(const SystemConfig& config) {
     add(result, ValidationSeverity::Error, "digitizer.coupling", "ATS9371 analog inputs use DC coupling",
         "Select DC coupling");
   }
-  if (digitizer.trigger_level_percent < -100.0 || digitizer.trigger_level_percent > 100.0) {
-    add(result, ValidationSeverity::Error, "digitizer.trigger_level_percent",
-        "Trigger threshold must be between -100 and +100 percent of full scale",
-        "Adjust the external trigger threshold");
-  }
   if (digitizer.acquisition_mode == AcquisitionMode::Finite && digitizer.finite_frame_count == 0) {
     add(result, ValidationSeverity::Error, "digitizer.finite_frame_count", "Finite mode requires at least one frame",
         "Set finite_frame_count above zero");
@@ -231,45 +226,23 @@ ValidationResult ConfigValidator::validate(const SystemConfig& config) {
         "Set processing, storage, and UDP queue capacities above zero");
   }
 
-  if (!(config.laser.wavelength_nm > 0.0) || !(config.laser.sweep_bandwidth_hz > 0.0) ||
-      !(config.laser.sweep_rate_hz_per_s > 0.0) || !(config.laser.chirp_period_us > 0.0) ||
-      !(config.laser.optical_path_factor > 0.0)) {
+  if (!(config.laser.sweep_bandwidth_hz > 0.0) || !(config.laser.sweep_rate_hz > 0.0)) {
     add(result, ValidationSeverity::Error, "laser",
-        "Laser wavelength, bandwidth, sweep rate, chirp period, and path factor must be positive",
-        "Enter the measured laser specifications");
-  } else {
-    if (digitizer.sample_rate_hz > 0.0) {
-      const double expected_samples = digitizer.sample_rate_hz * config.laser.chirp_period_us * 1.0e-6;
-      if (static_cast<double>(digitizer.sample_point) > expected_samples) {
-        const double record_duration_us =
-            static_cast<double>(digitizer.sample_point) * 1.0e6 / digitizer.sample_rate_hz;
-        std::ostringstream message;
-        message << "Record length captures " << digitizer.sample_point << " samples ("
-                << record_duration_us << " us), longer than one laser period ("
-                << config.laser.chirp_period_us << " us)";
-        add(result, ValidationSeverity::Warning, "digitizer.sample_point", message.str(),
-            "The ATS record length is valid; keep the extra capture margin only if intentional");
-      }
-      const double difference = std::abs(expected_samples - chirp.chirp_period_samples);
-      if (difference > std::max(4.0, expected_samples * 0.01)) {
-        std::ostringstream message;
-        message << "Laser chirp period implies " << std::llround(expected_samples)
-                << " samples, but chirp_period_samples is " << chirp.chirp_period_samples;
-        add(result, ValidationSeverity::Warning, "chirp_segmentation.chirp_period_samples", message.str(),
-            "Verify the full-period trigger timing and update the measured period or sample count");
-      }
-    }
-
-    const double full_period_seconds = config.laser.chirp_period_us * 1.0e-6;
-    const double symmetric_triangular_slope =
-        2.0 * config.laser.sweep_bandwidth_hz / full_period_seconds;
-    const double slope_difference =
-        std::abs(config.laser.sweep_rate_hz_per_s - symmetric_triangular_slope);
-    if (slope_difference > symmetric_triangular_slope * 0.01) {
-      add(result, ValidationSeverity::Warning, "laser.sweep_rate_hz_per_s",
-          "Sweep rate differs by more than 1 percent from bandwidth divided by a half chirp period",
-          "Enter the measured sweep slope, or verify bandwidth and full chirp period for the laser waveform");
-    }
+        "Laser bandwidth and sweep rate must be positive",
+        "Enter the measured bandwidth and full-period sweep rate used for distance conversion");
+  }
+  if (digitizer.sample_rate_hz > 0.0 && digitizer.sample_point > chirp.chirp_period_samples) {
+    const double record_duration_us =
+        static_cast<double>(digitizer.sample_point) * 1.0e6 / digitizer.sample_rate_hz;
+    const double period_duration_us =
+        static_cast<double>(chirp.chirp_period_samples) * 1.0e6 / digitizer.sample_rate_hz;
+    std::ostringstream message;
+    message << "Record length captures " << digitizer.sample_point << " samples ("
+            << record_duration_us << " us), longer than the configured "
+            << chirp.chirp_period_samples << "-sample chirp period ("
+            << period_duration_us << " us)";
+    add(result, ValidationSeverity::Warning, "digitizer.sample_point", message.str(),
+        "The ATS record length is valid; keep the extra capture margin only if intentional");
   }
 
   if (config.scan.x_start_deg >= config.scan.x_end_deg || config.scan.y_start_deg >= config.scan.y_end_deg ||
@@ -332,6 +305,7 @@ ValidationResult ConfigValidator::validate(const SystemConfig& config) {
         "Use plot_update_hz in (0, 60] and point_cloud_update_hz in (0, 30]");
   }
   if (config.calibration.version.empty() || !(config.calibration.distance_scale > 0.0) ||
+      !(config.calibration.velocity_wavelength_nm > 0.0) ||
       !(config.calibration.velocity_scale > 0.0)) {
     add(result, ValidationSeverity::Error, "calibration", "Calibration version and positive scales are required",
         "Load a valid calibration layer");
@@ -342,9 +316,11 @@ ValidationResult ConfigValidator::validate(const SystemConfig& config) {
         "Set port, baud rate, timeout, and one or two stop bits");
   }
 
-  if (config.storage.raw_enabled && config.laser.chirp_period_us > 0.0) {
+  const double chirp_period_seconds = derivedChirpPeriodSeconds(config);
+  if (config.storage.raw_enabled && chirp_period_seconds > 0.0) {
     const double raw_megabytes_per_second =
-        static_cast<double>(digitizer.sample_point) * sizeof(std::int16_t) / config.laser.chirp_period_us;
+        static_cast<double>(digitizer.sample_point) * sizeof(std::int16_t) /
+        chirp_period_seconds / 1.0e6;
     if (raw_megabytes_per_second > 1000.0) {
       add(result, ValidationSeverity::Warning, "storage.raw_enabled",
           "Estimated raw data rate exceeds 1000 MB/s",

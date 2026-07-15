@@ -8,7 +8,7 @@
 
 namespace fmcw {
 
-inline constexpr std::uint32_t kConfigSchemaVersion = 4;
+inline constexpr std::uint32_t kConfigSchemaVersion = 5;
 
 enum class Coupling {
   Ac,
@@ -127,7 +127,6 @@ struct DigitizerConfig {
   std::uint32_t impedance_ohms = 50;
   TriggerSource trigger_source = TriggerSource::External;
   TriggerSlope trigger_slope = TriggerSlope::Rising;
-  double trigger_level_percent = 17.3;
   std::uint32_t trigger_delay_samples = 400;
   std::uint32_t pre_trigger_samples = 0;
   std::uint32_t post_trigger_samples = 4096;
@@ -139,14 +138,8 @@ struct DigitizerConfig {
 };
 
 struct LaserConfig {
-  double wavelength_nm = 1550.0;
   double sweep_bandwidth_hz = 2.0e9;
-  double sweep_rate_hz_per_s = 1.041666666666667e15;
-  double chirp_period_us = 3.84;
-  double laser_power_mw = 10.0;
-  double optical_path_factor = 1.0;
-  double distance_scale_correction = 1.0;
-  double velocity_scale_correction = 1.0;
+  double sweep_rate_hz = 200.0e3;
 };
 
 struct EdfaConfig {
@@ -231,6 +224,7 @@ struct CalibrationConfig {
   std::string version = "default-v1";
   double distance_offset_m = 0.0;
   double distance_scale = 1.0;
+  double velocity_wavelength_nm = 1550.0;
   double velocity_offset_mps = 0.0;
   double velocity_scale = 1.0;
   double x_angle_offset_deg = 0.0;
@@ -267,6 +261,7 @@ struct SystemConfig {
 std::uint32_t derivedAScanCount(const SystemConfig& config);
 std::uint64_t derivedFramePointCount(const SystemConfig& config);
 double derivedMcuFrameTimeMs(const SystemConfig& config);
+double derivedChirpPeriodSeconds(const SystemConfig& config);
 
 std::string toString(DigitizerChannel value);
 std::string toString(Coupling value);

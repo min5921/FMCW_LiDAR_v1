@@ -11,7 +11,7 @@ Phase 3의 장비 adapter는 `IDigitizer`, `IEdfaController`, `IMcuController` �
 - ATS9371, System 1 / Board 1 고정 및 `AlazarGetBoardKind` 검증
 - internal clock discrete sample rates: 1 kS/s, 2 kS/s, 5 kS/s, 10 kS/s, 20 kS/s, 50 kS/s, 100 kS/s, 200 kS/s, 500 kS/s, 1 MS/s, 2 MS/s, 5 MS/s, 10 MS/s, 20 MS/s, 50 MS/s, 100 MS/s, 200 MS/s, 500 MS/s, 800 MS/s, 1 GS/s
 - 입력 범위 +/-400 mV, 50 ohm, DC coupling
-- external TTL trigger, rising 또는 falling slope
+- external TTL trigger (`ETR_TTL`), fixed legacy SDK level argument `150`, rising 또는 falling slope
 - channel A 또는 channel B 중 하나만 사용
 - `ADMA_NPT | ADMA_EXTERNAL_STARTCAPTURE`
 - `digitizer.fifo_only_streaming`에 따라 `ADMA_FIFO_ONLY_STREAMING` 선택

@@ -31,12 +31,21 @@ bool hasIssue(const fmcw::ValidationResult& result, fmcw::ValidationSeverity sev
                      });
 }
 
+std::size_t issueCount(const fmcw::ValidationResult& result,
+                       fmcw::ValidationSeverity severity) {
+  return static_cast<std::size_t>(std::count_if(
+      result.issues.begin(), result.issues.end(),
+      [severity](const fmcw::ValidationIssue& issue) { return issue.severity == severity; }));
+}
+
 void testDefaultsAndRoundTrip() {
   const fmcw::SystemConfig defaults;
   const auto validation = fmcw::ConfigValidator::validate(defaults);
   expect(!validation.hasErrors(), "code defaults pass validation");
   expect(hasIssue(validation, fmcw::ValidationSeverity::Warning, "digitizer.sample_point"),
-         "default record is ATS-valid and warns that its capture margin exceeds one laser period");
+         "default record is ATS-valid and warns that its capture margin exceeds one chirp period");
+  expect(issueCount(validation, fmcw::ValidationSeverity::Warning) == 1U,
+         "record margin is the only default warning");
 
   const auto yaml = fmcw::ConfigProfileCodec::toYaml(defaults);
   const auto decoded = fmcw::ConfigProfileCodec::decodeYaml(yaml, "round-trip");
@@ -44,14 +53,17 @@ void testDefaultsAndRoundTrip() {
   expect(decoded.config.digitizer.channel == fmcw::DigitizerChannel::A, "round trip preserves single channel A");
   expect(decoded.config.chirp_segmentation.mode == fmcw::ChirpTriggerMode::UpChirpOnly,
          "round trip preserves up-chirp-only trigger mode");
-  expect(decoded.config.profile.schema_version == 4, "round trip uses the full-frame scan schema version");
+  expect(decoded.config.profile.schema_version == 5, "round trip uses the fixed-TTL laser-distance schema version");
   expect(decoded.config.digitizer.board_profile == "ats9371",
          "round trip preserves the digitizer capability profile");
   expect(decoded.config.runtime.acquisition_source == fmcw::AcquisitionSource::Simulator &&
              decoded.config.runtime.replay_file.empty() && !decoded.config.runtime.replay_loop,
          "round trip preserves the simulator runtime source defaults");
-  expect(fmcw::alazarTriggerLevelCode(defaults.digitizer.trigger_level_percent) == 150,
-         "legacy +17.3 percent trigger threshold maps to ATS code 150");
+  expect(fmcw::kAlazarExternalTtlTriggerLevelCode == 150U,
+         "external TTL trigger retains the fixed legacy SDK level argument");
+  expect(decoded.config.laser.sweep_bandwidth_hz == 2.0e9 &&
+             decoded.config.laser.sweep_rate_hz == 200.0e3,
+         "round trip preserves the two distance-conversion laser inputs");
   expect(fmcw::derivedAScanCount(defaults) == defaults.digitizer.records_per_buffer,
          "A-scan count is derived from records per buffer");
   expect(fmcw::derivedFramePointCount(defaults) == 1600U,
@@ -94,6 +106,14 @@ void testStrictYamlAndLayering() {
       "scan:\n  line_time_ms: 0.64\n", "legacy-line-time");
   expect(!removed_line_time.ok(), "removed MCU-derived B-scan line time is rejected");
 
+  const auto removed_trigger_threshold = fmcw::ConfigProfileCodec::decodeYaml(
+      "digitizer:\n  trigger_level_percent: 17.3\n", "legacy-trigger-threshold");
+  expect(!removed_trigger_threshold.ok(), "removed analog trigger threshold is rejected");
+
+  const auto removed_laser_slope = fmcw::ConfigProfileCodec::decodeYaml(
+      "laser:\n  sweep_rate_hz_per_s: 1000000000000000\n", "legacy-laser-slope");
+  expect(!removed_laser_slope.ok(), "removed laser slope field is rejected");
+
   const std::filesystem::path source_root = FMCW_TEST_SOURCE_DIR;
   const auto layered = fmcw::ConfigProfileCodec::loadLayered({
       source_root / "config" / "default.yaml",
@@ -110,6 +130,8 @@ void testStrictYamlAndLayering() {
   expect(hasIssue(layered_validation, fmcw::ValidationSeverity::Warning,
                   "digitizer.sample_point"),
          "layered profile reports only the intentional record-margin warning");
+  expect(issueCount(layered_validation, fmcw::ValidationSeverity::Warning) == 1U,
+         "layered profile has no laser consistency warnings");
 
   const auto jetson = fmcw::ConfigProfileCodec::loadLayered({
       source_root / "config" / "default.yaml",
@@ -123,16 +145,11 @@ void testStrictYamlAndLayering() {
   expect(hasIssue(jetson_validation, fmcw::ValidationSeverity::Warning,
                   "digitizer.sample_point"),
          "Jetson profile reports the same record-margin warning");
+  expect(issueCount(jetson_validation, fmcw::ValidationSeverity::Warning) == 1U,
+         "Jetson profile has no laser consistency warnings");
 }
 
-void testLaserTimingValidation() {
-  fmcw::SystemConfig period_mismatch;
-  period_mismatch.laser.chirp_period_us = 20.0;
-  const auto period_validation = fmcw::ConfigValidator::validate(period_mismatch);
-  expect(hasIssue(period_validation, fmcw::ValidationSeverity::Warning,
-                  "chirp_segmentation.chirp_period_samples"),
-         "laser period mismatch identifies the segmentation sample-count field");
-
+void testLaserDistanceInputsAndRecordMargin() {
   fmcw::SystemConfig exact_period_record;
   exact_period_record.digitizer.sample_point = 3840;
   exact_period_record.digitizer.post_trigger_samples = 3840;
@@ -140,7 +157,7 @@ void testLaserTimingValidation() {
   const auto exact_period_validation = fmcw::ConfigValidator::validate(exact_period_record);
   expect(!hasIssue(exact_period_validation, fmcw::ValidationSeverity::Warning,
                    "digitizer.sample_point"),
-         "an ATS-aligned record equal to one laser period has no capture-margin warning");
+         "an ATS-aligned record equal to one chirp period has no capture-margin warning");
 
   fmcw::SystemConfig over_period_record = exact_period_record;
   over_period_record.digitizer.sample_point = 3968;
@@ -149,17 +166,18 @@ void testLaserTimingValidation() {
   expect(!over_period_validation.hasErrors() &&
              hasIssue(over_period_validation, fmcw::ValidationSeverity::Warning,
                       "digitizer.sample_point"),
-         "an ATS-valid record longer than one laser period remains startable with a warning");
+         "an ATS-valid record longer than one chirp period remains startable with a warning");
 
-  fmcw::SystemConfig slope_mismatch;
-  slope_mismatch.laser.sweep_rate_hz_per_s *= 0.5;
-  const auto slope_validation = fmcw::ConfigValidator::validate(slope_mismatch);
-  expect(hasIssue(slope_validation, fmcw::ValidationSeverity::Warning, "laser.sweep_rate_hz_per_s"),
-         "laser bandwidth, period, and slope mismatch identifies the sweep-rate field");
+  fmcw::SystemConfig independent_laser_inputs = exact_period_record;
+  independent_laser_inputs.laser.sweep_bandwidth_hz = 1.5e9;
+  independent_laser_inputs.laser.sweep_rate_hz = 175.0e3;
+  const auto independent_validation = fmcw::ConfigValidator::validate(independent_laser_inputs);
+  expect(!independent_validation.hasErrors() && !independent_validation.hasWarnings(),
+         "positive bandwidth and sweep rate are accepted without timing consistency warnings");
 
-  fmcw::SystemConfig invalid_slope;
-  invalid_slope.laser.sweep_rate_hz_per_s = 0.0;
-  expect(hasIssue(fmcw::ConfigValidator::validate(invalid_slope),
+  fmcw::SystemConfig invalid_sweep_rate;
+  invalid_sweep_rate.laser.sweep_rate_hz = 0.0;
+  expect(hasIssue(fmcw::ConfigValidator::validate(invalid_sweep_rate),
                   fmcw::ValidationSeverity::Error, "laser"),
          "non-positive sweep rate is rejected before distance processing");
 }
@@ -185,9 +203,9 @@ void testPresentationAndChangePolicy() {
 
 void testSchemaAndBoardCapabilityValidation() {
   fmcw::SystemConfig legacy_schema;
-  legacy_schema.profile.schema_version = 3;
+  legacy_schema.profile.schema_version = 4;
   expect(fmcw::ConfigValidator::validate(legacy_schema).hasErrors(),
-         "schema version 3 requires migration before Start");
+         "schema version 4 requires migration before Start");
 
   fmcw::SystemConfig oversized_mcu_frame;
   oversized_mcu_frame.mcu.enabled = true;
@@ -317,7 +335,7 @@ void testStartGateSnapshotAndOverflowStop() {
 int main() {
   testDefaultsAndRoundTrip();
   testStrictYamlAndLayering();
-  testLaserTimingValidation();
+  testLaserDistanceInputsAndRecordMargin();
   testPresentationAndChangePolicy();
   testSchemaAndBoardCapabilityValidation();
   testActiveAndPendingConfiguration();

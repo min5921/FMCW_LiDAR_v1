@@ -41,7 +41,7 @@ edfa:
 | Group | 주요 내용 | 기준 단위 |
 |---|---|---|
 | `digitizer` | Alazar board, A/B 단일 채널, sampling, DMA, trigger | Hz, sample, ms, V |
-| `laser` | wavelength, sweep, chirp, scale correction | nm, Hz, us, mW |
+| `laser` | distance conversion bandwidth and sweep rate | Hz |
 | `edfa` | optional/manual/controlled, output on/off 준비, setpoint, serial | dBm 또는 mW, ms |
 | `scan` | MEMS angle, pixel/line, timing | deg, ms, Hz |
 | `chirp_segmentation` | up-trigger 기준 전체 주기와 up/down 절단 범위 | sample |
@@ -49,18 +49,18 @@ edfa:
 | `udp` | IPv4 endpoint, packet version, backpressure | port, point |
 | `storage` | raw/processed toggle, split/flush, queue | GB, frame |
 | `ui` | 2D/3D refresh rate, overlay, color map, last profile | Hz |
-| `calibration` | distance/velocity/angle correction | m, m/s, deg |
+| `calibration` | distance/velocity/angle correction and velocity wavelength | m, m/s, nm, deg |
 | `mcu` | optional UART, ACK, retry | baud, ms |
 
 `chirp_segmentation.mode`는 `up_chirp_only`만 허용한다. Digitizer는 up chirp trigger에서 전체 up/down 주기를 한 번에 받고, `up_segment`와 `down_segment`의 half-open range `[start, end)`를 후단 처리에 전달한다.
 
-기본 profile의 laser timing은 실장비 측정값이 아니라 simulator와 설정 검증을 위한 self-consistent 개발 기준이다. `1 GS/s`, `3840 samples`, `3.84 us`가 한 full period를 나타내며, 대칭 삼각파 기준 `2 GHz` bandwidth에 대응하는 sweep rate는 약 `1.04167e15 Hz/s`다. 실제 laser profile은 Phase 7.5에서 oscilloscope로 측정한 period, stable UP/DOWN range, bandwidth, sweep slope로 반드시 교체한다.
+Laser 설정은 `sweep_bandwidth_hz`와 full triangular waveform의 `sweep_rate_hz` 두 값만 사용한다. 두 값은 거리 변환식 `c * (f_up + f_down) / (8 * bandwidth * sweep_rate)`에만 들어가며 sample point, chirp segmentation, trigger timing을 결정하지 않는다. 양수가 아닌 값은 거리 계산이 불가능하므로 Error지만, bandwidth와 sweep rate 사이의 추정 관계나 timing 일치 Warning은 만들지 않는다.
 
-검증기는 `sample_rate_hz * chirp_period_us`와 `chirp_period_samples`의 차이, 그리고 대칭 삼각파 기준 bandwidth/period와 sweep slope의 차이가 각각 1%를 넘으면 해당 field에 Warning을 표시한다. 측정된 sweep rate는 거리 계산에 사용하는 독립 입력값이며 `sample_point`를 자동 결정하거나 변경하지 않는다. 측정된 비대칭 chirp를 사용하는 경우에는 계산값 대신 실제 sweep slope를 유지하고 Warning 내용을 장비 측정 결과와 함께 검토한다.
+Full-period timing은 Laser 설정과 독립적이다. `chirp_segmentation.chirp_period_samples / digitizer.sample_rate_hz`가 simulator, replay pacing, raw throughput estimate의 기준이며, 실제 장비에서는 trigger timestamp와 DMA completion timestamp를 telemetry로 측정한다.
 
 `digitizer.board_profile`은 선택 가능한 sampling rate, input range, impedance를 제한한다. SDK 25.1.0의 `AlazarSysInfo`로 확인한 장치는 `ATS9371`, System 1 / Board 1, 12-bit, FPGA 35.3이다. System/Board ID는 1로 고정한다. 내부 clock sampling rate는 SDK 보드 표의 1 kS/s부터 1 GS/s까지 20개 discrete 값만 ComboBox로 제공한다. 현재 입력 경로는 legacy와 실제 설정에 맞춰 `+/-400 mV`, DC coupling, `50 ohm`으로 제한한다.
 
-Trigger는 `TRIG IN`, External TTL, DC coupling을 고정 contract로 사용한다. UI는 rising/falling edge, signed full-scale threshold, SDK threshold code, trigger delay, pre/post-trigger samples를 표시한다. 기본값 `+17.3 % FS`는 legacy SDK code `150`에 해당하며, delay는 `400 samples`, trigger timeout은 `0 ticks`로 hardware trigger를 계속 기다린다. ATS9371 record와 pre-trigger alignment는 128 samples, single-channel trigger delay alignment는 16 samples이다.
+Trigger는 `TRIG IN`, External TTL, DC coupling을 고정 contract로 사용한다. UI는 rising/falling edge, trigger delay, pre/post-trigger samples만 표시하며 analog `% FS` threshold는 제공하지 않는다. ATS SDK 호출에 필요한 trigger level 인자는 legacy 장비 코드와 동일한 내부 고정 code `150`을 사용하고 외부 입력 range는 `ETR_TTL`로 설정한다. Delay 기본값은 `400 samples`, trigger timeout은 `0 ticks`로 hardware trigger를 계속 기다린다. ATS9371 record와 pre-trigger alignment는 128 samples, single-channel trigger delay alignment는 16 samples이다.
 
 Scan 계산에서 A-scans/B-scan은 별도 입력값이 아니라 `digitizer.records_per_buffer`와 동일하다. B-scans/frame은 사용자가 지정하며, 한 프레임의 position 수는 두 값의 곱이다. B-scan rate와 period는 Alazar DMA buffer 완료 timestamp에서 실측하고, frame time은 실측 period와 B-scans/frame의 곱으로 계산한다. MCU의 100 kHz point rate는 전체 프레임 파형 cycle time 계산에만 사용한다.
 
@@ -68,7 +68,7 @@ Scan 계산에서 A-scans/B-scan은 별도 입력값이 아니라 `digitizer.rec
 
 ### Alazar Record Length
 
-`digitizer.sample_point`는 사용자가 직접 정하는 Alazar record 길이다. ATS9371은 최소 256 samples, record resolution 128 samples, pre-trigger alignment 128 samples, NPT pre-trigger 최대 8176 samples, post-trigger 최소 64 samples를 적용한다. UI는 입력값의 ATS 유효성, sample rate로 계산한 실제 record 시간, laser 한 주기 초과 시간을 즉시 표시한다. Record 시간이 한 주기를 넘는 경우는 의도적인 capture margin일 수 있으므로 Warning만 발생하며 START는 허용한다. 설정된 full-period와 UP/DOWN segment가 record 밖으로 나가는 경우에는 처리가 불가능하므로 Error를 유지한다.
+`digitizer.sample_point`는 사용자가 직접 정하는 Alazar record 길이다. ATS9371은 최소 256 samples, record resolution 128 samples, pre-trigger alignment 128 samples, NPT pre-trigger 최대 8176 samples, post-trigger 최소 64 samples를 적용한다. UI는 입력값의 ATS 유효성, sample rate로 계산한 실제 record 시간, 설정된 `chirp_period_samples` 한 주기 초과 시간을 즉시 표시한다. Record가 한 주기보다 긴 경우는 의도적인 capture margin일 수 있으므로 Warning만 발생하며 START는 허용한다. 설정된 full-period와 UP/DOWN segment가 record 밖으로 나가는 경우에는 처리가 불가능하므로 Error를 유지한다.
 
 ### Runtime Acquisition Source
 
@@ -82,9 +82,12 @@ Live View의 `Selected A-scan`은 profile 설정이 아니라 표시 상태다. 
 
 UDP v1은 little-endian `FMCW` point packet을 사용한다. `packet_point_count`는 UDP 최대 payload를 넘지 않도록 1..3273으로 제한하며, `queue_capacity`와 `backpressure_policy`는 각각 sender queue 크기와 `latest_frame`, `preserve_frames`, `stop_sending` 동작을 정한다.
 
-### Schema Version 4 Migration
+### Schema Version 5
 
-- full profile의 `profile.schema_version`을 `4`로 변경한다.
+- full profile의 `profile.schema_version`은 `5`다.
+- `digitizer.trigger_level_percent`를 제거하고 External TTL 및 SDK level code `150`을 고정한다.
+- Laser group은 `sweep_bandwidth_hz`, `sweep_rate_hz`만 유지한다.
+- velocity wavelength는 `calibration.velocity_wavelength_nm`으로 이동한다.
 - 더 이상 사용하지 않는 `scan.line_time_ms`를 제거한다.
 - MCU waveform point 수는 `records_per_buffer * y_line_count`로 계산한다.
 - B-scan timing은 설정 파일 값이 아니라 runtime DMA telemetry로 기록한다.

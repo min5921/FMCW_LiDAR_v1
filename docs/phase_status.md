@@ -28,7 +28,7 @@ Verification:
 Status: done
 
 - Typed `SystemConfig` covers digitizer, laser, optional EDFA/MCU, scan, chirp segmentation, processing, UDP, storage, UI, and calibration.
-- Configuration schema version 4 keeps independent peak detection and defines one frame as records-per-buffer A-scans times operator-selected B-scans.
+- Configuration schema version 5 fixes External TTL triggering and limits Laser Specification to distance bandwidth and sweep rate in Hz.
 - Strict YAML layers reject unknown keys, wrong scalar types, and unsupported hardware combinations.
 - Runtime and restart-required changes are tracked separately; invalid or unapplied settings block START.
 - Start captures the active configuration snapshot and revision for session metadata.
@@ -82,7 +82,7 @@ Status: done
 - Live View owns Time Domain, FFT, Peak Analysis, Distance/Velocity, and B-scan displays without duplicate FFT plots.
 - Time Domain and FFT use the operator-selected A-scan record from every DMA buffer, matching the legacy `g_pick_r` behavior; peak, B-scan, UDP, and raw storage still process all records.
 - SDK 25.1.0 hardware discovery identifies ATS9371 at fixed System 1 / Board 1; its discrete sample rates and alignment limits drive validation and UI choices.
-- Digitizer setup exposes External TTL edge, threshold/code, delay, pre/post-trigger, and timeout details.
+- Digitizer setup exposes the fixed External TTL contract, edge, delay, pre/post-trigger, and timeout details without an analog threshold control.
 - A-scans per B-scan are derived from records per buffer; B-scans per frame are operator-selected; DMA B-scan rate and frame time are measured from buffer completion timestamps.
 - MCU upload contains one complete raster frame and emits a marker only at each B-scan boundary.
 - Native spin-box arrows are removed and numeric fields use clean right-aligned entry.
@@ -133,8 +133,8 @@ Phase 7.1 verification:
 - ATS9371 12-bit left-aligned DMA samples now use the SDK shift rule and signed full-scale conversion.
 - Minimum, midpoint, maximum, padding-bit, 16-bit endpoint, invalid-width, and all 4096 ATS9371 code tests pass.
 - Code defaults, layered Windows simulator profile, and Jetson profile validate with zero errors; the intentional 4096-sample record margin is shown as a non-blocking warning.
-- The default development timing is internally consistent; actual laser timing remains a Phase 7.5 measurement input.
-- Laser Specification exposes measured sweep rate in `THz/s`.
+- Full-period timing is defined by sampling rate and `chirp_period_samples`; actual timing remains a Phase 7.5 measurement input.
+- Laser Specification exposes only measured bandwidth and full triangular sweep rate in `Hz` for distance conversion.
 - Raw format v1 remains converted signed `int16`; original DMA `uint16` block storage is reserved for version 2 in Phase 7.4.
 - Windows MSVC Release built with ATS-SDK, FFTW, and CUDA/cuFFT enabled.
 - All five CTest targets passed.
@@ -158,8 +158,20 @@ Record-length policy refinement (2026-07-15):
 
 - `sample_point` is now an operator-selected Alazar record length and is never derived from optical sweep rate.
 - ATS9371 validation enforces minimum 256 samples, 128-sample record/pre-trigger alignment, 8176-sample maximum NPT pre-trigger, at least 64 post-trigger samples, and 16-sample single-channel trigger-delay alignment.
-- A record longer than one configured laser period produces a visible non-blocking warning; segment or full-period data outside the record remains an error.
-- The Digitizer page shows ATS validity, record duration, and excess time beyond one laser period next to the editable record count.
+- A record longer than configured `chirp_period_samples` produces a visible non-blocking warning; segment or full-period data outside the record remains an error.
+- The Digitizer page shows ATS validity, record duration, and excess time beyond one configured chirp period next to the editable record count.
 - Windows MSVC Release and CTest 5/5 passed. The warning-state simulator START delivered 141 DMA batches / 9,024 records with queue 0/32 and no DMA drop or trigger miss.
 - Packaged EXE SHA-256: `B14C0CD37954367988305F8349F8BF9FDCF562FB297F2C8CB2566975EAACAA25`.
 - Implementation commit: `4fc5a1e`
+
+TTL and laser distance contract refinement (2026-07-15):
+
+- ATS9371 acquisition keeps `TRIG_EXTERNAL` and `AlazarSetExternalTrigger(..., ETR_TTL)`; the required SDK level argument retains the legacy fixed code 150.
+- The Digitizer UI no longer exposes an analog full-scale trigger threshold or threshold code.
+- Laser Specification now contains only `sweep_bandwidth_hz` and full triangular `sweep_rate_hz`, both entered in Hz.
+- Distance uses `c * (f_up + f_down) / (8 * bandwidth * sweep_rate)`; the legacy hard-coded 200000 Hz value is replaced by the configured sweep rate.
+- Chirp timing, simulator/replay pacing, record-margin warning, and raw throughput estimation use sampling rate plus `chirp_period_samples`, independently of Laser Specification.
+- Laser period/slope consistency warnings were removed. The intentional record-margin warning remains the only default warning.
+- Configuration schema version is now 5; velocity wavelength is owned by calibration instead of the Laser UI.
+- Windows MSVC Release and CTest 5/5 passed. Digitizer and Laser pages were visually checked in the packaged GUI.
+- Packaged EXE SHA-256: `742DC9FE18BF0AA5B16CA72CC0FC70D8E279FA350ECE8601EEDD66C3E4275A40`.

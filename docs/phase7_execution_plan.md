@@ -68,7 +68,7 @@ DMA buffer는 acquisition, processing, raw storage 사이의 기본 운반 단�
 - ATS9371 12-bit sample의 16-bit DMA alignment를 SDK 방식으로 변환한다.
 - ADC 변환을 독립 helper로 분리하고 minimum, midpoint, maximum, clipping test를 추가한다.
 - legacy `raw - 32768` 표시와 SDK `sample >> 4` 변환의 full-scale 관계를 검증한다.
-- `sample_rate_hz`, `chirp_period_us`, `chirp_period_samples`, `sample_point`, trigger offset의 일관성을 강화한다.
+- `sample_rate_hz`, `chirp_period_samples`, `sample_point`, trigger offset의 full-period acquisition contract를 강화한다.
 - 기본 profile의 1 GS/s, 20 us, 3840-sample 불일치를 제거한다.
 - raw format이 original DMA `uint16`을 보존할지 converted `int16`을 저장할지 확정하고 format version 영향을 기록한다.
 
@@ -88,8 +88,8 @@ DMA buffer는 acquisition, processing, raw storage 사이의 기본 운반 단�
 
 - ATS SDK 25.1.0 예제와 같은 right shift 규칙을 독립 sample helper에 적용했다.
 - 12-bit 전체 4096 code가 legacy `raw - 32768` signed full-scale 값과 일치함을 검증했다.
-- 기본 개발 profile은 `1 GS/s`, `3840 period samples`, `3.84 us`, `1.04167e15 Hz/s`로 일관된다. 4096-sample record의 256-sample capture margin은 의도 확인용 Warning으로 표시한다.
-- Laser UI에서 measured sweep rate를 `THz/s` 단위로 직접 설정할 수 있다.
+- 기본 개발 profile은 `1 GS/s`, `3840 period samples`, `4096 record samples`를 사용한다. 256-sample capture margin은 의도 확인용 Warning으로 표시한다.
+- Laser UI는 거리 변환용 measured bandwidth와 full triangular sweep rate를 `Hz` 단위로 직접 설정한다.
 - raw format v1은 converted signed `int16`을 유지하고 original DMA `uint16` block은 Phase 7.4의 version 2로 추가한다.
 - Windows Release build에서 ATS-SDK, FFTW, CUDA/cuFFT가 활성화되었고 CTest 5/5가 통과했다.
 - Implementation commit: `82b8369`
@@ -205,7 +205,7 @@ DMA buffer는 acquisition, processing, raw storage 사이의 기본 운반 단�
 ### Scope
 
 - oscilloscope로 UP trigger, full chirp period, trigger offset, stable UP/DOWN ranges를 측정한다.
-- measured bandwidth, sweep slope, wavelength와 distance/velocity calibration을 profile에 반영한다.
+- measured bandwidth와 sweep rate를 distance profile에, velocity wavelength와 scale/offset을 calibration profile에 반영한다.
 - degree 또는 calibration table을 MCU normalized XY와 DAC ABCD code에 연결한다.
 - scan angle setting 변경이 physical MCU waveform과 point-cloud metadata에 함께 반영되게 한다.
 - full-frame waveform은 `records_per_buffer * y_line_count` point를 사용한다.
@@ -272,7 +272,7 @@ DMA buffer는 acquisition, processing, raw storage 사이의 기본 운반 단�
 | P7-002 | QTimer record polling과 늦은 DMA repost | 7.2 |
 | P7-003 | FFTW/cuFFT plan이 실제 runtime에서 batch 1 | 7.3A, 7.3B |
 | P7-004 | CUDA가 FFT만 수행하고 나머지가 CPU에 남음 | 7.3B |
-| P7-005 | laser period와 captured sample profile 불일치 | 7.1, 7.5 |
+| P7-005 | chirp segmentation period와 captured sample profile 불일치 | 7.1, 7.5 |
 | P7-006 | raw writer가 per-record metadata/write를 수행 | 7.4 |
 | P7-007 | MCU DAC waveform과 configured scan degree가 분리됨 | 7.5 |
 | P7-008 | packaged EXE runtime이 fake adapter에 고정됨 | 7.2 |
@@ -284,7 +284,7 @@ DMA buffer는 acquisition, processing, raw storage 사이의 기본 운반 단�
 7.1부터 7.4의 simulator/replay 구현은 hardware 없이 진행할 수 있다. 최종 완료에는 아래 입력이 필요하다.
 
 - 7.1/7.2: ATS9371 raw capture와 SDK/vendor utility 비교 결과
-- 7.5: actual chirp period, trigger offset, stable UP/DOWN range, bandwidth/slope 측정값
+- 7.5: actual chirp period samples, trigger offset, stable UP/DOWN range, bandwidth/sweep-rate 측정값
 - 7.5: MEMS normalized XY 또는 DAC differential voltage와 physical angle의 calibration 자료
 - 7.6: MCU COM port, EDFA serial setting, safe optical output range, 광 파워 미터와 interlock
 - 7.7: Jetson model, JetPack version, kernel version, ATS9371 arm64 driver package
