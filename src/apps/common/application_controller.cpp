@@ -137,6 +137,7 @@ class RuntimeWorker final : public QObject {
       options.raw_stream.channel = config_.digitizer.channel;
       options.raw_stream.sample_rate_hz = config_.digitizer.sample_rate_hz;
       options.raw_stream.record_length = config_.digitizer.sample_point;
+      options.raw_stream.records_per_buffer = config_.digitizer.records_per_buffer;
       options.raw_enabled = config_.storage.raw_enabled;
       options.processed_enabled = config_.storage.processed_enabled;
       options.queue_capacity = config_.storage.queue_capacity;
@@ -469,15 +470,12 @@ class RuntimeWorker final : public QObject {
       return false;
     }
     if (storage_ != nullptr && config_.storage.raw_enabled) {
-      for (std::size_t index = 0; index < batch->records.size(); ++index) {
-        const auto frame = rawFrameAt(batch, index);
-        const auto storage_result = storage_->enqueueRaw(frame, error);
-        if (storage_result != EnqueueResult::Accepted) {
-          if (error.empty()) {
-            error = "Raw storage queue stopped";
-          }
-          return false;
+      const auto storage_result = storage_->enqueueRawBatch(batch, error);
+      if (storage_result != EnqueueResult::Accepted) {
+        if (error.empty()) {
+          error = "Raw storage queue stopped";
         }
+        return false;
       }
     }
     const auto processing_result = processing_->enqueueBatch(std::move(batch), error);
@@ -677,8 +675,20 @@ class RuntimeWorker final : public QObject {
                               storage_status.processed_writer.frames_written;
       status.storage_queue_size = storage_status.queue_size;
       status.storage_queue_capacity = storage_status.queue_capacity;
+      status.raw_storage_queue_size = storage_status.raw_queue_size;
+      status.raw_storage_queue_capacity = storage_status.raw_queue_capacity;
+      status.raw_storage_queue_high_water = storage_status.raw_queue_high_water_mark;
+      status.processed_storage_queue_size = storage_status.processed_queue_size;
+      status.processed_storage_queue_capacity = storage_status.processed_queue_capacity;
+      status.processed_storage_queue_high_water = storage_status.processed_queue_high_water_mark;
+      status.raw_blocks_written = storage_status.raw_writer.blocks_written;
+      status.raw_bytes_written = storage_status.raw_writer.bytes_written;
+      status.storage_failed = storage_status.failed;
       status.storage_throughput_mbps = storage_status.raw_writer.throughput_mbps +
                                        storage_status.processed_writer.throughput_mbps;
+      status.raw_storage_throughput_mbps = storage_status.raw_writer.throughput_mbps;
+      status.processed_storage_throughput_mbps = storage_status.processed_writer.throughput_mbps;
+      status.storage_stop_reason = storage_status.failed ? qString(storage_status.stop_reason) : QString{};
     }
     if (udp_ != nullptr) {
       const auto udp_status = udp_->status();

@@ -544,14 +544,22 @@ bool CudaSignalPipeline::processBatch(const RawFrameBatch& raw_batch,
       error = "CUDA raw batch does not match the full-period segmentation contract";
       return false;
     }
-    std::memcpy(impl_->host_input + index * impl_->record_length, raw.samples.data(),
-                impl_->record_length * sizeof(std::int16_t));
     impl_->host_positions[index] = {raw.metadata.sample_rate_hz,
                                     raw.metadata.scan_position.x_angle_deg,
                                     raw.metadata.scan_position.y_angle_deg,
                                     raw.metadata.scan_position.valid ? 1 : 0};
     if (raw.metadata.record_index_in_buffer == selected_record_index) {
       selected_record = static_cast<int>(index);
+    }
+  }
+  if (raw_batch.hasContiguousSamples()) {
+    std::memcpy(impl_->host_input, raw_batch.contiguous_samples.data(),
+                raw_batch.contiguous_samples.size() * sizeof(std::int16_t));
+  } else {
+    for (std::size_t index = 0; index < record_count; ++index) {
+      std::memcpy(impl_->host_input + index * impl_->record_length,
+                  raw_batch.records[index].samples.data(),
+                  impl_->record_length * sizeof(std::int16_t));
     }
   }
   if (!impl_->ensurePlan(transform_count, error)) {

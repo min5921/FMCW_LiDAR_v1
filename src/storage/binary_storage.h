@@ -14,6 +14,7 @@ class BinaryRawFrameWriter final : public IRawFrameWriter {
 
   bool open(const WriterOpenOptions& options, std::string& error) override;
   bool write(const RawFrame& frame, std::string& error) override;
+  bool writeBatch(const RawFrameBatch& batch, std::string& error) override;
   bool flush(std::string& error) override;
   bool finalize(const WriterFinalizeOptions& options, std::string& error) override;
   WriterStatus status() const override;
@@ -52,6 +53,7 @@ class RawReplayReader {
 
   bool open(const std::filesystem::path& path, std::string& error);
   ReplayReadResult readNext(RawFrame& frame, std::string& error);
+  ReplayReadResult readNextBatch(RawFrameBatch& batch, std::string& error);
   void close();
   bool isOpen() const;
   const RawStreamDescriptor& streamDescriptor() const;

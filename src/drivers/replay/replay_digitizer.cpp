@@ -19,7 +19,7 @@ std::uint64_t nowNs() {
 
 }  // namespace
 
-std::string ReplayDigitizer::name() const { return "Raw v1 replay digitizer"; }
+std::string ReplayDigitizer::name() const { return "Raw v1/v2 replay digitizer"; }
 
 DigitizerTelemetry ReplayDigitizer::telemetry() const {
   std::lock_guard<std::mutex> lock(mutex_);
@@ -53,10 +53,12 @@ bool ReplayDigitizer::openReader(std::string& error) {
   const auto& descriptor = reader_.streamDescriptor();
   if (descriptor.channel != config_.digitizer.channel ||
       descriptor.record_length != config_.digitizer.sample_point ||
+      (descriptor.format_version == kRawFrameBatchFormatVersion &&
+       descriptor.records_per_buffer != config_.digitizer.records_per_buffer) ||
       std::abs(descriptor.sample_rate_hz - config_.digitizer.sample_rate_hz) >
           std::max(1.0, config_.digitizer.sample_rate_hz * 1.0e-9)) {
     reader_.close();
-    error = "Replay stream channel, sample rate, or record length does not match the active profile";
+    error = "Replay stream channel, sample rate, record length, or DMA block size does not match the active profile";
     return false;
   }
   return true;
@@ -155,47 +157,85 @@ FrameWaitResult ReplayDigitizer::waitForBatch(MutableRawFrameBatchPtr& batch,
   }
 
   auto mutable_batch = batch_pool_.acquire();
-  mutable_batch->records.resize(config_.digitizer.records_per_buffer);
   std::size_t records_read = 0;
   bool reopened_empty_file = false;
-  while (records_read < config_.digitizer.records_per_buffer) {
-    const auto result = reader_.readNext(mutable_batch->records[records_read], error);
-    if (result == ReplayReadResult::Error) {
-      telemetry_.device.detail = error;
-      return FrameWaitResult::Error;
-    }
-    if (result == ReplayReadResult::EndOfStream) {
-      if (config_.runtime.replay_loop) {
-        if (!openReader(error)) {
-          telemetry_.device.detail = error;
-          return FrameWaitResult::Error;
-        }
-        if (records_read == 0U && reopened_empty_file) {
-          error = "Replay file contains no frame records";
-          telemetry_.device.detail = error;
-          return FrameWaitResult::Error;
-        }
-        reopened_empty_file = records_read == 0U;
-        continue;
+  if (reader_.streamDescriptor().format_version == kRawFrameBatchFormatVersion) {
+    while (true) {
+      const auto result = reader_.readNextBatch(*mutable_batch, error);
+      if (result == ReplayReadResult::Error) {
+        telemetry_.device.detail = error;
+        return FrameWaitResult::Error;
       }
-      if (records_read == 0U) {
+      if (result == ReplayReadResult::EndOfStream) {
+        if (config_.runtime.replay_loop) {
+          if (!openReader(error)) {
+            telemetry_.device.detail = error;
+            return FrameWaitResult::Error;
+          }
+          if (reopened_empty_file) {
+            error = "Replay file contains no DMA blocks";
+            telemetry_.device.detail = error;
+            return FrameWaitResult::Error;
+          }
+          reopened_empty_file = true;
+          continue;
+        }
         telemetry_.device.running = false;
         telemetry_.device.detail = "Replay complete";
         error.clear();
         return FrameWaitResult::Stopped;
       }
-      end_pending_ = true;
+      records_read = mutable_batch->records.size();
       break;
     }
-    reopened_empty_file = false;
-    auto& frame = mutable_batch->records[records_read];
-    frame.metadata.frame_id = next_frame_id_;
-    frame.metadata.trigger.sequence = next_frame_id_;
-    ++next_frame_id_;
-    ++records_read;
+  } else {
+    mutable_batch->records.resize(config_.digitizer.records_per_buffer);
+    while (records_read < config_.digitizer.records_per_buffer) {
+      const auto result = reader_.readNext(mutable_batch->records[records_read], error);
+      if (result == ReplayReadResult::Error) {
+        telemetry_.device.detail = error;
+        return FrameWaitResult::Error;
+      }
+      if (result == ReplayReadResult::EndOfStream) {
+        if (config_.runtime.replay_loop) {
+          if (!openReader(error)) {
+            telemetry_.device.detail = error;
+            return FrameWaitResult::Error;
+          }
+          if (records_read == 0U && reopened_empty_file) {
+            error = "Replay file contains no frame records";
+            telemetry_.device.detail = error;
+            return FrameWaitResult::Error;
+          }
+          reopened_empty_file = records_read == 0U;
+          continue;
+        }
+        if (records_read == 0U) {
+          telemetry_.device.running = false;
+          telemetry_.device.detail = "Replay complete";
+          error.clear();
+          return FrameWaitResult::Stopped;
+        }
+        end_pending_ = true;
+        break;
+      }
+      reopened_empty_file = false;
+      auto& frame = mutable_batch->records[records_read];
+      frame.metadata.frame_id = next_frame_id_;
+      frame.metadata.trigger.sequence = next_frame_id_;
+      ++next_frame_id_;
+      ++records_read;
+    }
+    mutable_batch->records.resize(records_read);
   }
 
-  mutable_batch->records.resize(records_read);
+  if (reader_.streamDescriptor().format_version == kRawFrameBatchFormatVersion) {
+    for (auto& frame : mutable_batch->records) {
+      frame.metadata.frame_id = next_frame_id_;
+      frame.metadata.trigger.sequence = next_frame_id_;
+      ++next_frame_id_;
+    }
+  }
   const auto sequence = telemetry_.dma_buffers_received;
   const auto completion_timestamp_ns = nowNs();
   const auto record_count = static_cast<std::uint32_t>(mutable_batch->records.size());

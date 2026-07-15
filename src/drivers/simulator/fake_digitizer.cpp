@@ -185,9 +185,17 @@ FrameWaitResult FakeDigitizer::waitForBatch(MutableRawFrameBatchPtr& batch,
 
   const auto record_count = completed.record_count;
   auto mutable_batch = batch_pool_.acquire();
+  mutable_batch->contiguous_samples.resize(
+      static_cast<std::size_t>(record_count) * config_.digitizer.sample_point);
   mutable_batch->records.resize(record_count);
   for (std::uint32_t record_index = 0; record_index < record_count; ++record_index) {
-    fillFrame(mutable_batch->records[record_index], next_frame_id_++, completed.sequence,
+    const auto frame_id = next_frame_id_++;
+    const auto template_index = static_cast<std::size_t>((frame_id - 1U) % signal_templates_.size());
+    auto* destination = mutable_batch->contiguous_samples.data() +
+        static_cast<std::size_t>(record_index) * config_.digitizer.sample_point;
+    std::copy(signal_templates_[template_index].begin(), signal_templates_[template_index].end(), destination);
+    mutable_batch->records[record_index].samples.setView(destination, config_.digitizer.sample_point);
+    fillFrame(mutable_batch->records[record_index], frame_id, completed.sequence,
               record_index, record_count, completed.completion_timestamp_ns);
   }
   mutable_batch->metadata.sequence = completed.sequence;
@@ -350,8 +358,6 @@ void FakeDigitizer::fillFrame(RawFrame& frame, std::uint64_t frame_id,
                               std::uint32_t records_in_batch,
                               std::uint64_t completion_timestamp_ns) const {
   frame.metadata = {};
-  const auto template_index = static_cast<std::size_t>((frame_id - 1U) % signal_templates_.size());
-  frame.samples = signal_templates_[template_index];
   const auto& up = config_.chirp_segmentation.up_segment;
   const auto& down = config_.chirp_segmentation.down_segment;
 

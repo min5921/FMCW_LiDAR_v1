@@ -50,6 +50,15 @@ struct RuntimeStatus {
   std::size_t processing_queue_capacity = 0;
   std::size_t storage_queue_size = 0;
   std::size_t storage_queue_capacity = 0;
+  std::size_t raw_storage_queue_size = 0;
+  std::size_t raw_storage_queue_capacity = 0;
+  std::size_t raw_storage_queue_high_water = 0;
+  std::size_t processed_storage_queue_size = 0;
+  std::size_t processed_storage_queue_capacity = 0;
+  std::size_t processed_storage_queue_high_water = 0;
+  std::uint64_t raw_blocks_written = 0;
+  std::uint64_t raw_bytes_written = 0;
+  bool storage_failed = false;
   double processing_latency_ms = 0.0;
   double processing_batch_latency_ms = 0.0;
   double processing_copy_latency_ms = 0.0;
@@ -61,6 +70,8 @@ struct RuntimeStatus {
   double processing_deadline_ms = 5.0;
   std::uint64_t processing_deadline_misses = 0;
   double storage_throughput_mbps = 0.0;
+  double raw_storage_throughput_mbps = 0.0;
+  double processed_storage_throughput_mbps = 0.0;
   bool udp_running = false;
   std::uint64_t udp_frames_sent = 0;
   std::uint64_t udp_packets_sent = 0;
@@ -70,6 +81,7 @@ struct RuntimeStatus {
   double udp_send_fps = 0.0;
   QString source_name;
   QString backend_name;
+  QString storage_stop_reason;
   QString detail;
 };
 

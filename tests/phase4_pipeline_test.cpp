@@ -691,6 +691,7 @@ void testBinaryStorageAndReplay(const fmcw::SystemConfig& config, fmcw::RawFrame
   options.session.start_timestamp_utc_ns = 1;
   options.session.config_snapshot_json = "{\"profile\":\"phase4-test\"}";
   options.raw_stream.channel = raw->metadata.channel;
+  options.raw_stream.format_version = fmcw::kRawFrameFormatVersion;
   options.raw_stream.sample_format = raw->metadata.sample_format;
   options.raw_stream.byte_order = raw->metadata.byte_order;
   options.raw_stream.sample_rate_hz = raw->metadata.sample_rate_hz;
@@ -949,6 +950,7 @@ void testStorageOverflow(fmcw::RawFramePtr raw) {
   options.processed_enabled = false;
   options.queue_capacity = 1;
   options.raw_stream.channel = raw->metadata.channel;
+  options.raw_stream.format_version = fmcw::kRawFrameFormatVersion;
   options.raw_stream.sample_format = raw->metadata.sample_format;
   options.raw_stream.byte_order = raw->metadata.byte_order;
   options.raw_stream.sample_rate_hz = raw->metadata.sample_rate_hz;

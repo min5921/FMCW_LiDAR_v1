@@ -59,7 +59,9 @@ bool validateAndStampFrame(const SystemConfig& config, std::uint64_t config_revi
   frame.metadata.optical_state.edfa_output_enabled = edfa_status.output_enabled;
   frame.metadata.optical_state.laser_enabled = true;
   frame.metadata.optical_state.revision = config_revision;
-  stampScanPosition(config, frame);
+  if (!frame.metadata.scan_position.valid) {
+    stampScanPosition(config, frame);
+  }
   return true;
 }
 

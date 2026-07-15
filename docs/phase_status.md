@@ -123,7 +123,7 @@ Status: in progress
 
 - Execution source of truth: [`phase7_execution_plan.md`](phase7_execution_plan.md)
 - Phase 7.1 ADC and configuration correctness is complete.
-- Current software subphase: 7.4 High-speed raw storage
+- Software implemented through 7.4; next planned subphase is 7.5 after hardware timing inputs
 - Audit findings P7-001 through P7-008 must be closed before Phase 7 completion.
 - Replace the simulator runtime selection with the compiled Alazar/MCU/EDFA adapters.
 - Validate sustained ATS9371 DMA, NVMe raw recording, UDP throughput, and Jetson UI/thermal behavior on hardware.
@@ -268,3 +268,13 @@ Phase 7.3D strict real-time qualification harness (2026-07-15):
 - CUDA processed 158 strict batches and 157,684 valid XYZIV results before the queue reached 32/32. The next batch was rejected and the acquisition worker stopped with `Processing queue capacity exceeded`; no silent drop occurred.
 - Payload shape, exact 998-result batch accounting, B-scan publication, and clean/overflow STOP routes passed. The probe reports these functional checks separately from the real-time hard result.
 - The fixed 600-second acceptance executable has not been run. Both local backends currently fail the 5 ms requirement and Jetson evidence is unavailable, so Phase 7.3D remains blocked and no Phase 7.3 completion is claimed.
+
+Phase 7.4 contiguous DMA-block storage (2026-07-15):
+
+- `RawFrameBatch` owns one contiguous signed `int16` payload and record views. Fake/ATS acquisition fills it directly, CUDA staging copies it once, and raw recording receives one block enqueue instead of 998 frame enqueues.
+- Raw and processed streams now use independent bounded queues and worker threads. Automated blocking-writer coverage proves processed output continues while raw I/O is stalled, and raw overflow retains a raw-specific STOP reason.
+- Raw v2 uses a compact metadata table plus one contiguous payload write per block, whole-block split rotation, preallocation/truncation, and a two-block free-space preflight. Raw v1 remains readable.
+- Two 4992 x 998 blocks were written across split parts and replayed through the runtime with exact samples, raster positions, FFTW peaks, distance, velocity, and XYZ parity. Release CTest passed 9/9. The packaged EXE smoke test passed with SHA-256 `E759122932CC8BDC4F228DFD0753970E20A51933C42F9F235D533F4A6C52B02E`.
+- Four short 0.319 GB probes measured 3.24-4.66 GB/s, exceeding the 2.596 GB/s short-probe threshold. The result includes Windows cache and is not a ten-minute NVMe claim.
+- The fixed ten-minute acceptance requires 120,240 blocks and approximately 1.198 TB. It was not run. Phase 7.4 hardware acceptance remains blocked until target NVMe evidence shows zero queue growth, overflow, missing block, and corrupt split part.
+- After contiguous ownership, one two-second CUDA probe processed 313 batches before queue overflow versus 158 before the change; another completed 401 batches but accumulated queue high-water 14/32 and 39.70 ms p50. FFTW p50 remained about 10.87 ms. Both violate the no-growth and 5 ms gates, so Phase 7.3D remains blocked.

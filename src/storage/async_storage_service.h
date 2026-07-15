@@ -17,6 +17,7 @@ class AsyncStorageService final : public IStorageService {
   AsyncStorageService& operator=(const AsyncStorageService&) = delete;
 
   bool start(const WriterOpenOptions& options, std::string& error) override;
+  EnqueueResult enqueueRawBatch(RawFrameBatchPtr batch, std::string& error) override;
   EnqueueResult enqueueRaw(RawFramePtr frame, std::string& error) override;
   EnqueueResult enqueueProcessed(ProcessedFramePtr frame, std::string& error) override;
   void requestStop(std::string reason) override;

@@ -189,6 +189,7 @@ class MainWindow final : public QMainWindow {
   QLineEdit* output_directory_ = nullptr;
   QSpinBox* storage_queue_ = nullptr;
   QDoubleSpinBox* split_size_ = nullptr;
+  QLabel* storage_status_ = nullptr;
   QCheckBox* udp_enabled_ = nullptr;
   QLineEdit* udp_ip_ = nullptr;
   QSpinBox* udp_port_ = nullptr;

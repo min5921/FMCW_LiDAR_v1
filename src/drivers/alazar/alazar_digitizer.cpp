@@ -331,15 +331,18 @@ FrameWaitResult AlazarDigitizer::waitForBatch(MutableRawFrameBatchPtr& batch,
   impl_->previous_buffer_timestamp_ns = impl_->current_buffer_timestamp_ns;
 
   auto mutable_batch = impl_->batch_pool.acquire();
+  mutable_batch->contiguous_samples.resize(
+      static_cast<std::size_t>(impl_->records_per_buffer) * config_.digitizer.sample_point);
   mutable_batch->records.resize(impl_->records_per_buffer);
   const auto batch_sequence = telemetry_.dma_buffers_received;
   for (U32 record_index = 0; record_index < impl_->records_per_buffer; ++record_index) {
     auto& frame = mutable_batch->records[record_index];
     frame.metadata = {};
-    frame.samples.resize(config_.digitizer.sample_point);
     const auto offset = static_cast<std::size_t>(record_index) * config_.digitizer.sample_point;
-    for (std::size_t sample_index = 0; sample_index < frame.samples.size(); ++sample_index) {
-      frame.samples[sample_index] = alazarLeftAlignedSampleToSignedInt16(
+    auto* converted = mutable_batch->contiguous_samples.data() + offset;
+    frame.samples.setView(converted, config_.digitizer.sample_point);
+    for (std::size_t sample_index = 0; sample_index < config_.digitizer.sample_point; ++sample_index) {
+      converted[sample_index] = alazarLeftAlignedSampleToSignedInt16(
           buffer[offset + sample_index], impl_->bits_per_sample);
     }
 

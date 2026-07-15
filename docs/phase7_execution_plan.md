@@ -69,7 +69,7 @@ DMA buffer는 acquisition, processing, raw storage 사이의 기본 운반 단�
 | 7.3B FFTW processing optimization | done | 16 fixed FFTW batches, parity and selected-spectrum copy | target CPU acceptance remains in 7.3D |
 | 7.3C CUDA processing optimization | done | signed raw to cuFFT/peak/XYZIV full GPU batch pipeline | Jetson parity remains required |
 | 7.3D 200 Hz performance acceptance | blocked | strict runtime probe와 고정 10분 gate 구현, 현재 5 ms 초과 | target Windows/Jetson 필요 |
-| 7.4 High-speed raw storage | pending | DMA-block recording과 replay | NVMe sustained test 필요 |
+| 7.4 High-speed raw storage | blocked | contiguous DMA-block v2 recording/replay 구현 | NVMe 10-minute sustained test 필요 |
 | 7.5 Laser, MCU, and scan alignment | pending | 실제 chirp/scan 위치와 point cloud 정합 | laser, oscilloscope, MCU 필요 |
 | 7.6 EDFA and Windows acceptance | pending | 안전한 광 출력과 Windows release candidate | EDFA와 광 안전 환경 필요 |
 | 7.7 Jetson integration and release | pending | Jetson 현장 운용 package | Jetson과 arm64 ATS driver 필요 |
@@ -295,6 +295,18 @@ Disk write, UDP transmission, and Qt paint time은 이 5 ms signal-processing ga
 - 최소 10분 기록에서 누락, queue overflow, corrupt split part가 없다.
 - replay 결과가 live FFTW reference와 일치한다.
 
+### Software Verification Record (2026-07-15)
+
+- `RawFrameBatch` now owns one contiguous signed `int16` payload. Its 998 `RawFrame` entries use non-owning sample views, while standalone frame copies retain deep-copy compatibility with raw v1 and legacy callers.
+- Fake and ATS acquisition convert directly into the contiguous block, removing 998 steady-state sample-vector allocations. CUDA staging uses one batch `memcpy` instead of 998 record copies. Post-change two-second CUDA probes ranged from 313 batches followed by bounded-queue STOP to 401 completed batches with queue high-water 14/32; the latter still had 39.70 ms p50 because backlog accumulated.
+- The application enqueues raw recording once per DMA block. Raw and processed storage have separate bounded queues and worker threads, so a slow raw disk write does not directly block processed-result writing, acquisition, or processing.
+- Raw format v2 writes one compact block/record-metadata header buffer and one contiguous payload per DMA block. Split rotation occurs only before a complete block, files are preallocated and truncated to committed bytes, and START checks that at least two complete blocks fit in free space.
+- Raw v1 replay remains supported. Raw v2 block replay restores all 998 full-period records, trigger/scan metadata, contiguous samples, split-part boundaries, and exact FFTW peak/distance/velocity/XYZ parity.
+- The Storage page reports independent raw/result queue use and high-water marks, raw block/byte counts, per-writer throughput, and storage STOP reason.
+- Four fixed 32-block probes wrote 0.319 GB at 3.24-4.66 GB/s, or 1.62-2.33 times the 1.997 GB/s target input rate. These are short Windows cached-write probes, not sustained NVMe acceptance.
+- `fmcw_phase7_storage_acceptance.exe` has a fixed 120,240-block, 4.99 ms cadence and preflights 1,198,075,207,680 payload bytes before starting. It was intentionally not run because the required 10-minute recording is about 1.2 TB.
+- Release CTest passed 9/9, including the v2 block codec, split/runtime replay, FFTW parity, free-space rejection, and independent raw/processed worker checks. The packaged EXE smoke test passed with SHA-256 `E759122932CC8BDC4F228DFD0753970E20A51933C42F9F235D533F4A6C52B02E`. Phase 7.4 hardware acceptance remains blocked until a target NVMe completes the ten-minute run without queue growth, overflow, or corrupt parts.
+
 ### User-visible Result
 
 - START 한 번으로 고속 raw recording을 켜고 저장본을 동일한 B-scan/3D 화면에서 replay할 수 있다.
@@ -408,6 +420,6 @@ Phase 7.7: complete Jetson integration and release
 
 ## 15. Next Action
 
-Current software next subphase: **7.4 DMA-block high-speed recording**.
+Current next subphase: **7.5 Laser, MCU, and scan alignment** after the required hardware timing inputs are available.
 
-7.2는 ATS9371 hardware가 없어 blocked 상태다. 7.3D strict runtime probe는 구현됐지만 current Windows FFTW/CUDA 모두 5 ms hard gate를 통과하지 못했다. 7.4에서 record별 ownership과 raw write를 contiguous DMA block으로 바꾸고 copy/H2D/storage 병목을 줄인 뒤 7.3D를 다시 측정한다.
+7.2, 7.3D, and 7.4 hardware acceptance remain blocked. The 7.4 contiguous DMA-block implementation improved CUDA feed throughput but did not make either backend pass the 5 ms end-to-end gate. The next software work should start only with measured chirp/trigger and MCU scan-alignment inputs, or with a focused 7.3D snapshot/ownership latency optimization decision.

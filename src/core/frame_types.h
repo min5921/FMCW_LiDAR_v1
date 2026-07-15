@@ -1,16 +1,19 @@
 #pragma once
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <initializer_list>
 #include <limits>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace fmcw {
 
 inline constexpr std::uint32_t kRawFrameFormatVersion = 1;
-inline constexpr std::uint32_t kRawFrameBatchFormatVersion = 1;
+inline constexpr std::uint32_t kRawFrameBatchFormatVersion = 2;
 
 enum class FrameKind {
   FullChirpPeriod,
@@ -90,9 +93,117 @@ struct RawFrameMetadata {
   SegmentRange down_segment;
 };
 
+class SampleBuffer {
+ public:
+  using value_type = std::int16_t;
+  using iterator = value_type*;
+  using const_iterator = const value_type*;
+
+  SampleBuffer() = default;
+  SampleBuffer(std::initializer_list<value_type> values) : owned_(values) {}
+  SampleBuffer(const SampleBuffer& other) { assign(other.begin(), other.end()); }
+  SampleBuffer(SampleBuffer&& other) { moveFrom(std::move(other)); }
+
+  SampleBuffer& operator=(const SampleBuffer& other) {
+    if (this != &other) {
+      assign(other.begin(), other.end());
+    }
+    return *this;
+  }
+
+  SampleBuffer& operator=(SampleBuffer&& other) {
+    if (this != &other) {
+      moveFrom(std::move(other));
+    }
+    return *this;
+  }
+
+  SampleBuffer& operator=(std::initializer_list<value_type> values) {
+    assign(values.begin(), values.end());
+    return *this;
+  }
+
+  SampleBuffer& operator=(const std::vector<value_type>& values) {
+    assign(values.begin(), values.end());
+    return *this;
+  }
+
+  void setView(value_type* data, std::size_t size) {
+    std::vector<value_type>().swap(owned_);
+    view_data_ = data;
+    view_size_ = size;
+  }
+
+  bool isView() const { return view_data_ != nullptr; }
+  std::size_t size() const { return isView() ? view_size_ : owned_.size(); }
+  std::size_t capacity() const { return isView() ? view_size_ : owned_.capacity(); }
+  bool empty() const { return size() == 0U; }
+  value_type* data() { return isView() ? view_data_ : owned_.data(); }
+  const value_type* data() const { return isView() ? view_data_ : owned_.data(); }
+  iterator begin() { return data(); }
+  iterator end() { return data() == nullptr ? nullptr : data() + size(); }
+  const_iterator begin() const { return data(); }
+  const_iterator end() const { return data() == nullptr ? nullptr : data() + size(); }
+  const_iterator cbegin() const { return begin(); }
+  const_iterator cend() const { return end(); }
+  value_type& operator[](std::size_t index) { return data()[index]; }
+  const value_type& operator[](std::size_t index) const { return data()[index]; }
+
+  void resize(std::size_t size) {
+    ensureOwned();
+    owned_.resize(size);
+  }
+
+  void assign(std::size_t count, value_type value) {
+    view_data_ = nullptr;
+    view_size_ = 0U;
+    owned_.assign(count, value);
+  }
+
+  template <typename Iterator>
+  void assign(Iterator first, Iterator last) {
+    view_data_ = nullptr;
+    view_size_ = 0U;
+    owned_.assign(first, last);
+  }
+
+  bool operator==(const SampleBuffer& other) const {
+    return size() == other.size() && std::equal(begin(), end(), other.begin());
+  }
+
+  bool operator==(const std::vector<value_type>& other) const {
+    return size() == other.size() && std::equal(begin(), end(), other.begin());
+  }
+
+ private:
+  void ensureOwned() {
+    if (!isView()) {
+      return;
+    }
+    std::vector<value_type> copy(begin(), end());
+    owned_ = std::move(copy);
+    view_data_ = nullptr;
+    view_size_ = 0U;
+  }
+
+  void moveFrom(SampleBuffer&& other) {
+    if (other.isView()) {
+      assign(other.begin(), other.end());
+      return;
+    }
+    owned_ = std::move(other.owned_);
+    view_data_ = nullptr;
+    view_size_ = 0U;
+  }
+
+  std::vector<value_type> owned_;
+  value_type* view_data_ = nullptr;
+  std::size_t view_size_ = 0U;
+};
+
 struct RawFrame {
   RawFrameMetadata metadata;
-  std::vector<std::int16_t> samples;
+  SampleBuffer samples;
 };
 
 using RawFramePtr = std::shared_ptr<const RawFrame>;
@@ -110,7 +221,14 @@ struct DmaBufferMetadata {
 
 struct RawFrameBatch {
   DmaBufferMetadata metadata;
+  std::vector<std::int16_t> contiguous_samples;
   std::vector<RawFrame> records;
+
+  bool hasContiguousSamples() const {
+    return metadata.record_count > 0U && metadata.record_length > 0U &&
+        contiguous_samples.size() == static_cast<std::size_t>(metadata.record_count) *
+            metadata.record_length;
+  }
 };
 
 using MutableRawFrameBatchPtr = std::shared_ptr<RawFrameBatch>;

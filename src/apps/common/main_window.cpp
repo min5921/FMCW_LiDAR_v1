@@ -1067,11 +1067,15 @@ QWidget* MainWindow::buildStorageUdpPage() {
   split_size_->setRange(0.001, 1024.0);
   split_size_->setDecimals(3);
   split_size_->setSuffix(" GB");
+  storage_status_ = new QLabel("Storage idle", storage);
+  storage_status_->setWordWrap(true);
+  storage_status_->setProperty("statusKind", "neutral");
   storage_form->addRow("Raw", raw_enabled_);
   storage_form->addRow("Processed", processed_enabled_);
   storage_form->addRow("Output directory", path_row);
   storage_form->addRow("Writer queue", storage_queue_);
   storage_form->addRow("Split size", split_size_);
+  storage_form->addRow("Runtime", storage_status_);
 
   auto* udp = groupBox("UDP Output", content);
   auto* udp_form = new QFormLayout(udp);
@@ -1871,11 +1875,32 @@ void MainWindow::updateStatus(RuntimeStatus status) {
   overview_frames_->setText(QString("%1 received\n%2 DMA batches")
                                 .arg(runtime_status_.frames_received)
                                 .arg(runtime_status_.acquisition_batches_delivered));
-  overview_queues_->setText(QString("FFT %1 / %2\nWriter %3 / %4")
+  overview_queues_->setText(QString("FFT %1 / %2\nRaw %3 | Result %4 / %5")
                                 .arg(runtime_status_.processing_queue_size)
                                 .arg(runtime_status_.processing_queue_capacity)
-                                .arg(runtime_status_.storage_queue_size)
+                                .arg(runtime_status_.raw_storage_queue_size)
+                                .arg(runtime_status_.processed_storage_queue_size)
                                 .arg(runtime_status_.storage_queue_capacity));
+  const auto raw_megabytes = static_cast<double>(runtime_status_.raw_bytes_written) / 1.0e6;
+  storage_status_->setText(runtime_status_.storage_stop_reason.isEmpty()
+      ? QString("Raw %1/%2 (peak %3) | Result %4/%5 (peak %6)\n"
+                "%7 blocks | %8 MB | %9 + %10 Mb/s")
+            .arg(runtime_status_.raw_storage_queue_size)
+            .arg(runtime_status_.raw_storage_queue_capacity)
+            .arg(runtime_status_.raw_storage_queue_high_water)
+            .arg(runtime_status_.processed_storage_queue_size)
+            .arg(runtime_status_.processed_storage_queue_capacity)
+            .arg(runtime_status_.processed_storage_queue_high_water)
+            .arg(runtime_status_.raw_blocks_written)
+            .arg(raw_megabytes, 0, 'f', 1)
+            .arg(runtime_status_.raw_storage_throughput_mbps, 0, 'f', 1)
+            .arg(runtime_status_.processed_storage_throughput_mbps, 0, 'f', 1)
+      : runtime_status_.storage_stop_reason);
+  storage_status_->setProperty("statusKind", runtime_status_.storage_stop_reason.isEmpty()
+      ? (runtime_status_.raw_storage_queue_size > 0U ||
+         runtime_status_.processed_storage_queue_size > 0U ? "warning" : "ready")
+      : "error");
+  repolish(storage_status_);
   overview_latency_->setText(QString("%1 ms\nRevision %2")
                                  .arg(runtime_status_.processing_latency_ms, 0, 'f', 3)
                                  .arg(runtime_status_.processing_revision));
