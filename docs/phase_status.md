@@ -175,3 +175,4 @@ TTL and laser distance contract refinement (2026-07-15):
 - Configuration schema version is now 5; velocity wavelength is owned by calibration instead of the Laser UI.
 - Windows MSVC Release and CTest 5/5 passed. Digitizer and Laser pages were visually checked in the packaged GUI.
 - Packaged EXE SHA-256: `742DC9FE18BF0AA5B16CA72CC0FC70D8E279FA350ECE8601EEDD66C3E4275A40`.
+- Implementation commit: `315f374`
