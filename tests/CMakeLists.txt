@@ -97,3 +97,34 @@ if(WIN32)
 endif()
 
 add_test(NAME fmcw_phase7_cuda_performance_tests COMMAND fmcw_phase7_cuda_performance_tests)
+
+function(add_phase7_realtime_qualification target_name duration_seconds enforce_hard_pass)
+  add_executable(${target_name}
+    phase7_realtime_qualification_test.cpp
+  )
+  target_link_libraries(${target_name} PRIVATE fmcw_core)
+  target_compile_features(${target_name} PRIVATE cxx_std_17)
+  target_compile_definitions(${target_name} PRIVATE
+    FMCW_QUALIFICATION_DURATION_SECONDS=${duration_seconds}
+    FMCW_QUALIFICATION_ENFORCE_HARD_PASS=${enforce_hard_pass}
+  )
+
+  if(WIN32)
+    foreach(_runtime_dll IN ITEMS "${FMCW_FFTW_RUNTIME_DLL}" "${FMCW_CUFFT_RUNTIME_DLL}")
+      if(EXISTS "${_runtime_dll}")
+        add_custom_command(TARGET ${target_name} POST_BUILD
+          COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${_runtime_dll}"
+            $<TARGET_FILE_DIR:${target_name}>
+        )
+      endif()
+    endforeach()
+  endif()
+endfunction()
+
+add_phase7_realtime_qualification(fmcw_phase7_realtime_probe 2 0)
+add_test(NAME fmcw_phase7_realtime_probe COMMAND fmcw_phase7_realtime_probe)
+
+# Fixed-duration release gate. It is intentionally not part of normal CTest because it
+# runs FFTW and CUDA for ten minutes each and returns failure on any 5 ms miss.
+add_phase7_realtime_qualification(fmcw_phase7_realtime_acceptance 600 1)

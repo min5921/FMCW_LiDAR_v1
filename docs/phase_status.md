@@ -123,7 +123,7 @@ Status: in progress
 
 - Execution source of truth: [`phase7_execution_plan.md`](phase7_execution_plan.md)
 - Phase 7.1 ADC and configuration correctness is complete.
-- Current next subphase: 7.2 Hardware runtime and DMA batch
+- Current software subphase: 7.4 High-speed raw storage
 - Audit findings P7-001 through P7-008 must be closed before Phase 7 completion.
 - Replace the simulator runtime selection with the compiled Alazar/MCU/EDFA adapters.
 - Validate sustained ATS9371 DMA, NVMe raw recording, UDP throughput, and Jetson UI/thermal behavior on hardware.
@@ -260,3 +260,11 @@ Phase 7.3C full CUDA signal pipeline (2026-07-15):
 - The strict CUDA benchmark processed 32 measured batches and 31,936 valid XYZIV outputs after warm-up. Local RTX p50 remained about 6-7 ms and missed the 5 ms deadline, so no Phase 7.3D performance pass is claimed.
 - Nsight Systems showed about 0.063 ms of GPU kernels per batch; the main limits are full-period H2D transfer, WDDM scheduling, and gathering 998 separate record vectors into pinned staging.
 - Windows MSVC Release and CTest passed 7/7. The packaged EXE smoke test passed with SHA-256 `2C03B0FDE71B703CFFCBC86195AFDEA6A005A343ABB0AE91AD06F9252FE824B2`. Jetson runtime parity and sustained performance remain future hardware acceptance items.
+
+Phase 7.3D strict real-time qualification harness (2026-07-15):
+
+- Added an option-free two-second probe and a separate fixed ten-minute-per-backend acceptance EXE. Both use the production acquisition session, continuous worker, bounded processing queue, FFTW/CUDA pipelines, B-scan aggregation, and STOP path.
+- FFTW processed 401 strict 4992 x 998 batches in two seconds with 400,198 valid XYZIV results, queue high-water 3/32, and zero DMA drops. End-to-end p50 was 10.712 ms, maximum was 22.065 ms, and 400 batches missed 5 ms.
+- CUDA processed 158 strict batches and 157,684 valid XYZIV results before the queue reached 32/32. The next batch was rejected and the acquisition worker stopped with `Processing queue capacity exceeded`; no silent drop occurred.
+- Payload shape, exact 998-result batch accounting, B-scan publication, and clean/overflow STOP routes passed. The probe reports these functional checks separately from the real-time hard result.
+- The fixed 600-second acceptance executable has not been run. Both local backends currently fail the 5 ms requirement and Jetson evidence is unavailable, so Phase 7.3D remains blocked and no Phase 7.3 completion is claimed.

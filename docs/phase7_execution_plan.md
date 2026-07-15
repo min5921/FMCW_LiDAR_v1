@@ -64,11 +64,11 @@ DMA buffer는 acquisition, processing, raw storage 사이의 기본 운반 단�
 | Subphase | Status | Main result | Hardware required |
 | --- | --- | --- | --- |
 | 7.1 ADC and configuration correctness | done | 정확한 ATS9371 sample과 일관된 chirp profile | 최종 capture 비교 시 필요 |
-| 7.2 Hardware runtime and DMA batch | in_progress | EXE에서 실제 ATS9371 연결 및 지속 DMA 수집 | Windows ATS9371 acceptance 필요 |
+| 7.2 Hardware runtime and DMA batch | blocked | EXE에서 실제 ATS9371 연결 및 지속 DMA 수집 | Windows ATS9371 acceptance 필요 |
 | 7.3A 998-record processing baseline | done | strict DMA simulator, 1996 FFT/998 XYZIV와 deadline 계측 | reference raw로 검증 가능 |
 | 7.3B FFTW processing optimization | done | 16 fixed FFTW batches, parity and selected-spectrum copy | target CPU acceptance remains in 7.3D |
 | 7.3C CUDA processing optimization | done | signed raw to cuFFT/peak/XYZIV full GPU batch pipeline | Jetson parity remains required |
-| 7.3D 200 Hz performance acceptance | pending | 998-point B-scan line을 5 ms 안에 완료 | target Windows/Jetson 필요 |
+| 7.3D 200 Hz performance acceptance | blocked | strict runtime probe와 고정 10분 gate 구현, 현재 5 ms 초과 | target Windows/Jetson 필요 |
 | 7.4 High-speed raw storage | pending | DMA-block recording과 replay | NVMe sustained test 필요 |
 | 7.5 Laser, MCU, and scan alignment | pending | 실제 chirp/scan 위치와 point cloud 정합 | laser, oscilloscope, MCU 필요 |
 | 7.6 EDFA and Windows acceptance | pending | 안전한 광 출력과 Windows release candidate | EDFA와 광 안전 환경 필요 |
@@ -267,6 +267,15 @@ Disk write, UDP transmission, and Qt paint time은 이 5 ms signal-processing ga
 - Processing 페이지에서 현재 backend의 batch latency, 5 ms deadline margin, miss count를 확인할 수 있다.
 - 지원하지 못하는 backend/platform 조합은 실시간 가능 상태로 표시하지 않는다.
 
+#### Software Qualification Record (2026-07-15)
+
+- `fmcw_phase7_realtime_probe.exe` connects the strict `FakeDigitizer` to the production `AcquisitionSession`, `ContinuousAcquisitionWorker`, bounded `ProcessingService`, snapshot aggregation, and global STOP path. The producer stays on the absolute 4.99 ms cadence and never waits for the consumer.
+- The fixed two-second FFTW probe delivered and processed 401 complete DMA batches, 400,198 records, and the same number of valid XYZIV outputs. Queue high-water was 3/32 with zero DMA drops, but end-to-end p50 was 10.712 ms, maximum was 22.065 ms, and 400 batches missed the 5 ms deadline.
+- The fixed two-second CUDA probe processed 158 complete batches and 157,684 XYZIV outputs. Its processing queue reached exactly 32/32, the next batch was rejected, and the acquisition worker preserved `Processing queue capacity exceeded` as the STOP reason. No batch was silently dropped.
+- The probe returns success only for payload/result integrity and a valid clean-duration or overflow-to-STOP route. It prints `HARD_PASS` or `HARD_FAIL` separately so a functional test cannot be mistaken for real-time acceptance.
+- `fmcw_phase7_realtime_acceptance.exe` is a separate option-free executable with a fixed 600-second run per backend. It returns failure for any deadline miss, drop, growing queue, incomplete 998-record line, unavailable CUDA runtime, or backend failure. It is intentionally excluded from normal CTest.
+- The 20-minute combined FFTW/CUDA acceptance was not run. Current Windows results fail the 5 ms gate, and Jetson evidence is unavailable, so Phase 7.3D and overall Phase 7.3 remain blocked rather than complete.
+
 ## 8. Phase 7.4: High-Speed Raw Storage
 
 ### Scope
@@ -399,6 +408,6 @@ Phase 7.7: complete Jetson integration and release
 
 ## 15. Next Action
 
-Current software next subphase: **7.3A 998-record processing baseline**.
+Current software next subphase: **7.4 DMA-block high-speed recording**.
 
-7.2의 software implementation은 완료됐지만 ATS9371 hardware acceptance는 계속 `in_progress`로 유지한다. Hardware 연결을 기다리는 동안 7.3A simulator/replay baseline을 진행한다.
+7.2는 ATS9371 hardware가 없어 blocked 상태다. 7.3D strict runtime probe는 구현됐지만 current Windows FFTW/CUDA 모두 5 ms hard gate를 통과하지 못했다. 7.4에서 record별 ownership과 raw write를 contiguous DMA block으로 바꾸고 copy/H2D/storage 병목을 줄인 뒤 7.3D를 다시 측정한다.
