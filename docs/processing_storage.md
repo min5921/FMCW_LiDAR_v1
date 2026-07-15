@@ -118,6 +118,8 @@ Phase 7.2 changes the `ProcessingService` queue item to an immutable `RawFrameBa
 
 Phase 7.3D의 real-time gate는 laser 200 kHz, digitizer 1 GS/s, 4992 samples/record, 998 records/buffer, UP/DOWN 각 2048 samples 조건이다. DMA completion부터 998 point와 한 B-scan line 완성까지 모든 signal processing이 5.00 ms 안에 끝나야 하며 평균이 아니라 maximum deadline miss로 합격을 판정한다.
 
+CUDA mode uses `processing/cuda/cuda_signal_pipeline.cu` for the complete batch path rather than using CUDA as an FFT-only helper. It uploads signed full-period samples to persistent device buffers, performs segmentation through XYZIV on the GPU, and downloads only compact results plus the selected spectra. The current `RawFrameBatch` still stores 998 independent sample vectors, so CUDA first gathers them into pinned staging. Phase 7.4 replaces this record-oriented ownership with a contiguous DMA-block payload that can serve both raw storage and lower-overhead GPU transfer.
+
 기본 파일:
 
 - `<stem>.raw.0000.bin`, `<stem>.raw.0001.bin`, ...

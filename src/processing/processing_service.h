@@ -5,6 +5,7 @@
 #include "processing/fft_backend.h"
 #include "processing/processing_snapshots.h"
 
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -64,6 +65,9 @@ class ProcessingService {
   void setProcessedFrameCallback(ProcessedFrameCallback callback);
   void requestStop(std::string reason);
   bool waitUntilStopped(std::string& error);
+  bool waitForProcessedBatches(std::uint64_t target_count,
+                               std::chrono::milliseconds timeout,
+                               std::string& error);
   ProcessingServiceStatus status() const;
 
   ProcessingSnapshotStore& snapshots();

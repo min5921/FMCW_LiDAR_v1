@@ -50,7 +50,12 @@ set(FMCW_CORE_SOURCES
 )
 
 if(FMCW_HAS_CUDA_FFT)
-  list(APPEND FMCW_CORE_SOURCES processing/cuda/cuda_fft_backend.cu)
+  list(APPEND FMCW_CORE_SOURCES
+    processing/cuda/cuda_fft_backend.cu
+    processing/cuda/cuda_signal_pipeline.cu
+  )
+else()
+  list(APPEND FMCW_CORE_SOURCES processing/cuda/cuda_signal_pipeline_stub.cpp)
 endif()
 
 add_library(fmcw_core STATIC ${FMCW_CORE_SOURCES})

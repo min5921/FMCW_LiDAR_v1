@@ -20,13 +20,18 @@ std::uint64_t nowNs() {
 }  // namespace
 
 int main() {
+  if (!fmcw::CudaFftBackend::available()) {
+    std::cout << "Phase 7.3C CUDA qualification skipped: no runtime CUDA device.\n";
+    return 0;
+  }
   constexpr std::uint64_t warmup_batch_count = 3U;
   constexpr std::uint64_t measured_batch_count = 32U;
   auto config = fmcw::makeAts9371QualificationSimulatorConfig();
+  config.processing.fft_backend = fmcw::FftBackendKind::Cuda;
   fmcw::FakeDigitizer digitizer;
   std::string error;
   if (!digitizer.configure(config, error) || !digitizer.connect(error) || !digitizer.start(error)) {
-    std::cerr << "Qualification simulator setup failed: " << error << '\n';
+    std::cerr << "CUDA qualification simulator setup failed: " << error << '\n';
     return 1;
   }
 
@@ -34,18 +39,14 @@ int main() {
   if (digitizer.waitForBatch(mutable_batch, std::chrono::milliseconds(100), error) !=
           fmcw::FrameWaitResult::FrameReady ||
       !mutable_batch || mutable_batch->records.size() != 998U) {
-    std::cerr << "Qualification DMA batch failed: " << error << '\n';
+    std::cerr << "CUDA qualification DMA batch failed: " << error << '\n';
     return 1;
   }
   digitizer.stop(error);
 
-  const auto processing_start_ns = nowNs();
-  mutable_batch->metadata.completion_timestamp_ns = processing_start_ns;
-  mutable_batch->metadata.ownership_ready_timestamp_ns = processing_start_ns;
-
-  fmcw::ProcessingService service(std::make_unique<fmcw::FftwBackend>());
-  std::atomic<std::uint64_t> callback_count{0};
-  std::atomic<std::uint64_t> valid_point_count{0};
+  fmcw::ProcessingService service(std::make_unique<fmcw::CudaFftBackend>());
+  std::atomic<std::uint64_t> callback_count{0U};
+  std::atomic<std::uint64_t> valid_point_count{0U};
   service.setProcessedFrameCallback([&](fmcw::ProcessedFramePtr frame) {
     ++callback_count;
     if (frame && frame->measurement_valid && frame->point.valid &&
@@ -56,7 +57,7 @@ int main() {
     }
   });
   if (!service.configure(config, 1U, error) || !service.start(error)) {
-    std::cerr << "Baseline processing setup failed: " << error << '\n';
+    std::cerr << "CUDA qualification processing setup failed: " << error << '\n';
     return 1;
   }
 
@@ -80,24 +81,24 @@ int main() {
   };
 
   if (!run_batches(warmup_batch_count)) {
-    std::cerr << "Qualification warm-up failed: " << error << '\n';
+    std::cerr << "CUDA qualification warm-up failed: " << error << '\n';
     return 1;
   }
-  service.requestStop("Phase 7.3B warm-up complete");
+  service.requestStop("Phase 7.3C warm-up complete");
   if (!service.waitUntilStopped(error)) {
-    std::cerr << "Qualification warm-up shutdown failed: " << error << '\n';
+    std::cerr << "CUDA qualification warm-up shutdown failed: " << error << '\n';
     return 1;
   }
 
   callback_count.store(0U);
   valid_point_count.store(0U);
   if (!service.start(error) || !run_batches(measured_batch_count)) {
-    std::cerr << "Steady-state qualification processing failed: " << error << '\n';
+    std::cerr << "CUDA steady-state qualification failed: " << error << '\n';
     return 1;
   }
-  service.requestStop("Phase 7.3B steady-state measurement complete");
+  service.requestStop("Phase 7.3C steady-state measurement complete");
   if (!service.waitUntilStopped(error)) {
-    std::cerr << "Steady-state qualification shutdown failed: " << error << '\n';
+    std::cerr << "CUDA qualification shutdown failed: " << error << '\n';
     return 1;
   }
 
@@ -105,7 +106,7 @@ int main() {
   const auto bscan = service.snapshots().latestBScan();
   const auto processor_batch_ms = status.average_latency_ms *
       static_cast<double>(config.digitizer.records_per_buffer);
-  std::cout << "phase7_3b batches=" << status.batches_processed
+  std::cout << "phase7_3c batches=" << status.batches_processed
             << " records_per_batch=" << config.digitizer.records_per_buffer
             << " ffts_per_batch=" << config.digitizer.records_per_buffer * 2U
             << " valid_xyziv=" << valid_point_count.load()
@@ -125,7 +126,7 @@ int main() {
       valid_point_count.load() == expected_record_count && bscan &&
       bscan->width == 998U && bscan->completed_lines == 1U;
   if (!complete) {
-    std::cerr << "Phase 7.3B benchmark did not preserve every 998-point B-scan line\n";
+    std::cerr << "Phase 7.3C CUDA benchmark did not preserve every 998-point line\n";
     return 1;
   }
   return 0;

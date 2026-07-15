@@ -1,6 +1,7 @@
 #include "processing/signal_processor.h"
 
 #include "core/config_validation.h"
+#include "processing/cuda/cuda_signal_pipeline.h"
 
 #include <algorithm>
 #include <atomic>
@@ -236,9 +237,14 @@ void finalizeMeasurement(const RawFrame& raw, const SystemConfig& config,
 }  // namespace
 
 struct SignalProcessor::Impl {
-  explicit Impl(std::unique_ptr<IFftBackend> backend) : fft_backend(std::move(backend)) {}
+  explicit Impl(std::unique_ptr<IFftBackend> backend) : fft_backend(std::move(backend)) {
+    if (fft_backend != nullptr && fft_backend->kind() == FftBackendKind::Cuda) {
+      cuda_pipeline = std::make_unique<CudaSignalPipeline>();
+    }
+  }
 
   std::unique_ptr<IFftBackend> fft_backend;
+  std::unique_ptr<CudaSignalPipeline> cuda_pipeline;
   SystemConfig config;
   std::uint64_t processing_config_revision = 0;
   std::vector<float> up_window;
@@ -258,6 +264,7 @@ SignalProcessor::~SignalProcessor() = default;
 
 bool SignalProcessor::configure(const SystemConfig& config, std::uint64_t processing_config_revision,
                                 std::string& error) {
+  impl_->configured = false;
   if (impl_->fft_backend == nullptr) {
     error = "Signal processor requires an FFT backend";
     return false;
@@ -271,23 +278,36 @@ bool SignalProcessor::configure(const SystemConfig& config, std::uint64_t proces
     error = "Signal processor rejected invalid configuration";
     return false;
   }
-  impl_->batch_record_capacity = impl_->fft_backend->kind() == FftBackendKind::Fftw
-      ? std::min<std::size_t>(config.digitizer.records_per_buffer, kFftwBatchRecordChunk)
-      : static_cast<std::size_t>(config.digitizer.records_per_buffer);
-  const auto transform_count = impl_->batch_record_capacity * 2U;
-  if (!impl_->fft_backend->prepare({config.chirp_segmentation.segment_fft_length, transform_count}, error)) {
-    return false;
-  }
   impl_->config = config;
   impl_->processing_config_revision = processing_config_revision;
   impl_->up_window = makeWindow(config.chirp_segmentation.window, config.chirp_segmentation.up_segment.length());
   impl_->down_window = makeWindow(config.chirp_segmentation.window, config.chirp_segmentation.down_segment.length());
   impl_->up_window_sum = windowSum(impl_->up_window);
   impl_->down_window_sum = windowSum(impl_->down_window);
-  impl_->batch_input.resize(static_cast<std::size_t>(config.chirp_segmentation.segment_fft_length) *
-                            transform_count);
-  impl_->batch_spectrum.reserve((static_cast<std::size_t>(config.chirp_segmentation.segment_fft_length) / 2U + 1U) *
-                                transform_count);
+  impl_->batch_record_capacity = impl_->fft_backend->kind() == FftBackendKind::Fftw
+      ? std::min<std::size_t>(config.digitizer.records_per_buffer, kFftwBatchRecordChunk)
+      : static_cast<std::size_t>(config.digitizer.records_per_buffer);
+  const auto transform_count = impl_->batch_record_capacity * 2U;
+  if (impl_->fft_backend->kind() == FftBackendKind::Cuda) {
+    if (impl_->cuda_pipeline == nullptr ||
+        !impl_->cuda_pipeline->configure(config, processing_config_revision,
+                                         impl_->up_window, impl_->down_window,
+                                         impl_->up_window_sum, impl_->down_window_sum, error)) {
+      return false;
+    }
+    impl_->batch_input.clear();
+    impl_->batch_spectrum.clear();
+  } else {
+    if (!impl_->fft_backend->prepare({config.chirp_segmentation.segment_fft_length,
+                                      transform_count}, error)) {
+      return false;
+    }
+    impl_->batch_input.resize(static_cast<std::size_t>(
+        config.chirp_segmentation.segment_fft_length) * transform_count);
+    impl_->batch_spectrum.reserve(
+        (static_cast<std::size_t>(config.chirp_segmentation.segment_fft_length) / 2U + 1U) *
+        transform_count);
+  }
   impl_->configured = true;
   error.clear();
   return true;
@@ -310,6 +330,10 @@ bool SignalProcessor::updateRuntimeConfig(const ProcessingConfig& config,
       config.queue_capacity != impl_->config.processing.queue_capacity ||
       config.overflow_policy != impl_->config.processing.overflow_policy) {
     error = "FFT backend, queue capacity, and overflow policy require a stopped processing service";
+    return false;
+  }
+  if (impl_->cuda_pipeline != nullptr &&
+      !impl_->cuda_pipeline->updateRuntimeConfig(config, processing_config_revision, error)) {
     return false;
   }
   impl_->config.processing = config;
@@ -378,6 +402,10 @@ bool SignalProcessor::processBatch(const RawFrameBatch& raw_batch,
       raw_batch.records.size() > impl_->config.digitizer.records_per_buffer) {
     error = "Raw DMA batch record count is empty or exceeds the configured FFT batch";
     return false;
+  }
+  if (impl_->cuda_pipeline != nullptr) {
+    return impl_->cuda_pipeline->processBatch(raw_batch, selected_record_index,
+                                              processed_batch, error);
   }
 
   const auto started = std::chrono::steady_clock::now();

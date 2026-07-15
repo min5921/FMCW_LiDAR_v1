@@ -250,3 +250,13 @@ Phase 7.3B FFTW batch processing optimization (2026-07-15):
 - Automated tests confirm batch/single parity and exactly 998 outputs. After three warm-up batches, four independent 32-batch Release runs measured 2.46-3.11 ms average inside the batch processor, down from the 28.1651 ms baseline.
 - End-to-end p50 was 2.41-2.98 ms, but maximum latency varied from 4.46 to 8.29 ms and deadline misses ranged from 0 to 2. Phase 7.3D therefore remains pending and no sustained 5 ms real-time pass is claimed.
 - Windows MSVC Release and CTest passed 6/6. The packaged EXE smoke test passed with SHA-256 `D1D6A6E75EC5C41DADADE1C1C37512B829F3286529EAD7C0061803C42C02AEB4`.
+
+Phase 7.3C full CUDA signal pipeline (2026-07-15):
+
+- A dedicated `CudaSignalPipeline` now executes signed-int16 conversion, DC removal, full-period UP/DOWN segmentation, polarity, windowing, 1,996 cuFFTs, strict integer peak search, distance, velocity, calibration, and XYZIV on the GPU.
+- Persistent pinned host staging and persistent device workspaces replace per-call CUDA allocations. Only compact peak/measurement results and the selected UP/DOWN spectra return to the host.
+- The implementation follows the useful structure of legacy `gpu_strea.cu` while replacing its alternating-record, unsigned input, unnormalized dB, non-strict threshold, and old Cartesian assumptions with the current shared FFTW/CUDA contract.
+- Full-batch parity passes for validity, integer bins, signal dBFS, distance, velocity, XYZIV, selected spectra, and invalid `NaN` propagation.
+- The strict CUDA benchmark processed 32 measured batches and 31,936 valid XYZIV outputs after warm-up. Local RTX p50 remained about 6-7 ms and missed the 5 ms deadline, so no Phase 7.3D performance pass is claimed.
+- Nsight Systems showed about 0.063 ms of GPU kernels per batch; the main limits are full-period H2D transfer, WDDM scheduling, and gathering 998 separate record vectors into pinned staging.
+- Windows MSVC Release and CTest passed 7/7. The packaged EXE smoke test passed with SHA-256 `2C03B0FDE71B703CFFCBC86195AFDEA6A005A343ABB0AE91AD06F9252FE824B2`. Jetson runtime parity and sustained performance remain future hardware acceptance items.

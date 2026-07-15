@@ -182,7 +182,8 @@ void testSignalProcessingBackendParity(const fmcw::SystemConfig& base_config,
 
 void expectBatchParity(const fmcw::ProcessedFrame& batch,
                        const fmcw::ProcessedFrame& reference,
-                       const std::string& record_name) {
+                       const std::string& record_name,
+                       double magnitude_tolerance = 1.0e-4) {
   expect(batch.up_peak.valid == reference.up_peak.valid &&
              batch.down_peak.valid == reference.down_peak.valid &&
              batch.measurement_valid == reference.measurement_valid &&
@@ -193,9 +194,9 @@ void expectBatchParity(const fmcw::ProcessedFrame& batch,
          record_name + " preserves integer UP/DOWN peak bins");
   expect(!batch.processing_note.empty(), record_name + " records its batch processing backend");
   if (reference.measurement_valid) {
-    expectNear(batch.up_peak.magnitude_db, reference.up_peak.magnitude_db, 1.0e-4,
+    expectNear(batch.up_peak.magnitude_db, reference.up_peak.magnitude_db, magnitude_tolerance,
                record_name + " preserves UP dBFS magnitude");
-    expectNear(batch.down_peak.magnitude_db, reference.down_peak.magnitude_db, 1.0e-4,
+    expectNear(batch.down_peak.magnitude_db, reference.down_peak.magnitude_db, magnitude_tolerance,
                record_name + " preserves DOWN dBFS magnitude");
     expectNear(batch.distance_m, reference.distance_m, 1.0e-6,
                record_name + " preserves distance");
@@ -204,7 +205,7 @@ void expectBatchParity(const fmcw::ProcessedFrame& batch,
     expectNear(batch.point.x, reference.point.x, 1.0e-6, record_name + " preserves X");
     expectNear(batch.point.y, reference.point.y, 1.0e-6, record_name + " preserves Y");
     expectNear(batch.point.z, reference.point.z, 1.0e-6, record_name + " preserves Z");
-    expectNear(batch.point.intensity, reference.point.intensity, 1.0e-4,
+    expectNear(batch.point.intensity, reference.point.intensity, magnitude_tolerance,
                record_name + " preserves intensity");
     expectNear(batch.point.velocity, reference.point.velocity, 1.0e-6,
                record_name + " preserves point velocity");
@@ -216,6 +217,85 @@ void expectBatchParity(const fmcw::ProcessedFrame& batch,
                std::isnan(batch.point.z) && std::isnan(batch.point.intensity) &&
                std::isnan(batch.point.velocity),
            record_name + " preserves the below-threshold NaN contract");
+  }
+}
+
+void testCudaBatchParity(const fmcw::SystemConfig& base_config,
+                         const std::vector<fmcw::RawFramePtr>& frames) {
+  if (!fmcw::CudaFftBackend::available()) {
+    std::cout << "CUDA full-batch parity skipped: no runtime CUDA device.\n";
+    return;
+  }
+  constexpr std::uint32_t selected_record_index = 2U;
+  fmcw::RawFrameBatch raw_batch;
+  for (std::size_t index = 0; index < frames.size(); ++index) {
+    raw_batch.records.push_back(*frames[index]);
+    raw_batch.records.back().metadata.record_index_in_buffer = static_cast<std::uint32_t>(index);
+    raw_batch.records.back().metadata.records_in_buffer = static_cast<std::uint32_t>(frames.size());
+  }
+  std::fill(raw_batch.records.back().samples.begin(), raw_batch.records.back().samples.end(), 0);
+
+  auto fftw_config = base_config;
+  fftw_config.processing.fft_backend = fmcw::FftBackendKind::Fftw;
+  auto cuda_config = base_config;
+  cuda_config.processing.fft_backend = fmcw::FftBackendKind::Cuda;
+  fmcw::SignalProcessor fftw_processor(std::make_unique<fmcw::FftwBackend>());
+  fmcw::SignalProcessor cuda_processor(std::make_unique<fmcw::CudaFftBackend>());
+  std::string error;
+  const bool configured = fftw_processor.configure(fftw_config, 13U, error) &&
+      cuda_processor.configure(cuda_config, 13U, error);
+  expect(configured, "FFTW and CUDA full-batch processors configure identically");
+  if (!configured) {
+    return;
+  }
+
+  std::vector<fmcw::ProcessedFrame> fftw_results;
+  std::vector<fmcw::ProcessedFrame> cuda_results;
+  const bool processed = fftw_processor.processBatch(raw_batch, selected_record_index,
+                                                     fftw_results, error) &&
+      cuda_processor.processBatch(raw_batch, selected_record_index, cuda_results, error);
+  expect(processed && fftw_results.size() == raw_batch.records.size() &&
+             cuda_results.size() == raw_batch.records.size(),
+         "FFTW and CUDA full pipelines return every batch record");
+  if (!processed || fftw_results.size() != cuda_results.size()) {
+    return;
+  }
+
+  for (std::size_t index = 0; index < cuda_results.size(); ++index) {
+    expectBatchParity(cuda_results[index], fftw_results[index],
+                      "CUDA batch record " + std::to_string(index), 0.05);
+    const bool selected = index == selected_record_index;
+    expect((!cuda_results[index].up_fft_magnitude_db.empty()) == selected &&
+               (!cuda_results[index].down_fft_magnitude_db.empty()) == selected,
+           "CUDA copies spectra only for the selected record");
+  }
+  const auto& fftw_selected = fftw_results[selected_record_index];
+  const auto& cuda_selected = cuda_results[selected_record_index];
+  expect(cuda_selected.up_fft_magnitude_db.size() == fftw_selected.up_fft_magnitude_db.size() &&
+             cuda_selected.down_fft_magnitude_db.size() == fftw_selected.down_fft_magnitude_db.size(),
+         "CUDA selected spectra have the FFTW reference shape");
+  if (cuda_selected.up_fft_magnitude_db.size() == fftw_selected.up_fft_magnitude_db.size() &&
+      cuda_selected.down_fft_magnitude_db.size() == fftw_selected.down_fft_magnitude_db.size()) {
+    double maximum_signal_difference_db = 0.0;
+    double maximum_noise_difference_db = 0.0;
+    for (std::size_t index = 0; index < cuda_selected.up_fft_magnitude_db.size(); ++index) {
+      const auto collect_difference = [&](double cuda_value, double fftw_value) {
+        const auto difference = std::abs(cuda_value - fftw_value);
+        if (std::max(cuda_value, fftw_value) > -100.0) {
+          maximum_signal_difference_db = std::max(maximum_signal_difference_db, difference);
+        } else {
+          maximum_noise_difference_db = std::max(maximum_noise_difference_db, difference);
+        }
+      };
+      collect_difference(cuda_selected.up_fft_magnitude_db[index],
+                         fftw_selected.up_fft_magnitude_db[index]);
+      collect_difference(cuda_selected.down_fft_magnitude_db[index],
+                         fftw_selected.down_fft_magnitude_db[index]);
+    }
+    expect(maximum_signal_difference_db <= 0.05,
+           "CUDA selected signal spectrum agrees with FFTW within 0.05 dB");
+    expect(maximum_noise_difference_db <= 2.0,
+           "CUDA selected numerical noise floor agrees with FFTW within 2 dB");
   }
 }
 
@@ -919,6 +999,8 @@ int main() {
     testSignalProcessingBackendParity(config, *frames.front());
     std::cout << "[Phase7.3B] FFTW batch parity\n" << std::flush;
     testFftwBatchParity(config, frames);
+    std::cout << "[Phase7.3C] CUDA full-batch parity\n" << std::flush;
+    testCudaBatchParity(config, frames);
     std::cout << "[Phase7.3B] Qualification FFT batch execution count\n" << std::flush;
     testQualificationBatchExecutionCount();
     std::cout << "[Phase4] Signal processor\n" << std::flush;

@@ -149,6 +149,7 @@ struct ProcessingService::Impl {
           batch_latency_window.pop_front();
         }
         ++batches_processed;
+        condition.notify_all();
       }
       if (!batch_complete) {
         break;
@@ -156,6 +157,7 @@ struct ProcessingService::Impl {
     }
     std::lock_guard<std::mutex> lock(mutex);
     running = false;
+    condition.notify_all();
   }
 
   mutable std::mutex mutex;
@@ -333,6 +335,24 @@ bool ProcessingService::waitUntilStopped(std::string& error) {
   std::lock_guard<std::mutex> lock(impl_->mutex);
   if (!impl_->worker_error.empty()) {
     error = impl_->worker_error;
+    return false;
+  }
+  error.clear();
+  return true;
+}
+
+bool ProcessingService::waitForProcessedBatches(std::uint64_t target_count,
+                                                std::chrono::milliseconds timeout,
+                                                std::string& error) {
+  std::unique_lock<std::mutex> lock(impl_->mutex);
+  const bool reached = impl_->condition.wait_for(lock, timeout, [this, target_count] {
+    return impl_->batches_processed >= target_count || !impl_->running ||
+        !impl_->worker_error.empty();
+  });
+  if (!reached || impl_->batches_processed < target_count) {
+    error = impl_->worker_error.empty()
+        ? "Timed out waiting for processed DMA batches"
+        : impl_->worker_error;
     return false;
   }
   error.clear();

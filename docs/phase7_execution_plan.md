@@ -67,7 +67,7 @@ DMA buffer는 acquisition, processing, raw storage 사이의 기본 운반 단�
 | 7.2 Hardware runtime and DMA batch | in_progress | EXE에서 실제 ATS9371 연결 및 지속 DMA 수집 | Windows ATS9371 acceptance 필요 |
 | 7.3A 998-record processing baseline | done | strict DMA simulator, 1996 FFT/998 XYZIV와 deadline 계측 | reference raw로 검증 가능 |
 | 7.3B FFTW processing optimization | done | 16 fixed FFTW batches, parity and selected-spectrum copy | target CPU acceptance remains in 7.3D |
-| 7.3C CUDA processing optimization | pending | GPU batch 전처리부터 peak/point까지 처리 | local RTX, 이후 Jetson 필요 |
+| 7.3C CUDA processing optimization | done | signed raw to cuFFT/peak/XYZIV full GPU batch pipeline | Jetson parity remains required |
 | 7.3D 200 Hz performance acceptance | pending | 998-point B-scan line을 5 ms 안에 완료 | target Windows/Jetson 필요 |
 | 7.4 High-speed raw storage | pending | DMA-block recording과 replay | NVMe sustained test 필요 |
 | 7.5 Laser, MCU, and scan alignment | pending | 실제 chirp/scan 위치와 point cloud 정합 | laser, oscilloscope, MCU 필요 |
@@ -216,7 +216,7 @@ Phase 7.3은 batch API 구현만으로 완료하지 않는다. 7.3A부터 7.3D�
 - ADC conversion, DC removal, UP/DOWN extraction, polarity, window를 CUDA kernel로 처리한다.
 - cuFFT plan-many batch 1996, magnitude dBFS, independent maximum integer-bin peak search, distance/velocity/XYZ를 GPU에서 수행한다.
 - CUDA kernel은 FFTW reference와 동일한 preprocessing 순서, dBFS scaling, strict threshold, 무보간 peak, calibration, `NaN` 규칙을 사용한다.
-- H2D, compute, D2H를 두 개 이상의 slot/stream으로 다음 DMA buffer와 overlap한다.
+- Persistent pinned staging and device workspaces remove steady-state allocation. Inter-batch H2D overlap moves to 7.3D/7.4 with the contiguous DMA-block ownership contract.
 - selected FFT 한 쌍과 998개 peak/point 결과만 host로 복사한다.
 
 #### Exit Criteria
@@ -225,6 +225,18 @@ Phase 7.3은 batch API 구현만으로 완료하지 않는다. 7.3A부터 7.3D�
 - 매 record 또는 UP/DOWN마다 stream synchronize를 호출하지 않는다.
 - selected FFT 외 전체 spectrum을 매 batch D2H하지 않는다.
 - local RTX와 Jetson에서 steady-state allocation과 memory growth가 없다.
+
+#### Software Verification Record (2026-07-15)
+
+- The legacy `gpu_strea.cu` flow was audited before implementation. Its whole-buffer H2D, windowed preprocessing, cuFFT plan-many, independent peak reduction, XYZIV output, and selected-spectrum D2H structure were retained.
+- Legacy assumptions were not copied blindly: current input is converted signed `int16`, one record is one full UP+DOWN period, UP/DOWN are segmented on the GPU, dBFS uses coherent window gain, threshold comparison is strict `>`, peaks are integer bins without interpolation, and Cartesian axes use the current X-lateral/Y-forward/Z-vertical contract.
+- `processing/cuda/cuda_signal_pipeline.cu` now owns persistent pinned host staging, persistent device input/window/FFT/peak/measurement buffers, one cuFFT plan-many batch, and one non-blocking stream. Production CUDA batch processing no longer routes full spectra back through the CPU FFT path.
+- Per DMA batch, the GPU performs DC removal, UP/DOWN extraction, down-polarity handling, windowing, 1,996 length-2048 FFTs, strict peak search, distance, velocity, calibration, and XYZIV. Host transfer returns 1,996 compact peaks, 998 measurements, and only the selected UP/DOWN spectra.
+- FFTW/CUDA full-batch tests require exact validity and integer peak bins, 0.05 dB agreement for signal/peak magnitudes, 2 dB agreement for the numerical floor below -100 dBFS, matching distance/velocity/XYZIV, and identical threshold-rejected `NaN` behavior.
+- The local RTX qualification test performs three warm-up batches and 32 measured 4992 x 998 batches. All 31,936 measured records produced valid XYZIV outputs, but observed p50 remained roughly 6-7 ms in the contention-free condition-wait benchmark, so Phase 7.3D does not pass.
+- Nsight Systems measured only about 0.063 ms of GPU kernels per batch. Full-period H2D averaged about 2.0 ms and reached about 3.9 ms; WDDM submission/synchronization and gathering 998 separate host sample vectors dominate the remaining latency.
+- Inter-batch overlap is intentionally deferred to the contiguous DMA-block ownership work because the current synchronous per-record `RawFrame` container must first be gathered into pinned memory. No per-record or per-segment CUDA synchronization remains; there is one synchronization at batch result completion.
+- Windows MSVC Release and CTest passed 7/7, including FFTW/CUDA full-result parity and the strict CUDA qualification workload. The packaged EXE smoke test passed with SHA-256 `2C03B0FDE71B703CFFCBC86195AFDEA6A005A343ABB0AE91AD06F9252FE824B2`.
 
 ### 7.3D: 200 Hz Real-Time Performance Acceptance
 
