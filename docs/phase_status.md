@@ -186,3 +186,4 @@ Peak-threshold NaN contract refinement (2026-07-15):
 - Plot widgets skip non-finite samples, so an invalid A-scan appears as missing data rather than a false measurement.
 - Windows MSVC Release, CTest 5/5, and the packaged EXE smoke test passed.
 - Packaged EXE SHA-256: `BB4F66D48B3DFEDA3CEC0BBB5B5F2DB7D9067A0F5368493D1BF426A2E35043F5`.
+- Implementation commit: `b482cad`
