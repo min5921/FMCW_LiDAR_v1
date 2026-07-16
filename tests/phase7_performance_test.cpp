@@ -20,7 +20,6 @@ std::uint64_t nowNs() {
 }  // namespace
 
 int main() {
-  constexpr std::uint64_t warmup_batch_count = 3U;
   constexpr std::uint64_t measured_batch_count = 32U;
   auto config = fmcw::makeAts9371QualificationSimulatorConfig();
   fmcw::FakeDigitizer digitizer;
@@ -79,25 +78,13 @@ int main() {
     return true;
   };
 
-  if (!run_batches(warmup_batch_count)) {
-    std::cerr << "Qualification warm-up failed: " << error << '\n';
+  if (!run_batches(measured_batch_count)) {
+    std::cerr << "Qualification processing failed: " << error << '\n';
     return 1;
   }
-  service.requestStop("Phase 7.3B warm-up complete");
+  service.requestStop("Phase 7.3B measurement complete");
   if (!service.waitUntilStopped(error)) {
-    std::cerr << "Qualification warm-up shutdown failed: " << error << '\n';
-    return 1;
-  }
-
-  callback_count.store(0U);
-  valid_point_count.store(0U);
-  if (!service.start(error) || !run_batches(measured_batch_count)) {
-    std::cerr << "Steady-state qualification processing failed: " << error << '\n';
-    return 1;
-  }
-  service.requestStop("Phase 7.3B steady-state measurement complete");
-  if (!service.waitUntilStopped(error)) {
-    std::cerr << "Steady-state qualification shutdown failed: " << error << '\n';
+    std::cerr << "Qualification shutdown failed: " << error << '\n';
     return 1;
   }
 

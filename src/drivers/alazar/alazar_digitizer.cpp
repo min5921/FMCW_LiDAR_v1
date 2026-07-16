@@ -8,13 +8,16 @@
 #include "core/config_validation.h"
 #include "core/digitizer_capabilities.h"
 #include "core/raw_frame_batch_pool.h"
-#include "drivers/alazar/alazar_sample_conversion.h"
 
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <cstdint>
+#include <deque>
 #include <limits>
+#include <memory>
+#include <mutex>
 #include <vector>
 
 #ifndef FMCW_HAS_ALAZAR_SDK
@@ -83,6 +86,59 @@ U32 sampleRateId(double sample_rate_hz) {
   }
 }
 
+struct AlazarDmaBuffer {
+  AlazarDmaBuffer(HANDLE source_board, U16* source_data)
+      : board(source_board), data(source_data) {}
+  AlazarDmaBuffer(const AlazarDmaBuffer&) = delete;
+  AlazarDmaBuffer& operator=(const AlazarDmaBuffer&) = delete;
+
+  HANDLE board = nullptr;
+  U16* data = nullptr;
+
+  ~AlazarDmaBuffer() {
+    if (board != nullptr && data != nullptr) {
+      AlazarFreeBufferU16(board, data);
+    }
+  }
+};
+
+struct AlazarDmaLeaseState {
+  std::mutex mutex;
+  std::condition_variable condition;
+  std::deque<U32> released_indices;
+  std::size_t outstanding = 0U;
+  bool repost_enabled = false;
+};
+
+struct AlazarDmaLease {
+  AlazarDmaLease(std::shared_ptr<AlazarDmaBuffer> source_allocation,
+                 std::shared_ptr<AlazarDmaLeaseState> source_state,
+                 U32 source_buffer_index)
+      : allocation(std::move(source_allocation)),
+        state(std::move(source_state)),
+        buffer_index(source_buffer_index) {}
+  AlazarDmaLease(const AlazarDmaLease&) = delete;
+  AlazarDmaLease& operator=(const AlazarDmaLease&) = delete;
+
+  std::shared_ptr<AlazarDmaBuffer> allocation;
+  std::shared_ptr<AlazarDmaLeaseState> state;
+  U32 buffer_index = 0U;
+
+  ~AlazarDmaLease() {
+    if (!state) {
+      return;
+    }
+    std::lock_guard<std::mutex> lock(state->mutex);
+    if (state->outstanding > 0U) {
+      --state->outstanding;
+    }
+    if (state->repost_enabled) {
+      state->released_indices.push_back(buffer_index);
+    }
+    state->condition.notify_all();
+  }
+};
+
 #endif
 
 }  // namespace
@@ -91,10 +147,11 @@ struct AlazarDigitizer::Impl {
 #if FMCW_HAS_ALAZAR_SDK
   HANDLE board = nullptr;
   U8 bits_per_sample = 0;
-  std::vector<U16*> buffers;
+  std::vector<std::shared_ptr<AlazarDmaBuffer>> buffers;
+  std::deque<U32> posted_indices;
+  std::shared_ptr<AlazarDmaLeaseState> lease_state;
   U32 bytes_per_buffer = 0;
   U32 records_per_buffer = 0;
-  U32 active_buffer = 0;
   RawFrameBatchPool batch_pool;
   MutableRawFrameBatchPtr compatibility_batch;
   std::size_t compatibility_record_index = 0;
@@ -218,14 +275,16 @@ bool AlazarDigitizer::start(std::string& error) {
     return false;
   }
   impl_->bytes_per_buffer = static_cast<U32>(bytes);
-  impl_->buffers.resize(config_.digitizer.dma_buffer_count, nullptr);
-  for (auto& buffer : impl_->buffers) {
-    buffer = AlazarAllocBufferU16(impl_->board, impl_->bytes_per_buffer);
-    if (buffer == nullptr) {
+  impl_->buffers.clear();
+  impl_->buffers.reserve(config_.digitizer.dma_buffer_count);
+  for (std::uint32_t index = 0U; index < config_.digitizer.dma_buffer_count; ++index) {
+    auto* data = AlazarAllocBufferU16(impl_->board, impl_->bytes_per_buffer);
+    if (data == nullptr) {
       error = "AlazarAllocBufferU16 failed";
       releaseBuffers();
       return false;
     }
+    impl_->buffers.push_back(std::make_shared<AlazarDmaBuffer>(impl_->board, data));
   }
   if (!check(AlazarSetRecordSize(impl_->board, config_.digitizer.pre_trigger_samples,
                                  config_.digitizer.post_trigger_samples), "AlazarSetRecordSize", error)) {
@@ -246,14 +305,19 @@ bool AlazarDigitizer::start(std::string& error) {
     return false;
   }
   impl_->async_prepared = true;
-  for (auto* buffer : impl_->buffers) {
-    if (!check(AlazarPostAsyncBuffer(impl_->board, buffer, impl_->bytes_per_buffer),
+  impl_->lease_state = std::make_shared<AlazarDmaLeaseState>();
+  impl_->lease_state->repost_enabled = true;
+  impl_->posted_indices.clear();
+  for (U32 index = 0U; index < static_cast<U32>(impl_->buffers.size()); ++index) {
+    if (!check(AlazarPostAsyncBuffer(impl_->board, impl_->buffers[index]->data,
+                                     impl_->bytes_per_buffer),
                "AlazarPostAsyncBuffer", error)) {
       AlazarAbortAsyncRead(impl_->board);
       impl_->async_prepared = false;
       releaseBuffers();
       return false;
     }
+    impl_->posted_indices.push_back(index);
   }
   if (!check(AlazarStartCapture(impl_->board), "AlazarStartCapture", error)) {
     AlazarAbortAsyncRead(impl_->board);
@@ -261,7 +325,6 @@ bool AlazarDigitizer::start(std::string& error) {
     releaseBuffers();
     return false;
   }
-  impl_->active_buffer = 0;
   impl_->compatibility_batch.reset();
   impl_->compatibility_record_index = 0;
   impl_->next_frame_id = 1;
@@ -287,7 +350,7 @@ bool AlazarDigitizer::start(std::string& error) {
 FrameWaitResult AlazarDigitizer::waitForBatch(MutableRawFrameBatchPtr& batch,
                                               std::chrono::milliseconds timeout,
                                               std::string& error) {
-  std::lock_guard<std::mutex> lock(mutex_);
+  std::unique_lock<std::mutex> lock(mutex_);
   batch.reset();
 #if FMCW_HAS_ALAZAR_SDK
   if (!telemetry_.device.running || !impl_->async_prepared) {
@@ -300,9 +363,58 @@ FrameWaitResult AlazarDigitizer::waitForBatch(MutableRawFrameBatchPtr& batch,
     error.clear();
     return FrameWaitResult::Stopped;
   }
-  auto* buffer = impl_->buffers[impl_->active_buffer];
-  const auto wait_ms = static_cast<U32>(
-      std::clamp<std::int64_t>(timeout.count(), 0, std::numeric_limits<U32>::max()));
+  const auto deadline = std::chrono::steady_clock::now() + timeout;
+  const auto repostReleasedBuffers = [&]() -> bool {
+    std::deque<U32> released;
+    {
+      std::lock_guard<std::mutex> lease_lock(impl_->lease_state->mutex);
+      released.swap(impl_->lease_state->released_indices);
+    }
+    while (!released.empty()) {
+      const auto index = released.front();
+      released.pop_front();
+      if (index >= impl_->buffers.size() ||
+          !check(AlazarPostAsyncBuffer(impl_->board, impl_->buffers[index]->data,
+                                       impl_->bytes_per_buffer),
+                 "AlazarPostAsyncBuffer(repost)", error)) {
+        return false;
+      }
+      impl_->posted_indices.push_back(index);
+    }
+    return true;
+  };
+
+  if (!repostReleasedBuffers()) {
+    return FrameWaitResult::Error;
+  }
+  while (impl_->posted_indices.empty()) {
+    if (!repostReleasedBuffers()) {
+      return FrameWaitResult::Error;
+    }
+    if (!impl_->posted_indices.empty()) {
+      break;
+    }
+    std::unique_lock<std::mutex> lease_lock(impl_->lease_state->mutex);
+    if (!impl_->lease_state->repost_enabled) {
+      error.clear();
+      return FrameWaitResult::Stopped;
+    }
+    if (!impl_->lease_state->condition.wait_until(lease_lock, deadline, [this] {
+          return !impl_->lease_state->released_indices.empty() ||
+              !impl_->lease_state->repost_enabled;
+        })) {
+      error.clear();
+      return FrameWaitResult::Timeout;
+    }
+  }
+
+  const auto buffer_index = impl_->posted_indices.front();
+  auto* buffer = impl_->buffers[buffer_index]->data;
+  const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
+      std::max(deadline - std::chrono::steady_clock::now(),
+               std::chrono::steady_clock::duration::zero()));
+  const auto wait_ms = static_cast<U32>(std::clamp<std::int64_t>(
+      remaining.count(), 0, std::numeric_limits<U32>::max()));
   const auto result = AlazarWaitAsyncBufferComplete(impl_->board, buffer, wait_ms);
   if (result == ApiWaitTimeout) {
     error.clear();
@@ -315,6 +427,7 @@ FrameWaitResult AlazarDigitizer::waitForBatch(MutableRawFrameBatchPtr& batch,
     telemetry_.device.detail = error;
     return FrameWaitResult::Error;
   }
+  impl_->posted_indices.pop_front();
 
   impl_->current_buffer_timestamp_ns = nowNs();
   if (impl_->previous_buffer_timestamp_ns != 0U &&
@@ -331,20 +444,23 @@ FrameWaitResult AlazarDigitizer::waitForBatch(MutableRawFrameBatchPtr& batch,
   impl_->previous_buffer_timestamp_ns = impl_->current_buffer_timestamp_ns;
 
   auto mutable_batch = impl_->batch_pool.acquire();
-  mutable_batch->contiguous_samples.resize(
-      static_cast<std::size_t>(impl_->records_per_buffer) * config_.digitizer.sample_point);
+  const auto sample_count = static_cast<std::size_t>(impl_->records_per_buffer) *
+      config_.digitizer.sample_point;
+  mutable_batch->contiguous_samples.setView(reinterpret_cast<std::int16_t*>(buffer), sample_count);
+  {
+    std::lock_guard<std::mutex> lease_lock(impl_->lease_state->mutex);
+    ++impl_->lease_state->outstanding;
+  }
+  mutable_batch->sample_owner = std::make_shared<AlazarDmaLease>(
+      impl_->buffers[buffer_index], impl_->lease_state, buffer_index);
   mutable_batch->records.resize(impl_->records_per_buffer);
   const auto batch_sequence = telemetry_.dma_buffers_received;
   for (U32 record_index = 0; record_index < impl_->records_per_buffer; ++record_index) {
     auto& frame = mutable_batch->records[record_index];
     frame.metadata = {};
     const auto offset = static_cast<std::size_t>(record_index) * config_.digitizer.sample_point;
-    auto* converted = mutable_batch->contiguous_samples.data() + offset;
-    frame.samples.setView(converted, config_.digitizer.sample_point);
-    for (std::size_t sample_index = 0; sample_index < config_.digitizer.sample_point; ++sample_index) {
-      converted[sample_index] = alazarLeftAlignedSampleToSignedInt16(
-          buffer[offset + sample_index], impl_->bits_per_sample);
-    }
+    frame.samples.setView(mutable_batch->contiguous_samples.data() + offset,
+                          config_.digitizer.sample_point);
 
     const auto frame_id = impl_->next_frame_id++;
     frame.metadata.frame_kind = FrameKind::FullChirpPeriod;
@@ -357,6 +473,7 @@ FrameWaitResult AlazarDigitizer::waitForBatch(MutableRawFrameBatchPtr& batch,
     frame.metadata.trigger.timestamp_ns = frame.metadata.host_timestamp_ns;
     frame.metadata.trigger.valid = true;
     frame.metadata.channel = config_.digitizer.channel;
+    frame.metadata.sample_format = SampleFormat::UnsignedOffsetBinary12LeftAligned;
     frame.metadata.sample_rate_hz = config_.digitizer.sample_rate_hz;
     frame.metadata.record_length = config_.digitizer.sample_point;
     frame.metadata.pre_trigger_samples = config_.digitizer.pre_trigger_samples;
@@ -374,15 +491,6 @@ FrameWaitResult AlazarDigitizer::waitForBatch(MutableRawFrameBatchPtr& batch,
 
   telemetry_.frames_received += impl_->records_per_buffer;
   ++telemetry_.dma_buffers_received;
-  const bool finite_complete = config_.digitizer.acquisition_mode == AcquisitionMode::Finite &&
-                               telemetry_.frames_received >= config_.digitizer.finite_frame_count;
-  if (!finite_complete) {
-    if (!check(AlazarPostAsyncBuffer(impl_->board, buffer, impl_->bytes_per_buffer),
-               "AlazarPostAsyncBuffer(repost)", error)) {
-      return FrameWaitResult::Error;
-    }
-    impl_->active_buffer = (impl_->active_buffer + 1U) % static_cast<U32>(impl_->buffers.size());
-  }
   batch = std::move(mutable_batch);
   error.clear();
   return FrameWaitResult::FrameReady;
@@ -439,6 +547,11 @@ bool AlazarDigitizer::abort(std::string& error) {
     }
     impl_->async_prepared = false;
   }
+  if (impl_->lease_state) {
+    std::lock_guard<std::mutex> lease_lock(impl_->lease_state->mutex);
+    impl_->lease_state->repost_enabled = false;
+    impl_->lease_state->condition.notify_all();
+  }
 #endif
   telemetry_.device.running = false;
   telemetry_.device.detail = "Alazar acquisition aborted";
@@ -494,8 +607,8 @@ bool AlazarDigitizer::configureBoard(std::string& error) {
              "AlazarGetChannelInfo", error)) {
     return false;
   }
-  if (impl_->bits_per_sample <= 8U || impl_->bits_per_sample > 16U) {
-    error = "Phase 3 Alazar adapter requires a 9..16 bit board using U16 DMA buffers";
+  if (impl_->bits_per_sample != 12U) {
+    error = "ATS9371 DMA fast path requires the expected 12-bit left-aligned sample format";
     return false;
   }
   error.clear();
@@ -510,13 +623,15 @@ void AlazarDigitizer::releaseBuffers() {
 #if FMCW_HAS_ALAZAR_SDK
   impl_->compatibility_batch.reset();
   impl_->compatibility_record_index = 0;
-  for (auto*& buffer : impl_->buffers) {
-    if (buffer != nullptr && impl_->board != nullptr) {
-      AlazarFreeBufferU16(impl_->board, buffer);
-      buffer = nullptr;
-    }
+  if (impl_->lease_state) {
+    std::lock_guard<std::mutex> lease_lock(impl_->lease_state->mutex);
+    impl_->lease_state->repost_enabled = false;
+    impl_->lease_state->released_indices.clear();
+    impl_->lease_state->condition.notify_all();
   }
+  impl_->posted_indices.clear();
   impl_->buffers.clear();
+  impl_->lease_state.reset();
 #endif
 }
 

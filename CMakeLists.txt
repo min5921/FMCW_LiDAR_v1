@@ -20,6 +20,8 @@ set(FMCW_TARGET_PLATFORM "AUTO" CACHE STRING "Target platform: AUTO, WINDOWS, or
 set_property(CACHE FMCW_TARGET_PLATFORM PROPERTY STRINGS AUTO WINDOWS JETSON)
 set(ALAZAR_SDK_ROOT "" CACHE PATH "AlazarTech SDK root directory")
 set(FFTW_ROOT "" CACHE PATH "FFTW installation root directory")
+set(FMCW_CUDA_ARCHITECTURES "native" CACHE STRING
+    "CUDA architectures for FMCW targets (for example: native, 87, 120, or 87;120)")
 
 string(TOUPPER "${FMCW_TARGET_PLATFORM}" FMCW_TARGET_PLATFORM)
 if(FMCW_TARGET_PLATFORM STREQUAL "AUTO")

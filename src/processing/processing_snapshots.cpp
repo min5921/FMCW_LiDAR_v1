@@ -79,7 +79,9 @@ void ProcessingSnapshotStore::publish(const RawFrame& raw, const ProcessedFrame&
     waveform->down_segment = raw.metadata.down_segment;
     waveform->full_scale_samples.resize(raw.samples.size());
     std::transform(raw.samples.begin(), raw.samples.end(), waveform->full_scale_samples.begin(),
-                   [](std::int16_t value) { return static_cast<float>(value) / 32768.0F; });
+                   [format = raw.metadata.sample_format](std::int16_t value) {
+                     return sampleAsNormalizedFloat(value, format);
+                   });
 
     auto fft = std::make_shared<FftSnapshot>();
     fft->frame_id = processed.frame_id;

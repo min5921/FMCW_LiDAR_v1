@@ -297,6 +297,73 @@ void testCudaBatchParity(const fmcw::SystemConfig& base_config,
     expect(maximum_noise_difference_db <= 2.0,
            "CUDA selected numerical noise floor agrees with FFTW within 2 dB");
   }
+
+  auto native_batch = raw_batch;
+  for (auto& record : native_batch.records) {
+    for (auto& sample : record.samples) {
+      const auto offset_binary = static_cast<std::uint16_t>(
+          std::clamp(static_cast<std::int32_t>(sample) + 32768, 0, 65535)) & 0xFFF0U;
+      sample = static_cast<std::int16_t>(offset_binary);
+    }
+    record.metadata.sample_format = fmcw::SampleFormat::UnsignedOffsetBinary12LeftAligned;
+  }
+  std::vector<fmcw::ProcessedFrame> native_fftw_results;
+  std::vector<fmcw::ProcessedFrame> native_cuda_results;
+  const bool native_processed = fftw_processor.processBatch(
+      native_batch, selected_record_index, native_fftw_results, error) &&
+      cuda_processor.processBatch(native_batch, selected_record_index,
+                                  native_cuda_results, error);
+  expect(native_processed && native_fftw_results.size() == native_cuda_results.size(),
+         "FFTW and CUDA accept the native ATS9371 DMA sample format");
+  if (native_processed && native_fftw_results.size() == native_cuda_results.size()) {
+    for (std::size_t index = 0; index < native_cuda_results.size(); ++index) {
+      expectBatchParity(native_cuda_results[index], native_fftw_results[index],
+                        "Native ATS CUDA batch record " + std::to_string(index), 0.05);
+    }
+  }
+
+  const auto record_count = raw_batch.records.size();
+  const auto record_length = raw_batch.records.front().samples.size();
+  auto external_samples = std::make_shared<std::vector<std::int16_t>>(
+      record_count * record_length);
+  auto external_batch = std::make_shared<fmcw::RawFrameBatch>();
+  external_batch->metadata = raw_batch.metadata;
+  external_batch->metadata.record_count = static_cast<std::uint32_t>(record_count);
+  external_batch->metadata.record_length = static_cast<std::uint32_t>(record_length);
+  external_batch->contiguous_samples.setView(external_samples->data(),
+                                             external_samples->size());
+  external_batch->records.resize(record_count);
+  for (std::size_t index = 0; index < record_count; ++index) {
+    auto* destination = external_samples->data() + index * record_length;
+    std::copy(native_batch.records[index].samples.begin(), native_batch.records[index].samples.end(),
+              destination);
+    external_batch->records[index].metadata = native_batch.records[index].metadata;
+    external_batch->records[index].samples.setView(destination, record_length);
+  }
+  external_batch->sample_owner = external_samples;
+  std::weak_ptr<std::vector<std::int16_t>> dma_lease = external_samples;
+  external_samples.reset();
+
+  fmcw::RawFrameBatchPtr submitted_batch = external_batch;
+  external_batch.reset();
+  const bool submitted = cuda_processor.submitBatch(
+      std::move(submitted_batch), selected_record_index, error);
+  expect(submitted && cuda_processor.inFlightBatchCount() == 1U && !dma_lease.expired(),
+         "CUDA slot 1 retains the external DMA input until H2D completes");
+  if (submitted) {
+    expect(cuda_processor.releaseCompletedBatchInputs(true, error) && dma_lease.expired() &&
+               cuda_processor.inFlightBatchCount() == 1U,
+           "CUDA H2D event releases the DMA lease before full processing completes");
+    fmcw::RawFrameBatchPtr completed_batch;
+    std::vector<fmcw::ProcessedFrame> completed_results;
+    bool collected = false;
+    expect(cuda_processor.collectNextBatch(true, completed_batch, completed_results,
+                                           collected, error) &&
+               collected && completed_batch &&
+               completed_results.size() == record_count &&
+               cuda_processor.inFlightBatchCount() == 0U,
+           "CUDA completion event collects every result from the single slot");
+  }
 }
 
 void testFftwBatchParity(const fmcw::SystemConfig& config,

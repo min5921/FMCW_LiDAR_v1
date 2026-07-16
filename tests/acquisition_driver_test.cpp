@@ -575,6 +575,28 @@ void testRawFrameBatchPoolLifetime() {
   auto reused = pool.acquire();
   expect(reused.get() == original_address && reused->records.front().samples.capacity() == original_capacity,
          "batch pool reuses the batch object and retained sample allocation");
+  reused.reset();
+
+  std::vector<std::int16_t> external_samples(16U, 7);
+  auto lease_token = std::make_shared<int>(42);
+  std::weak_ptr<int> lease_lifetime = lease_token;
+  auto external_batch = pool.acquire();
+  external_batch->metadata.record_count = 1U;
+  external_batch->metadata.record_length = static_cast<std::uint32_t>(external_samples.size());
+  external_batch->contiguous_samples.setView(external_samples.data(), external_samples.size());
+  external_batch->records.resize(1U);
+  external_batch->records.front().samples.setView(external_samples.data(), external_samples.size());
+  external_batch->sample_owner = lease_token;
+  lease_token.reset();
+  expect(external_batch->hasExternalSampleStorage() && !lease_lifetime.expired(),
+         "external DMA sample storage remains leased while the batch is alive");
+  external_batch.reset();
+  expect(lease_lifetime.expired(),
+         "returning a batch to the pool releases its external DMA lease immediately");
+  auto after_external = pool.acquire();
+  expect(!after_external->hasExternalSampleStorage() &&
+             after_external->records.front().samples.empty(),
+         "pooled DMA batches never expose a stale external sample view");
 }
 
 void testContinuousAcquisitionWorker() {
@@ -741,6 +763,18 @@ void testAlazarLeftAlignedSampleConversion() {
   }
   expect(matches_legacy_full_scale,
          "SDK 12-bit code conversion matches legacy raw-minus-32768 full-scale samples");
+
+  bool native_format_matches_sdk = true;
+  for (const auto raw : {std::uint16_t{0x0000U}, std::uint16_t{0x8000U},
+                         std::uint16_t{0x800FU}, std::uint16_t{0xFFF0U},
+                         std::uint16_t{0xFFFFU}}) {
+    native_format_matches_sdk = native_format_matches_sdk &&
+        fmcw::sampleAsSignedInt16(static_cast<std::int16_t>(raw),
+                                 fmcw::SampleFormat::UnsignedOffsetBinary12LeftAligned) ==
+            fmcw::alazarLeftAlignedSampleToSignedInt16(raw, 12U);
+  }
+  expect(native_format_matches_sdk,
+         "native ATS DMA sample format decodes exactly like the SDK 12-bit conversion");
 }
 
 }  // namespace

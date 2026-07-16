@@ -51,6 +51,14 @@ struct ProcessingService::Impl {
   };
 
   void workerLoop() {
+    if (processor.supportsAsyncBatchProcessing()) {
+      workerLoopAsync();
+      return;
+    }
+    workerLoopSync();
+  }
+
+  void workerLoopSync() {
     while (true) {
       RawFrameBatchPtr batch;
       std::optional<PendingRuntimeConfig> runtime_update;
@@ -155,6 +163,201 @@ struct ProcessingService::Impl {
         break;
       }
     }
+    std::lock_guard<std::mutex> lock(mutex);
+    running = false;
+    condition.notify_all();
+  }
+
+  void failAsyncWorker(std::string error, std::string reason) {
+    std::lock_guard<std::mutex> lock(mutex);
+    worker_error = error.empty() ? "Asynchronous CUDA processing failed" : std::move(error);
+    stop_reason = std::move(reason);
+    stop_requested = true;
+    accepting = false;
+    queue.clear();
+    condition.notify_all();
+  }
+
+  bool publishAsyncBatch(const RawFrameBatchPtr& batch,
+                         const ProcessedFrameCallback& current_callback) {
+    if (!batch || processed_batch_workspace.size() != batch->records.size()) {
+      failAsyncWorker("CUDA batch collection returned an invalid result count",
+                      "Signal processing failed");
+      return false;
+    }
+
+    bool batch_complete = true;
+    std::uint64_t line_completed_timestamp_ns = 0U;
+    for (std::size_t record_index = 0; record_index < batch->records.size(); ++record_index) {
+      const auto raw = rawFrameAt(batch, record_index);
+      if (!raw) {
+        failAsyncWorker("DMA batch contains an invalid raw frame",
+                        "Signal processing failed");
+        return false;
+      }
+      auto processed = std::make_shared<ProcessedFrame>(
+          std::move(processed_batch_workspace[record_index]));
+      snapshots.publish(*raw, *processed);
+      if (record_index + 1U == batch->records.size()) {
+        line_completed_timestamp_ns = nowNs();
+      }
+      {
+        std::lock_guard<std::mutex> lock(mutex);
+        ++frames_processed;
+        last_processed_frame_id = processed->frame_id;
+        latency_total_ms += processed->processing_latency_ms;
+        processing_config_revision = processed->processing_config_revision;
+        if (processed->stop_requested) {
+          stop_requested = true;
+          stop_reason = "Processing requested acquisition stop";
+          accepting = false;
+          queue.clear();
+          batch_complete = false;
+        }
+      }
+      if (current_callback) {
+        current_callback(processed);
+      }
+      if (!batch_complete) {
+        break;
+      }
+    }
+
+    if (!batch_complete) {
+      return false;
+    }
+    {
+      std::lock_guard<std::mutex> lock(mutex);
+      const auto completion_ns = batch->metadata.completion_timestamp_ns;
+      const auto ownership_ns = batch->metadata.ownership_ready_timestamp_ns == 0U
+          ? completion_ns
+          : batch->metadata.ownership_ready_timestamp_ns;
+      last_ownership_copy_latency_ms = elapsedMs(completion_ns, ownership_ns);
+      last_signal_processing_latency_ms = elapsedMs(ownership_ns, line_completed_timestamp_ns);
+      last_batch_latency_ms = elapsedMs(completion_ns, line_completed_timestamp_ns);
+      maximum_batch_latency_ms = std::max(maximum_batch_latency_ms, last_batch_latency_ms);
+      if (last_batch_latency_ms > kBatchDeadlineMs) {
+        ++batch_deadline_misses;
+      }
+      batch_latency_window.push_back(last_batch_latency_ms);
+      if (batch_latency_window.size() > kLatencyWindowSize) {
+        batch_latency_window.pop_front();
+      }
+      ++batches_processed;
+      condition.notify_all();
+    }
+    return true;
+  }
+
+  void drainAsyncBatches() {
+    while (processor.inFlightBatchCount() > 0U) {
+      RawFrameBatchPtr ignored_batch;
+      std::vector<ProcessedFrame> ignored_results;
+      bool collected = false;
+      std::string ignored_error;
+      const auto before = processor.inFlightBatchCount();
+      processor.collectNextBatch(true, ignored_batch, ignored_results, collected, ignored_error);
+      if (processor.inFlightBatchCount() >= before) {
+        break;
+      }
+    }
+  }
+
+  void workerLoopAsync() {
+    constexpr auto kEventPollInterval = std::chrono::microseconds(100);
+    bool failed = false;
+    while (!failed) {
+      std::optional<PendingRuntimeConfig> runtime_update;
+      {
+        std::lock_guard<std::mutex> lock(mutex);
+        if (pending_runtime_config.has_value() && processor.inFlightBatchCount() == 0U) {
+          runtime_update = std::move(pending_runtime_config);
+          pending_runtime_config.reset();
+        }
+      }
+      if (runtime_update.has_value()) {
+        std::string error;
+        if (!processor.updateRuntimeConfig(runtime_update->config,
+                                           runtime_update->revision, error)) {
+          failAsyncWorker(std::move(error), "Runtime processing configuration failed");
+          failed = true;
+          break;
+        }
+      }
+
+      while (processor.inFlightBatchCount() < processor.asyncBatchCapacity()) {
+        RawFrameBatchPtr batch;
+        {
+          std::lock_guard<std::mutex> lock(mutex);
+          if (pending_runtime_config.has_value() || queue.empty()) {
+            break;
+          }
+          batch = std::move(queue.front());
+          queue.pop_front();
+        }
+        std::string error;
+        if (!processor.submitBatch(std::move(batch), snapshots.selectedRecordIndex(), error)) {
+          failAsyncWorker(std::move(error), "Signal processing submission failed");
+          failed = true;
+          break;
+        }
+      }
+      if (failed) {
+        break;
+      }
+
+      const auto in_flight = processor.inFlightBatchCount();
+      if (in_flight > 0U) {
+        bool must_wait = false;
+        {
+          std::lock_guard<std::mutex> lock(mutex);
+          must_wait = (!queue.empty() && in_flight >= processor.asyncBatchCapacity()) ||
+              !accepting || pending_runtime_config.has_value();
+        }
+        std::string error;
+        if (!processor.releaseCompletedBatchInputs(must_wait, error)) {
+          failAsyncWorker(std::move(error), "CUDA DMA input release failed");
+          failed = true;
+          break;
+        }
+        RawFrameBatchPtr completed_batch;
+        bool collected = false;
+        if (!processor.collectNextBatch(must_wait, completed_batch,
+                                        processed_batch_workspace, collected, error)) {
+          failAsyncWorker(std::move(error), "Signal processing collection failed");
+          failed = true;
+          break;
+        }
+        if (collected) {
+          ProcessedFrameCallback current_callback;
+          {
+            std::lock_guard<std::mutex> lock(mutex);
+            current_callback = callback;
+          }
+          if (!publishAsyncBatch(completed_batch, current_callback)) {
+            failed = true;
+            break;
+          }
+          continue;
+        }
+
+        std::unique_lock<std::mutex> lock(mutex);
+        condition.wait_for(lock, kEventPollInterval, [this] {
+          return !queue.empty() || pending_runtime_config.has_value() || !accepting;
+        });
+        continue;
+      }
+
+      std::unique_lock<std::mutex> lock(mutex);
+      if (queue.empty() && !accepting) {
+        break;
+      }
+      condition.wait(lock, [this] {
+        return !queue.empty() || pending_runtime_config.has_value() || !accepting;
+      });
+    }
+
+    drainAsyncBatches();
     std::lock_guard<std::mutex> lock(mutex);
     running = false;
     condition.notify_all();

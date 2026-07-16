@@ -203,6 +203,79 @@ void testDmaBlockStorageAndReplay() {
   std::filesystem::remove_all(insufficient.session_directory, remove_error);
 }
 
+void testNativeAtsSampleFormatRoundTrip() {
+  constexpr std::uint32_t record_count = 2U;
+  constexpr std::uint32_t record_length = 8U;
+  fmcw::SystemConfig config;
+  const auto directory = uniqueTestDirectory("native-ats12");
+  auto options = writerOptions(config, directory);
+  options.file_stem = "native";
+  options.raw_stream.sample_format =
+      fmcw::SampleFormat::UnsignedOffsetBinary12LeftAligned;
+  options.raw_stream.sample_rate_hz = 1.0e9;
+  options.raw_stream.record_length = record_length;
+  options.raw_stream.records_per_buffer = record_count;
+  options.preallocate_raw_parts = false;
+  options.split_file_size_gb = 1.0;
+
+  fmcw::RawFrameBatch batch;
+  batch.metadata.sequence = 11U;
+  batch.metadata.completion_timestamp_ns = 12U;
+  batch.metadata.ownership_ready_timestamp_ns = 13U;
+  batch.metadata.record_count = record_count;
+  batch.metadata.record_length = record_length;
+  const std::vector<std::int16_t> native_codes = {
+      static_cast<std::int16_t>(0x0000U), static_cast<std::int16_t>(0x1000U),
+      static_cast<std::int16_t>(0x7000U), static_cast<std::int16_t>(0x8000U),
+      static_cast<std::int16_t>(0x9000U), static_cast<std::int16_t>(0xF000U),
+      static_cast<std::int16_t>(0xFFF0U), static_cast<std::int16_t>(0xFFFFU),
+      static_cast<std::int16_t>(0x800FU), static_cast<std::int16_t>(0x8010U),
+      static_cast<std::int16_t>(0x4000U), static_cast<std::int16_t>(0xC000U),
+      static_cast<std::int16_t>(0x0100U), static_cast<std::int16_t>(0xFE00U),
+      static_cast<std::int16_t>(0x7FF0U), static_cast<std::int16_t>(0xA000U),
+  };
+  batch.contiguous_samples = native_codes;
+  batch.records.resize(record_count);
+  for (std::uint32_t index = 0U; index < record_count; ++index) {
+    auto& record = batch.records[index];
+    record.metadata.frame_id = index + 1U;
+    record.metadata.dma_buffer_sequence = batch.metadata.sequence;
+    record.metadata.record_index_in_buffer = index;
+    record.metadata.records_in_buffer = record_count;
+    record.metadata.channel = fmcw::DigitizerChannel::A;
+    record.metadata.sample_format =
+        fmcw::SampleFormat::UnsignedOffsetBinary12LeftAligned;
+    record.metadata.sample_rate_hz = options.raw_stream.sample_rate_hz;
+    record.metadata.record_length = record_length;
+    record.metadata.post_trigger_samples = record_length;
+    record.metadata.up_segment = {0U, 4U};
+    record.metadata.down_segment = {4U, 8U};
+    record.samples.setView(batch.contiguous_samples.data() + index * record_length,
+                           record_length);
+  }
+
+  fmcw::BinaryRawFrameWriter writer;
+  std::string error;
+  expect(writer.open(options, error) && writer.writeBatch(batch, error) &&
+             writer.finalize({14U, "native ATS12 round trip", true}, error),
+         "raw v2 writes native ATS12 codes without conversion");
+
+  fmcw::RawReplayReader reader;
+  fmcw::RawFrameBatch replayed;
+  const auto raw_path = directory / "native.raw.0000.bin";
+  expect(reader.open(raw_path, error) &&
+             reader.streamDescriptor().sample_format ==
+                 fmcw::SampleFormat::UnsignedOffsetBinary12LeftAligned &&
+             reader.readNextBatch(replayed, error) == fmcw::ReplayReadResult::FrameReady &&
+             replayed.contiguous_samples == native_codes &&
+             replayed.records.front().metadata.sample_format ==
+                 fmcw::SampleFormat::UnsignedOffsetBinary12LeftAligned,
+         "raw v2 replay restores the exact native ATS12 descriptor and payload");
+  reader.close();
+  std::error_code remove_error;
+  std::filesystem::remove_all(directory, remove_error);
+}
+
 struct ParallelWriterState {
   std::mutex mutex;
   std::condition_variable condition;
@@ -329,6 +402,7 @@ void testIndependentRawAndProcessedWorkers() {
 
 int main() {
   testDmaBlockStorageAndReplay();
+  testNativeAtsSampleFormatRoundTrip();
   testIndependentRawAndProcessedWorkers();
   if (failures == 0) {
     std::cout << "All Phase 7.4 DMA-block storage tests passed.\n";

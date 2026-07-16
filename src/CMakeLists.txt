@@ -180,14 +180,18 @@ endif()
 
 if(FMCW_HAS_CUDA_FFT)
   target_link_libraries(fmcw_core PRIVATE CUDA::cudart CUDA::cufft)
-  set_target_properties(fmcw_core PROPERTIES CUDA_STANDARD 17 CUDA_STANDARD_REQUIRED ON)
+  set_target_properties(fmcw_core PROPERTIES
+    CUDA_STANDARD 17
+    CUDA_STANDARD_REQUIRED ON
+    CUDA_ARCHITECTURES "${FMCW_CUDA_ARCHITECTURES}"
+  )
   if(WIN32)
     find_file(FMCW_CUFFT_RUNTIME_DLL NAMES cufft64_13.dll cufft64_12.dll cufft64_11.dll
       HINTS "${CUDAToolkit_BIN_DIR}" "${CUDAToolkit_BIN_DIR}/x64")
     set(FMCW_CUFFT_RUNTIME_DLL "${FMCW_CUFFT_RUNTIME_DLL}" CACHE INTERNAL "cuFFT runtime DLL")
   endif()
   target_compile_definitions(fmcw_core PRIVATE FMCW_HAS_CUDA_FFT=1)
-  message(STATUS "CUDA cuFFT backend: enabled from processing/cuda/cuda_fft_backend.cu")
+  message(STATUS "CUDA cuFFT backend: enabled for architectures ${FMCW_CUDA_ARCHITECTURES}")
 else()
   target_compile_definitions(fmcw_core PRIVATE FMCW_HAS_CUDA_FFT=0)
   unset(FMCW_CUFFT_RUNTIME_DLL CACHE)

@@ -32,6 +32,7 @@ MutableRawFrameBatchPtr RawFrameBatchPool::acquire() {
   }
 
   batch->metadata = {};
+  batch->sample_owner.reset();
   for (auto& record : batch->records) {
     record.metadata = {};
   }
@@ -39,6 +40,11 @@ MutableRawFrameBatchPtr RawFrameBatchPool::acquire() {
   auto state = state_;
   return MutableRawFrameBatchPtr(batch.release(), [state = std::move(state)](RawFrameBatch* released) {
     std::unique_ptr<RawFrameBatch> owned(released);
+    for (auto& record : owned->records) {
+      record.samples.clear();
+    }
+    owned->contiguous_samples.clear();
+    owned->sample_owner.reset();
     std::lock_guard<std::mutex> lock(state->mutex);
     if (state->cached_batches.size() < state->maximum_cached_batches) {
       state->cached_batches.push_back(std::move(owned));

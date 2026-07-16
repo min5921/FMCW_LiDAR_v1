@@ -61,12 +61,14 @@ bool preprocessSegmentInto(const RawFrame& raw, SegmentRange range, const Proces
   double mean = 0.0;
   if (processing.dc_removal) {
     for (std::uint32_t index = range.start_sample; index < range.end_sample_exclusive; ++index) {
-      mean += static_cast<double>(raw.samples[index]) / 32768.0;
+      mean += sampleAsNormalizedFloat(raw.samples[index], raw.metadata.sample_format);
     }
     mean /= static_cast<double>(range.length());
   }
   for (std::size_t local = 0; local < range.length(); ++local) {
-    float value = static_cast<float>(static_cast<double>(raw.samples[range.start_sample + local]) / 32768.0 - mean);
+    float value = sampleAsNormalizedFloat(raw.samples[range.start_sample + local],
+                                          raw.metadata.sample_format) -
+        static_cast<float>(mean);
     if (down_segment && polarity == SegmentPolarity::InvertDown) {
       value = -value;
     }
@@ -506,6 +508,49 @@ bool SignalProcessor::processBatch(const RawFrameBatch& raw_batch,
   }
   error.clear();
   return true;
+}
+
+bool SignalProcessor::supportsAsyncBatchProcessing() const {
+  return impl_->configured && impl_->cuda_pipeline != nullptr;
+}
+
+std::size_t SignalProcessor::asyncBatchCapacity() const {
+  return supportsAsyncBatchProcessing() ? impl_->cuda_pipeline->capacity() : 0U;
+}
+
+std::size_t SignalProcessor::inFlightBatchCount() const {
+  return supportsAsyncBatchProcessing() ? impl_->cuda_pipeline->inFlightCount() : 0U;
+}
+
+bool SignalProcessor::submitBatch(RawFrameBatchPtr raw_batch,
+                                  std::uint32_t selected_record_index,
+                                  std::string& error) {
+  if (!supportsAsyncBatchProcessing()) {
+    error = "Asynchronous batch submission requires the CUDA signal pipeline";
+    return false;
+  }
+  return impl_->cuda_pipeline->submitBatch(std::move(raw_batch), selected_record_index, error);
+}
+
+bool SignalProcessor::releaseCompletedBatchInputs(bool wait_for_oldest,
+                                                   std::string& error) {
+  if (!supportsAsyncBatchProcessing()) {
+    error = "Asynchronous input release requires the CUDA signal pipeline";
+    return false;
+  }
+  return impl_->cuda_pipeline->releaseCompletedInputs(wait_for_oldest, error);
+}
+
+bool SignalProcessor::collectNextBatch(bool wait,
+                                       RawFrameBatchPtr& raw_batch,
+                                       std::vector<ProcessedFrame>& processed_batch,
+                                       bool& collected,
+                                       std::string& error) {
+  if (!supportsAsyncBatchProcessing()) {
+    error = "Asynchronous batch collection requires the CUDA signal pipeline";
+    return false;
+  }
+  return impl_->cuda_pipeline->collectNext(wait, raw_batch, processed_batch, collected, error);
 }
 
 std::string SignalProcessor::backendName() const {

@@ -4,6 +4,7 @@
 #include "core/frame_types.h"
 #include "processing/fft_backend.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -25,6 +26,15 @@ class SignalProcessor {
   bool process(const RawFrame& raw, ProcessedFrame& processed, std::string& error);
   bool processBatch(const RawFrameBatch& raw_batch, std::uint32_t selected_record_index,
                     std::vector<ProcessedFrame>& processed_batch, std::string& error);
+  bool supportsAsyncBatchProcessing() const;
+  std::size_t asyncBatchCapacity() const;
+  std::size_t inFlightBatchCount() const;
+  bool submitBatch(RawFrameBatchPtr raw_batch, std::uint32_t selected_record_index,
+                   std::string& error);
+  bool releaseCompletedBatchInputs(bool wait_for_oldest, std::string& error);
+  bool collectNextBatch(bool wait, RawFrameBatchPtr& raw_batch,
+                        std::vector<ProcessedFrame>& processed_batch,
+                        bool& collected, std::string& error);
 
   std::string backendName() const;
   std::uint64_t processingConfigRevision() const;

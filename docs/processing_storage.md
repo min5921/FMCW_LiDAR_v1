@@ -118,7 +118,7 @@ Phase 7.2 changes the `ProcessingService` queue item to an immutable `RawFrameBa
 
 Phase 7.3D의 real-time gate는 laser 200 kHz, digitizer 1 GS/s, 4992 samples/record, 998 records/buffer, UP/DOWN 각 2048 samples 조건이다. DMA completion부터 998 point와 한 B-scan line 완성까지 모든 signal processing이 5.00 ms 안에 끝나야 하며 평균이 아니라 maximum deadline miss로 합격을 판정한다.
 
-CUDA mode uses `processing/cuda/cuda_signal_pipeline.cu` for the complete batch path rather than using CUDA as an FFT-only helper. It uploads signed full-period samples to persistent device buffers, performs segmentation through XYZIV on the GPU, and downloads only compact results plus the selected spectra. The current `RawFrameBatch` still stores 998 independent sample vectors, so CUDA first gathers them into pinned staging. Phase 7.4 replaces this record-oriented ownership with a contiguous DMA-block payload that can serve both raw storage and lower-overhead GPU transfer.
+CUDA mode uses `processing/cuda/cuda_signal_pipeline.cu` for the complete batch path rather than using CUDA as an FFT-only helper. ATS acquisition exposes the native left-aligned 12-bit `uint16` DMA block as one contiguous external `RawFrameBatch` view, so CUDA can enqueue one direct H2D copy without a CPU-wide sample conversion or duplicate payload copy. A dedicated H2D event releases the ATS DMA lease for repost before the full processing event completes. The pipeline uses one asynchronous slot, downloads only compact results plus the selected spectra, and retains only metadata plus the selected time-domain record for UI publication. Owned simulator/replay batches use persistent pinned staging as the compatibility path.
 
 기본 파일:
 
@@ -129,9 +129,9 @@ CUDA mode uses `processing/cuda/cuda_signal_pipeline.cu` for the complete batch 
 
 Raw binary는 stream header 뒤에 frame record를 순차 기록한다. 각 record에는 frame/config/trigger/scan/optical/segment metadata와 full-period `int16` payload가 들어간다. Raw frame을 segment로 자른 뒤 저장하지 않는다.
 
-Raw format v1과 `RawFrame`은 SDK의 left-aligned padding bit를 제거하고 signed full-scale로 변환한 `int16` 계약을 유지한다. Raw format v2 keeps the same processing-input sample meaning for exact FFTW/CUDA replay parity, but stores a complete DMA block as one compact metadata table plus one contiguous signed `int16` payload. Original left-aligned ATS `uint16` codes are not preserved in v2. Raw v1 replay compatibility remains available.
+Raw streams record their explicit `SampleFormat`. Simulator and legacy replay input may use signed `int16`, while ATS9371 acquisition preserves native `UnsignedOffsetBinary12LeftAligned` codes in the same two-byte payload width. Raw v2 stores one compact metadata table plus one contiguous payload without converting native ATS samples. FFTW, CUDA, waveform snapshots, storage, and replay all decode the descriptor through the same sample-format contract. Raw v1 replay compatibility remains available.
 
-Phase 7.4 changes production acquisition ownership: one `RawFrameBatch` owns the contiguous converted payload and each record exposes a sample view into that allocation. Raw storage enqueues and writes once per DMA block, while CUDA staging performs one contiguous host copy. Raw/result writers have separate queues and workers. Raw parts are preallocated, split only between complete blocks, truncated to committed bytes, and guarded by free-space preflight.
+Phase 7.4 changes production acquisition ownership: one `RawFrameBatch` references a contiguous DMA payload and each record exposes a sample view into that allocation. Raw storage enqueues and writes once per DMA block. CUDA copies native external DMA storage directly to its persistent device input; only non-external input uses one contiguous pinned staging copy. Raw/result writers have separate queues and workers. Raw parts are preallocated, split only between complete blocks, truncated to committed bytes, and guarded by free-space preflight.
 
 Processed binary에는 up/down FFT magnitude, peak와 validity, distance, velocity, XYZ, intensity, point velocity, latency, processing revision을 기록한다. UDP point payload도 동일한 `x, y, z, intensity, velocity` 순서를 사용한다.
 

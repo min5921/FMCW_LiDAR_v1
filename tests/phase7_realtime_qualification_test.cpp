@@ -80,6 +80,7 @@ QualificationResult runQualification(fmcw::FftBackendKind backend_kind) {
           [&](fmcw::RawFrameBatchPtr batch, std::string& batch_error) {
             const bool valid_shape = batch && batch->records.size() == 998U &&
                 batch->metadata.record_count == 998U && batch->metadata.record_length == 4992U &&
+                batch->hasExternalSampleStorage() &&
                 batch->records.front().samples.size() == 4992U &&
                 batch->records.back().samples.size() == 4992U;
             if (!valid_shape) {

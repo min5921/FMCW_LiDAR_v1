@@ -24,7 +24,6 @@ int main() {
     std::cout << "Phase 7.3C CUDA qualification skipped: no runtime CUDA device.\n";
     return 0;
   }
-  constexpr std::uint64_t warmup_batch_count = 3U;
   constexpr std::uint64_t measured_batch_count = 32U;
   auto config = fmcw::makeAts9371QualificationSimulatorConfig();
   config.processing.fft_backend = fmcw::FftBackendKind::Cuda;
@@ -80,25 +79,13 @@ int main() {
     return true;
   };
 
-  if (!run_batches(warmup_batch_count)) {
-    std::cerr << "CUDA qualification warm-up failed: " << error << '\n';
+  if (!run_batches(measured_batch_count)) {
+    std::cerr << "CUDA qualification failed: " << error << '\n';
     return 1;
   }
-  service.requestStop("Phase 7.3C warm-up complete");
+  service.requestStop("Phase 7.3C measurement complete");
   if (!service.waitUntilStopped(error)) {
-    std::cerr << "CUDA qualification warm-up shutdown failed: " << error << '\n';
-    return 1;
-  }
-
-  callback_count.store(0U);
-  valid_point_count.store(0U);
-  if (!service.start(error) || !run_batches(measured_batch_count)) {
-    std::cerr << "CUDA steady-state qualification failed: " << error << '\n';
-    return 1;
-  }
-  service.requestStop("Phase 7.3C steady-state measurement complete");
-  if (!service.waitUntilStopped(error)) {
-    std::cerr << "CUDA qualification shutdown failed: " << error << '\n';
+    std::cerr << "CUDA measurement shutdown failed: " << error << '\n';
     return 1;
   }
 

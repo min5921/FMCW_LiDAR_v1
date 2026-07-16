@@ -247,7 +247,7 @@ Phase 7.3B FFTW batch processing optimization (2026-07-15):
 - FFTW uses up to 16 independent OpenMP execution lanes with persistent plans and workspaces. The strict 998-record workload now performs 16 FFT batch executions instead of 1,996 synchronous FFT calls.
 - Preprocessing, strict integer peak detection, distance, velocity, calibration, XYZIV, and invalid `NaN` propagation remain common with the single-record and CUDA contracts.
 - Only the operator-selected record copies complete UP/DOWN spectra; all records continue to generate B-scan and point-cloud results.
-- Automated tests confirm batch/single parity and exactly 998 outputs. After three warm-up batches, four independent 32-batch Release runs measured 2.46-3.11 ms average inside the batch processor, down from the 28.1651 ms baseline.
+- Historical 2026-07-15 tests confirmed batch/single parity and exactly 998 outputs. After three warm-up batches, four independent 32-batch Release runs measured 2.46-3.11 ms average inside the batch processor, down from the 28.1651 ms baseline. The later no-warmup procedure supersedes this measurement method.
 - End-to-end p50 was 2.41-2.98 ms, but maximum latency varied from 4.46 to 8.29 ms and deadline misses ranged from 0 to 2. Phase 7.3D therefore remains pending and no sustained 5 ms real-time pass is claimed.
 - Windows MSVC Release and CTest passed 6/6. The packaged EXE smoke test passed with SHA-256 `D1D6A6E75EC5C41DADADE1C1C37512B829F3286529EAD7C0061803C42C02AEB4`.
 
@@ -257,7 +257,7 @@ Phase 7.3C full CUDA signal pipeline (2026-07-15):
 - Persistent pinned host staging and persistent device workspaces replace per-call CUDA allocations. Only compact peak/measurement results and the selected UP/DOWN spectra return to the host.
 - The implementation follows the useful structure of legacy `gpu_strea.cu` while replacing its alternating-record, unsigned input, unnormalized dB, non-strict threshold, and old Cartesian assumptions with the current shared FFTW/CUDA contract.
 - Full-batch parity passes for validity, integer bins, signal dBFS, distance, velocity, XYZIV, selected spectra, and invalid `NaN` propagation.
-- The strict CUDA benchmark processed 32 measured batches and 31,936 valid XYZIV outputs after warm-up. Local RTX p50 remained about 6-7 ms and missed the 5 ms deadline, so no Phase 7.3D performance pass is claimed.
+- The historical 2026-07-15 strict CUDA benchmark processed 32 measured batches and 31,936 valid XYZIV outputs after warm-up. Local RTX p50 remained about 6-7 ms and missed the 5 ms deadline. The later no-warmup result supersedes this measurement method, and no Phase 7.3D performance pass is claimed.
 - Nsight Systems showed about 0.063 ms of GPU kernels per batch; the main limits are full-period H2D transfer, WDDM scheduling, and gathering 998 separate record vectors into pinned staging.
 - Windows MSVC Release and CTest passed 7/7. The packaged EXE smoke test passed with SHA-256 `2C03B0FDE71B703CFFCBC86195AFDEA6A005A343ABB0AE91AD06F9252FE824B2`. Jetson runtime parity and sustained performance remain future hardware acceptance items.
 
@@ -278,3 +278,16 @@ Phase 7.4 contiguous DMA-block storage (2026-07-15):
 - Four short 0.319 GB probes measured 3.24-4.66 GB/s, exceeding the 2.596 GB/s short-probe threshold. The result includes Windows cache and is not a ten-minute NVMe claim.
 - The fixed ten-minute acceptance requires 120,240 blocks and approximately 1.198 TB. It was not run. Phase 7.4 hardware acceptance remains blocked until target NVMe evidence shows zero queue growth, overflow, missing block, and corrupt split part.
 - After contiguous ownership, one two-second CUDA probe processed 313 batches before queue overflow versus 158 before the change; another completed 401 batches but accumulated queue high-water 14/32 and 39.70 ms p50. FFTW p50 remained about 10.87 ms. Both violate the no-growth and 5 ms gates, so Phase 7.3D remains blocked.
+
+ATS DMA and single-slot CUDA event refinement (2026-07-16):
+
+- ATS9371 acquisition now exposes native left-aligned 12-bit DMA memory as an external contiguous batch. The acquisition thread no longer converts or duplicates every sample before CUDA submission.
+- `SampleFormat::UnsignedOffsetBinary12LeftAligned` is preserved through processing snapshots, raw v2 storage, and replay. FFTW and CUDA use the same explicit conversion rule and full pipeline contract.
+- `CudaSignalPipeline` remains fixed at one slot. Submit enqueues H2D, segmentation, 1,996 cuFFTs, peak/XYZIV work, compact D2H, and a completion event without a per-batch `cudaStreamSynchronize`.
+- A separate H2D event releases the original ATS DMA lease before full processing completion. A pooled result batch keeps metadata and only the selected raw record, avoiding a 4992 x 998 payload copy while preserving selected Time Domain and FFT publication.
+- CUDA module loading is selected internally and the target is built for the active native GPU architecture. There is no production or qualification warm-up batch; performance tests measure from the first submitted batch after normal configure/start.
+- The explicit CUDA lifetime test proves that the external DMA owner expires after the H2D event while the single slot remains in flight, then all results are collected by the completion event. Release CTest passes 9/9.
+- The packaged Windows GUI was refreshed from the final Release build and its hidden `--smoke-test` exited with code 0. Build and package SHA-256 both equal `4FCE36B2FFABF7E4A27080675CB2290F38C4C258965613556CA8EE985469A4C6`.
+- The final no-warmup 32-batch local run measured FFTW p50 2.3285 ms, p95 2.7824 ms, maximum 5.35 ms, and 1 deadline miss. CUDA measured p50 10.0609 ms, p95 10.4379 ms, maximum 10.5553 ms, and 32 deadline misses.
+- Repeated two-second strict probes completed about 398-400 FFTW batches without DMA drop but still missed the end-to-end deadline. CUDA could not sustain the 4.99 ms producer cadence with one slot; repeated runs varied from 27 to 354 delivered batches before the eight-buffer simulated DMA ring overflowed. The STOP route and exact 998-result accounting passed; the 5 ms gate did not.
+- ATS9371 hardware was not connected for this verification. Phase 7.3D and hardware acceptance remain pending rather than complete.

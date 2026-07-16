@@ -1,4 +1,5 @@
 #include "processing/fft_backends.h"
+#include "processing/cuda/cuda_module_policy.h"
 
 #include <cuda_runtime.h>
 #include <cufft.h>
@@ -53,6 +54,7 @@ CudaFftBackend::CudaFftBackend() : impl_(std::make_unique<Impl>()) {}
 CudaFftBackend::~CudaFftBackend() { impl_->release(); }
 
 bool CudaFftBackend::available() {
+  configureEagerCudaModuleLoading();
   int count = 0;
   return cudaGetDeviceCount(&count) == cudaSuccess && count > 0;
 }

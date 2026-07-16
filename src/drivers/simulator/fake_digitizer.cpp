@@ -7,6 +7,14 @@
 #include <cmath>
 #include <limits>
 
+#ifndef FMCW_HAS_CUDA_FFT
+#define FMCW_HAS_CUDA_FFT 0
+#endif
+
+#if FMCW_HAS_CUDA_FFT
+#include <cuda_runtime_api.h>
+#endif
+
 namespace fmcw {
 namespace {
 
@@ -33,6 +41,36 @@ std::int16_t tone(std::uint32_t index, std::uint32_t length, double bin, double 
 }
 
 }  // namespace
+
+struct FakeDigitizer::DmaStorage {
+  explicit DmaStorage(std::size_t sample_count, bool request_pinned)
+      : samples(sample_count) {
+#if FMCW_HAS_CUDA_FFT
+    if (request_pinned && !samples.empty() &&
+        cudaHostRegister(samples.data(), samples.size() * sizeof(std::int16_t),
+                         cudaHostRegisterPortable) == cudaSuccess) {
+      pinned = true;
+    } else if (request_pinned) {
+      cudaGetLastError();
+    }
+#else
+    static_cast<void>(request_pinned);
+#endif
+  }
+
+  ~DmaStorage() {
+#if FMCW_HAS_CUDA_FFT
+    if (pinned) {
+      cudaHostUnregister(samples.data());
+    }
+#endif
+  }
+
+  std::int16_t* data() { return samples.data(); }
+
+  std::vector<std::int16_t> samples;
+  bool pinned = false;
+};
 
 FakeDigitizer::~FakeDigitizer() { disconnect(); }
 
@@ -63,7 +101,8 @@ void FakeDigitizer::disconnect() {
   telemetry_.device.detail = "Simulator disconnected";
   aborted_ = true;
   compatibility_batch_.reset();
-  completed_dma_buffers_.clear();
+  completed_dma_slots_.clear();
+  dma_slots_.clear();
   condition_.notify_all();
 }
 
@@ -80,6 +119,7 @@ bool FakeDigitizer::configure(const SystemConfig& config, std::string& error) {
   }
   config_ = config;
   buildSignalTemplates();
+  buildDmaRing();
   configured_ = true;
   telemetry_.device.ready = telemetry_.device.connected;
   telemetry_.device.detail = "Configured for channel " + toString(config_.digitizer.channel);
@@ -124,8 +164,20 @@ bool FakeDigitizer::start(std::string& error) {
   next_frame_id_ = 1;
   compatibility_batch_.reset();
   compatibility_record_index_ = 0;
-  completed_dma_buffers_.clear();
+  completed_dma_slots_.clear();
+  const bool ring_is_still_leased = std::any_of(
+      dma_slots_.begin(), dma_slots_.end(), [](const DmaSlot& slot) {
+        return !slot.samples || slot.samples.use_count() != 1U;
+      });
+  if (ring_is_still_leased || dma_slots_.size() != config_.digitizer.dma_buffer_count) {
+    buildDmaRing();
+  }
+  for (auto& slot : dma_slots_) {
+    slot.state = DmaSlotState::Posted;
+    slot.completion = {};
+  }
   next_dma_sequence_ = 0;
+  next_dma_slot_ = 0U;
   scheduled_frame_count_ = 0;
   dma_overflow_latched_ = false;
   source_exhausted_ = false;
@@ -154,7 +206,7 @@ FrameWaitResult FakeDigitizer::waitForBatch(MutableRawFrameBatchPtr& batch,
   const auto deadline = std::chrono::steady_clock::now() + timeout;
   condition_.wait_until(lock, deadline, [this] {
     return aborted_ || !telemetry_.device.running || dma_overflow_latched_ ||
-        !completed_dma_buffers_.empty() || source_exhausted_;
+        !completed_dma_slots_.empty() || source_exhausted_;
   });
   if (dma_overflow_latched_) {
     telemetry_.device.running = false;
@@ -167,7 +219,7 @@ FrameWaitResult FakeDigitizer::waitForBatch(MutableRawFrameBatchPtr& batch,
     error.clear();
     return FrameWaitResult::Stopped;
   }
-  if (completed_dma_buffers_.empty()) {
+  if (completed_dma_slots_.empty()) {
     if (source_exhausted_) {
       telemetry_.device.running = false;
       telemetry_.device.detail = "Finite simulator acquisition complete";
@@ -178,22 +230,26 @@ FrameWaitResult FakeDigitizer::waitForBatch(MutableRawFrameBatchPtr& batch,
     return FrameWaitResult::Timeout;
   }
 
-  const auto completed = completed_dma_buffers_.front();
-  completed_dma_buffers_.pop_front();
+  const auto slot_index = completed_dma_slots_.front();
+  completed_dma_slots_.pop_front();
+  auto& dma_slot = dma_slots_[slot_index];
+  const auto completed = dma_slot.completion;
+  dma_slot.state = DmaSlotState::Leased;
+  auto sample_owner = dma_slot.samples;
   condition_.notify_all();
   lock.unlock();
 
   const auto record_count = completed.record_count;
   auto mutable_batch = batch_pool_.acquire();
-  mutable_batch->contiguous_samples.resize(
-      static_cast<std::size_t>(record_count) * config_.digitizer.sample_point);
+  const auto sample_count = static_cast<std::size_t>(record_count) *
+      config_.digitizer.sample_point;
+  mutable_batch->contiguous_samples.setView(sample_owner->data(), sample_count);
+  mutable_batch->sample_owner = std::move(sample_owner);
   mutable_batch->records.resize(record_count);
   for (std::uint32_t record_index = 0; record_index < record_count; ++record_index) {
     const auto frame_id = next_frame_id_++;
-    const auto template_index = static_cast<std::size_t>((frame_id - 1U) % signal_templates_.size());
     auto* destination = mutable_batch->contiguous_samples.data() +
         static_cast<std::size_t>(record_index) * config_.digitizer.sample_point;
-    std::copy(signal_templates_[template_index].begin(), signal_templates_[template_index].end(), destination);
     mutable_batch->records[record_index].samples.setView(destination, config_.digitizer.sample_point);
     fillFrame(mutable_batch->records[record_index], frame_id, completed.sequence,
               record_index, record_count, completed.completion_timestamp_ns);
@@ -251,7 +307,7 @@ bool FakeDigitizer::abort(std::string& error) {
     telemetry_.device.running = false;
     telemetry_.device.detail = "Simulator acquisition aborted";
     compatibility_batch_.reset();
-    completed_dma_buffers_.clear();
+    completed_dma_slots_.clear();
     condition_.notify_all();
   }
   if (producer_thread_.joinable()) {
@@ -268,7 +324,7 @@ bool FakeDigitizer::stop(std::string& error) {
   telemetry_.device.ready = telemetry_.device.connected;
   telemetry_.device.detail = telemetry_.device.connected ? "Simulator ready" : "Simulator disconnected";
   compatibility_batch_.reset();
-  completed_dma_buffers_.clear();
+  completed_dma_slots_.clear();
   error.clear();
   return true;
 }
@@ -300,7 +356,13 @@ void FakeDigitizer::producerLoop() {
           static_cast<std::uint64_t>(config_.digitizer.records_per_buffer);
       const auto record_count = static_cast<std::uint32_t>(std::min<std::uint64_t>(
           config_.digitizer.records_per_buffer, remaining));
-      if (completed_dma_buffers_.size() >= config_.digitizer.dma_buffer_count) {
+      for (auto& slot : dma_slots_) {
+        if (slot.state == DmaSlotState::Leased && slot.samples.use_count() == 1U) {
+          slot.state = DmaSlotState::Posted;
+        }
+      }
+      auto& dma_slot = dma_slots_[next_dma_slot_];
+      if (dma_slot.state != DmaSlotState::Posted || dma_slot.samples.use_count() != 1U) {
         ++telemetry_.dma_buffer_drops;
         dma_overflow_latched_ = true;
         producer_stop_requested_ = true;
@@ -312,7 +374,10 @@ void FakeDigitizer::producerLoop() {
       const auto lateness_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
           now - next_batch_due_).count();
       telemetry_.trigger_jitter_ns = static_cast<double>(std::max<std::int64_t>(lateness_ns, 0));
-      completed_dma_buffers_.push_back({next_dma_sequence_++, timestampNs(next_batch_due_), record_count});
+      dma_slot.completion = {next_dma_sequence_++, timestampNs(next_batch_due_), record_count};
+      dma_slot.state = DmaSlotState::Completed;
+      completed_dma_slots_.push_back(next_dma_slot_);
+      next_dma_slot_ = (next_dma_slot_ + 1U) % static_cast<std::uint32_t>(dma_slots_.size());
       scheduled_frame_count_ += record_count;
 
       next_batch_due_ += batch_period_;
@@ -349,6 +414,25 @@ void FakeDigitizer::buildSignalTemplates() {
     }
     for (std::uint32_t index = 0; index < down.length(); ++index) {
       samples[down.start_sample + index] = tone(index, down.length(), 43.0, 10000.0, -phase);
+    }
+  }
+}
+
+void FakeDigitizer::buildDmaRing() {
+  dma_slots_.clear();
+  dma_slots_.resize(config_.digitizer.dma_buffer_count);
+  const auto record_length = static_cast<std::size_t>(config_.digitizer.sample_point);
+  const auto record_count = static_cast<std::size_t>(config_.digitizer.records_per_buffer);
+  const auto sample_count = record_length * record_count;
+  for (auto& slot : dma_slots_) {
+    slot.samples = std::make_shared<DmaStorage>(
+        sample_count, config_.processing.fft_backend == FftBackendKind::Cuda);
+    slot.state = DmaSlotState::Posted;
+    slot.completion = {};
+    for (std::size_t record_index = 0; record_index < record_count; ++record_index) {
+      const auto& source = signal_templates_[record_index % signal_templates_.size()];
+      std::copy(source.begin(), source.end(),
+                slot.samples->samples.begin() + record_index * record_length);
     }
   }
 }

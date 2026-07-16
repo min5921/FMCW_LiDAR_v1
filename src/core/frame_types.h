@@ -21,7 +21,21 @@ enum class FrameKind {
 
 enum class SampleFormat {
   SignedInt16,
+  UnsignedOffsetBinary12LeftAligned,
 };
+
+inline std::int16_t sampleAsSignedInt16(std::int16_t stored_sample, SampleFormat format) {
+  if (format == SampleFormat::UnsignedOffsetBinary12LeftAligned) {
+    const auto raw = static_cast<std::uint16_t>(stored_sample);
+    const auto centered = static_cast<std::int32_t>(raw & 0xFFF0U) - 32768;
+    return static_cast<std::int16_t>(centered);
+  }
+  return stored_sample;
+}
+
+inline float sampleAsNormalizedFloat(std::int16_t stored_sample, SampleFormat format) {
+  return static_cast<float>(sampleAsSignedInt16(stored_sample, format)) / 32768.0F;
+}
 
 enum class ByteOrder {
   LittleEndian,
@@ -154,6 +168,12 @@ class SampleBuffer {
     owned_.resize(size);
   }
 
+  void clear() {
+    owned_.clear();
+    view_data_ = nullptr;
+    view_size_ = 0U;
+  }
+
   void assign(std::size_t count, value_type value) {
     view_data_ = nullptr;
     view_size_ = 0U;
@@ -221,13 +241,17 @@ struct DmaBufferMetadata {
 
 struct RawFrameBatch {
   DmaBufferMetadata metadata;
-  std::vector<std::int16_t> contiguous_samples;
+  SampleBuffer contiguous_samples;
   std::vector<RawFrame> records;
+  std::shared_ptr<void> sample_owner;
 
   bool hasContiguousSamples() const {
     return metadata.record_count > 0U && metadata.record_length > 0U &&
         contiguous_samples.size() == static_cast<std::size_t>(metadata.record_count) *
             metadata.record_length;
+  }
+  bool hasExternalSampleStorage() const {
+    return contiguous_samples.isView() && sample_owner != nullptr;
   }
 };
 

@@ -3,6 +3,7 @@
 #include "core/config_types.h"
 #include "core/frame_types.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -29,6 +30,17 @@ class CudaSignalPipeline {
   bool updateRuntimeConfig(const ProcessingConfig& config,
                            std::uint64_t processing_config_revision,
                            std::string& error);
+  std::size_t capacity() const;
+  std::size_t inFlightCount() const;
+  bool submitBatch(RawFrameBatchPtr raw_batch,
+                   std::uint32_t selected_record_index,
+                   std::string& error);
+  bool releaseCompletedInputs(bool wait_for_oldest, std::string& error);
+  bool collectNext(bool wait,
+                   RawFrameBatchPtr& raw_batch,
+                   std::vector<ProcessedFrame>& processed_batch,
+                   bool& collected,
+                   std::string& error);
   bool processBatch(const RawFrameBatch& raw_batch,
                     std::uint32_t selected_record_index,
                     std::vector<ProcessedFrame>& processed_batch,

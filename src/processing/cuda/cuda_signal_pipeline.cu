@@ -1,14 +1,18 @@
 #include "processing/cuda/cuda_signal_pipeline.h"
+#include "processing/cuda/cuda_module_policy.h"
+#include "core/raw_frame_batch_pool.h"
 
 #include <cuda_runtime.h>
 #include <cufft.h>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <deque>
 #include <limits>
 #include <string>
 #include <vector>
@@ -63,14 +67,27 @@ cudaError_t allocatePinned(T** pointer, std::size_t count) {
   return cudaMallocHost(reinterpret_cast<void**>(pointer), count * sizeof(T));
 }
 
-__global__ void segmentMeansKernel(const std::int16_t* raw,
+__device__ float normalizedSample(std::uint16_t stored_sample, int sample_format) {
+  int signed_sample = 0;
+  if (sample_format == static_cast<int>(SampleFormat::UnsignedOffsetBinary12LeftAligned)) {
+    signed_sample = static_cast<int>(stored_sample & 0xFFF0U) - 32768;
+  } else {
+    signed_sample = stored_sample >= 0x8000U
+        ? static_cast<int>(stored_sample) - 65536
+        : static_cast<int>(stored_sample);
+  }
+  return static_cast<float>(signed_sample) / 32768.0F;
+}
+
+__global__ void segmentMeansKernel(const std::uint16_t* raw,
                                    float* means,
                                    int record_length,
                                    int up_start,
                                    int up_length,
                                    int down_start,
                                    int down_length,
-                                   bool dc_removal) {
+                                   bool dc_removal,
+                                   int sample_format) {
   const int transform = static_cast<int>(blockIdx.x);
   const bool down = (transform & 1) != 0;
   const int record = transform / 2;
@@ -83,7 +100,7 @@ __global__ void segmentMeansKernel(const std::int16_t* raw,
     const auto* samples = raw + static_cast<std::size_t>(record) * record_length + segment_start;
     for (int local = static_cast<int>(threadIdx.x); local < segment_length;
          local += static_cast<int>(blockDim.x)) {
-      sum += static_cast<float>(samples[local]) / 32768.0F;
+      sum += normalizedSample(samples[local], sample_format);
     }
   }
   partial[threadIdx.x] = sum;
@@ -99,7 +116,7 @@ __global__ void segmentMeansKernel(const std::int16_t* raw,
   }
 }
 
-__global__ void preprocessSegmentsKernel(const std::int16_t* raw,
+__global__ void preprocessSegmentsKernel(const std::uint16_t* raw,
                                          const float* means,
                                          const float* up_window,
                                          const float* down_window,
@@ -111,7 +128,8 @@ __global__ void preprocessSegmentsKernel(const std::int16_t* raw,
                                          int up_length,
                                          int down_start,
                                          int down_length,
-                                         bool invert_down) {
+                                         bool invert_down,
+                                         int sample_format) {
   const auto output_index = static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
   if (output_index >= total_output_count) {
     return;
@@ -128,7 +146,7 @@ __global__ void preprocessSegmentsKernel(const std::int16_t* raw,
   if (local < segment_length) {
     const auto sample_index = record * static_cast<std::size_t>(record_length) +
         static_cast<std::size_t>(segment_start + local);
-    value = static_cast<float>(raw[sample_index]) / 32768.0F - means[transform];
+    value = normalizedSample(raw[sample_index], sample_format) - means[transform];
     if (down && invert_down) {
       value = -value;
     }
@@ -293,100 +311,114 @@ __global__ void measurementsKernel(const DevicePeakResult* peaks,
 }  // namespace
 
 struct CudaSignalPipeline::Impl {
+  static constexpr std::size_t kSlotCount = 1U;
+
+  struct Slot {
+    cudaStream_t stream = nullptr;
+    cudaEvent_t input_consumed_event = nullptr;
+    cudaEvent_t completion_event = nullptr;
+    cufftHandle plan = 0;
+    std::size_t planned_transform_count = 0U;
+    std::uint16_t* host_input = nullptr;
+    DeviceRecordPosition* host_positions = nullptr;
+    DevicePeakResult* host_peaks = nullptr;
+    DeviceMeasurementResult* host_measurements = nullptr;
+    float* host_selected_magnitude = nullptr;
+    std::uint16_t* device_input = nullptr;
+    DeviceRecordPosition* device_positions = nullptr;
+    float* device_up_window = nullptr;
+    float* device_down_window = nullptr;
+    float* device_means = nullptr;
+    float* device_fft_input = nullptr;
+    cufftComplex* device_spectrum = nullptr;
+    DevicePeakResult* device_peaks = nullptr;
+    DeviceMeasurementResult* device_measurements = nullptr;
+    float* device_selected_magnitude = nullptr;
+    RawFrameBatchPtr input_batch;
+    MutableRawFrameBatchPtr result_batch;
+    std::chrono::steady_clock::time_point started;
+    std::uint64_t processing_config_revision = 0U;
+    std::size_t record_count = 0U;
+    int selected_record = -1;
+    SampleFormat sample_format = SampleFormat::SignedInt16;
+    bool busy = false;
+
+    void releasePlan() {
+      if (plan != 0) {
+        cufftDestroy(plan);
+        plan = 0;
+      }
+      planned_transform_count = 0U;
+    }
+
+    bool ensurePlan(std::size_t fft_length, std::size_t transform_count,
+                    std::string& error) {
+      if (plan != 0 && planned_transform_count == transform_count) {
+        return true;
+      }
+      releasePlan();
+      const auto plan_result = cufftPlan1d(&plan, static_cast<int>(fft_length), CUFFT_R2C,
+                                           static_cast<int>(transform_count));
+      if (plan_result != CUFFT_SUCCESS) {
+        error = cufftError(plan_result, "cufftPlan1d full signal batch");
+        return false;
+      }
+      const auto stream_result = cufftSetStream(plan, stream);
+      if (stream_result != CUFFT_SUCCESS) {
+        error = cufftError(stream_result, "cufftSetStream full signal batch");
+        releasePlan();
+        return false;
+      }
+      planned_transform_count = transform_count;
+      return true;
+    }
+
+    void release() {
+      if (stream != nullptr) cudaStreamSynchronize(stream);
+      input_batch.reset();
+      result_batch.reset();
+      busy = false;
+      releasePlan();
+      if (device_selected_magnitude != nullptr) cudaFree(device_selected_magnitude);
+      if (device_measurements != nullptr) cudaFree(device_measurements);
+      if (device_peaks != nullptr) cudaFree(device_peaks);
+      if (device_spectrum != nullptr) cudaFree(device_spectrum);
+      if (device_fft_input != nullptr) cudaFree(device_fft_input);
+      if (device_means != nullptr) cudaFree(device_means);
+      if (device_down_window != nullptr) cudaFree(device_down_window);
+      if (device_up_window != nullptr) cudaFree(device_up_window);
+      if (device_positions != nullptr) cudaFree(device_positions);
+      if (device_input != nullptr) cudaFree(device_input);
+      if (host_selected_magnitude != nullptr) cudaFreeHost(host_selected_magnitude);
+      if (host_measurements != nullptr) cudaFreeHost(host_measurements);
+      if (host_peaks != nullptr) cudaFreeHost(host_peaks);
+      if (host_positions != nullptr) cudaFreeHost(host_positions);
+      if (host_input != nullptr) cudaFreeHost(host_input);
+      if (completion_event != nullptr) cudaEventDestroy(completion_event);
+      if (input_consumed_event != nullptr) cudaEventDestroy(input_consumed_event);
+      if (stream != nullptr) cudaStreamDestroy(stream);
+      *this = {};
+    }
+  };
+
   SystemConfig config;
   std::uint64_t processing_config_revision = 0U;
   std::size_t maximum_records = 0U;
   std::size_t record_length = 0U;
   std::size_t fft_length = 0U;
   std::size_t spectrum_length = 0U;
-  std::size_t planned_transform_count = 0U;
   float up_window_sum = 1.0F;
   float down_window_sum = 1.0F;
-  cudaStream_t stream = nullptr;
-  cufftHandle plan = 0;
-  std::int16_t* host_input = nullptr;
-  DeviceRecordPosition* host_positions = nullptr;
-  DevicePeakResult* host_peaks = nullptr;
-  DeviceMeasurementResult* host_measurements = nullptr;
-  float* host_selected_magnitude = nullptr;
-  std::int16_t* device_input = nullptr;
-  DeviceRecordPosition* device_positions = nullptr;
-  float* device_up_window = nullptr;
-  float* device_down_window = nullptr;
-  float* device_means = nullptr;
-  float* device_fft_input = nullptr;
-  cufftComplex* device_spectrum = nullptr;
-  DevicePeakResult* device_peaks = nullptr;
-  DeviceMeasurementResult* device_measurements = nullptr;
-  float* device_selected_magnitude = nullptr;
+  RawFrameBatchPool result_batch_pool{2U};
+  std::array<Slot, kSlotCount> slots;
+  std::deque<std::size_t> submitted_order;
   bool configured = false;
 
-  void releasePlan() {
-    if (plan != 0) {
-      cufftDestroy(plan);
-      plan = 0;
-    }
-    planned_transform_count = 0U;
-  }
-
-  bool ensurePlan(std::size_t transform_count, std::string& error) {
-    if (plan != 0 && planned_transform_count == transform_count) {
-      return true;
-    }
-    releasePlan();
-    const auto plan_result = cufftPlan1d(&plan, static_cast<int>(fft_length), CUFFT_R2C,
-                                         static_cast<int>(transform_count));
-    if (plan_result != CUFFT_SUCCESS) {
-      error = cufftError(plan_result, "cufftPlan1d full signal batch");
-      return false;
-    }
-    const auto stream_result = cufftSetStream(plan, stream);
-    if (stream_result != CUFFT_SUCCESS) {
-      error = cufftError(stream_result, "cufftSetStream full signal batch");
-      releasePlan();
-      return false;
-    }
-    planned_transform_count = transform_count;
-    return true;
-  }
-
   void release() {
-    if (stream != nullptr) {
-      cudaStreamSynchronize(stream);
+    for (auto& slot : slots) {
+      slot.release();
     }
-    releasePlan();
-    if (device_selected_magnitude != nullptr) cudaFree(device_selected_magnitude);
-    if (device_measurements != nullptr) cudaFree(device_measurements);
-    if (device_peaks != nullptr) cudaFree(device_peaks);
-    if (device_spectrum != nullptr) cudaFree(device_spectrum);
-    if (device_fft_input != nullptr) cudaFree(device_fft_input);
-    if (device_means != nullptr) cudaFree(device_means);
-    if (device_down_window != nullptr) cudaFree(device_down_window);
-    if (device_up_window != nullptr) cudaFree(device_up_window);
-    if (device_positions != nullptr) cudaFree(device_positions);
-    if (device_input != nullptr) cudaFree(device_input);
-    if (host_selected_magnitude != nullptr) cudaFreeHost(host_selected_magnitude);
-    if (host_measurements != nullptr) cudaFreeHost(host_measurements);
-    if (host_peaks != nullptr) cudaFreeHost(host_peaks);
-    if (host_positions != nullptr) cudaFreeHost(host_positions);
-    if (host_input != nullptr) cudaFreeHost(host_input);
-    if (stream != nullptr) cudaStreamDestroy(stream);
-    host_input = nullptr;
-    host_positions = nullptr;
-    host_peaks = nullptr;
-    host_measurements = nullptr;
-    host_selected_magnitude = nullptr;
-    device_input = nullptr;
-    device_positions = nullptr;
-    device_up_window = nullptr;
-    device_down_window = nullptr;
-    device_means = nullptr;
-    device_fft_input = nullptr;
-    device_spectrum = nullptr;
-    device_peaks = nullptr;
-    device_measurements = nullptr;
-    device_selected_magnitude = nullptr;
-    stream = nullptr;
+    submitted_order.clear();
     configured = false;
   }
 };
@@ -395,6 +427,7 @@ CudaSignalPipeline::CudaSignalPipeline() : impl_(std::make_unique<Impl>()) {}
 CudaSignalPipeline::~CudaSignalPipeline() { impl_->release(); }
 
 bool CudaSignalPipeline::available() {
+  configureEagerCudaModuleLoading();
   int device_count = 0;
   return cudaGetDeviceCount(&device_count) == cudaSuccess && device_count > 0;
 }
@@ -427,77 +460,84 @@ bool CudaSignalPipeline::configure(const SystemConfig& config,
   impl_->down_window_sum = down_window_sum;
   const auto maximum_transform_count = impl_->maximum_records * 2U;
 
-  auto cuda_result = cudaStreamCreateWithFlags(&impl_->stream, cudaStreamNonBlocking);
-  if (cuda_result == cudaSuccess) {
-    cuda_result = allocatePinned(&impl_->host_input, impl_->maximum_records * impl_->record_length);
-  }
-  if (cuda_result == cudaSuccess) {
-    cuda_result = allocatePinned(&impl_->host_positions, impl_->maximum_records);
-  }
-  if (cuda_result == cudaSuccess) {
-    cuda_result = allocatePinned(&impl_->host_peaks, maximum_transform_count);
-  }
-  if (cuda_result == cudaSuccess) {
-    cuda_result = allocatePinned(&impl_->host_measurements, impl_->maximum_records);
-  }
-  if (cuda_result == cudaSuccess) {
-    cuda_result = allocatePinned(&impl_->host_selected_magnitude, impl_->spectrum_length * 2U);
-  }
-  if (cuda_result == cudaSuccess) {
-    cuda_result = allocateDevice(&impl_->device_input, impl_->maximum_records * impl_->record_length);
-  }
-  if (cuda_result == cudaSuccess) {
-    cuda_result = allocateDevice(&impl_->device_positions, impl_->maximum_records);
-  }
-  if (cuda_result == cudaSuccess) {
-    cuda_result = allocateDevice(&impl_->device_up_window, up_window.size());
-  }
-  if (cuda_result == cudaSuccess) {
-    cuda_result = allocateDevice(&impl_->device_down_window, down_window.size());
-  }
-  if (cuda_result == cudaSuccess) {
-    cuda_result = allocateDevice(&impl_->device_means, maximum_transform_count);
-  }
-  if (cuda_result == cudaSuccess) {
-    cuda_result = allocateDevice(&impl_->device_fft_input,
-                                 maximum_transform_count * impl_->fft_length);
-  }
-  if (cuda_result == cudaSuccess) {
-    cuda_result = allocateDevice(&impl_->device_spectrum,
-                                 maximum_transform_count * impl_->spectrum_length);
-  }
-  if (cuda_result == cudaSuccess) {
-    cuda_result = allocateDevice(&impl_->device_peaks, maximum_transform_count);
-  }
-  if (cuda_result == cudaSuccess) {
-    cuda_result = allocateDevice(&impl_->device_measurements, impl_->maximum_records);
-  }
-  if (cuda_result == cudaSuccess) {
-    cuda_result = allocateDevice(&impl_->device_selected_magnitude, impl_->spectrum_length * 2U);
-  }
-  if (cuda_result != cudaSuccess) {
-    error = cudaError(cuda_result, "CUDA full signal pipeline allocation");
-    impl_->release();
-    return false;
-  }
-
-  cuda_result = cudaMemcpyAsync(impl_->device_up_window, up_window.data(),
-                                up_window.size() * sizeof(float), cudaMemcpyHostToDevice,
-                                impl_->stream);
-  if (cuda_result == cudaSuccess) {
-    cuda_result = cudaMemcpyAsync(impl_->device_down_window, down_window.data(),
-                                  down_window.size() * sizeof(float), cudaMemcpyHostToDevice,
-                                  impl_->stream);
-  }
-  if (cuda_result == cudaSuccess) {
-    cuda_result = cudaStreamSynchronize(impl_->stream);
-  }
-  if (cuda_result != cudaSuccess || !impl_->ensurePlan(maximum_transform_count, error)) {
-    if (cuda_result != cudaSuccess) {
-      error = cudaError(cuda_result, "CUDA signal window upload");
+  for (auto& slot : impl_->slots) {
+    auto cuda_result = cudaStreamCreateWithFlags(&slot.stream, cudaStreamNonBlocking);
+    if (cuda_result == cudaSuccess) {
+      cuda_result = cudaEventCreateWithFlags(&slot.input_consumed_event, cudaEventDisableTiming);
     }
-    impl_->release();
-    return false;
+    if (cuda_result == cudaSuccess) {
+      cuda_result = cudaEventCreateWithFlags(&slot.completion_event, cudaEventDisableTiming);
+    }
+    if (cuda_result == cudaSuccess) {
+      cuda_result = allocatePinned(&slot.host_input, impl_->maximum_records * impl_->record_length);
+    }
+    if (cuda_result == cudaSuccess) {
+      cuda_result = allocatePinned(&slot.host_positions, impl_->maximum_records);
+    }
+    if (cuda_result == cudaSuccess) {
+      cuda_result = allocatePinned(&slot.host_peaks, maximum_transform_count);
+    }
+    if (cuda_result == cudaSuccess) {
+      cuda_result = allocatePinned(&slot.host_measurements, impl_->maximum_records);
+    }
+    if (cuda_result == cudaSuccess) {
+      cuda_result = allocatePinned(&slot.host_selected_magnitude, impl_->spectrum_length * 2U);
+    }
+    if (cuda_result == cudaSuccess) {
+      cuda_result = allocateDevice(&slot.device_input,
+                                   impl_->maximum_records * impl_->record_length);
+    }
+    if (cuda_result == cudaSuccess) {
+      cuda_result = allocateDevice(&slot.device_positions, impl_->maximum_records);
+    }
+    if (cuda_result == cudaSuccess) {
+      cuda_result = allocateDevice(&slot.device_up_window, up_window.size());
+    }
+    if (cuda_result == cudaSuccess) {
+      cuda_result = allocateDevice(&slot.device_down_window, down_window.size());
+    }
+    if (cuda_result == cudaSuccess) {
+      cuda_result = allocateDevice(&slot.device_means, maximum_transform_count);
+    }
+    if (cuda_result == cudaSuccess) {
+      cuda_result = allocateDevice(&slot.device_fft_input,
+                                   maximum_transform_count * impl_->fft_length);
+    }
+    if (cuda_result == cudaSuccess) {
+      cuda_result = allocateDevice(&slot.device_spectrum,
+                                   maximum_transform_count * impl_->spectrum_length);
+    }
+    if (cuda_result == cudaSuccess) {
+      cuda_result = allocateDevice(&slot.device_peaks, maximum_transform_count);
+    }
+    if (cuda_result == cudaSuccess) {
+      cuda_result = allocateDevice(&slot.device_measurements, impl_->maximum_records);
+    }
+    if (cuda_result == cudaSuccess) {
+      cuda_result = allocateDevice(&slot.device_selected_magnitude,
+                                   impl_->spectrum_length * 2U);
+    }
+    if (cuda_result == cudaSuccess) {
+      cuda_result = cudaMemcpyAsync(slot.device_up_window, up_window.data(),
+                                    up_window.size() * sizeof(float), cudaMemcpyHostToDevice,
+                                    slot.stream);
+    }
+    if (cuda_result == cudaSuccess) {
+      cuda_result = cudaMemcpyAsync(slot.device_down_window, down_window.data(),
+                                    down_window.size() * sizeof(float), cudaMemcpyHostToDevice,
+                                    slot.stream);
+    }
+    if (cuda_result == cudaSuccess) {
+      cuda_result = cudaStreamSynchronize(slot.stream);
+    }
+    if (cuda_result != cudaSuccess ||
+        !slot.ensurePlan(impl_->fft_length, maximum_transform_count, error)) {
+      if (cuda_result != cudaSuccess) {
+        error = cudaError(cuda_result, "CUDA full signal pipeline allocation or window upload");
+      }
+      impl_->release();
+      return false;
+    }
   }
   impl_->configured = true;
   error.clear();
@@ -511,27 +551,51 @@ bool CudaSignalPipeline::updateRuntimeConfig(const ProcessingConfig& config,
     error = "Configure the CUDA signal pipeline before updating runtime settings";
     return false;
   }
+  if (!impl_->submitted_order.empty()) {
+    error = "Drain submitted CUDA batches before updating runtime settings";
+    return false;
+  }
   impl_->config.processing = config;
   impl_->processing_config_revision = processing_config_revision;
   error.clear();
   return true;
 }
 
-bool CudaSignalPipeline::processBatch(const RawFrameBatch& raw_batch,
-                                      std::uint32_t selected_record_index,
-                                      std::vector<ProcessedFrame>& processed_batch,
-                                      std::string& error) {
-  if (!impl_->configured || raw_batch.records.empty() ||
-      raw_batch.records.size() > impl_->maximum_records) {
+std::size_t CudaSignalPipeline::capacity() const {
+  return impl_->configured ? Impl::kSlotCount : 0U;
+}
+
+std::size_t CudaSignalPipeline::inFlightCount() const {
+  return impl_->submitted_order.size();
+}
+
+bool CudaSignalPipeline::submitBatch(RawFrameBatchPtr raw_batch,
+                                     std::uint32_t selected_record_index,
+                                     std::string& error) {
+  if (!impl_->configured || !raw_batch || raw_batch->records.empty() ||
+      raw_batch->records.size() > impl_->maximum_records) {
     error = "CUDA signal batch is empty, oversized, or not configured";
     return false;
   }
+  if (impl_->submitted_order.size() >= Impl::kSlotCount) {
+    error = "CUDA signal pipeline has no free asynchronous slot";
+    return false;
+  }
+  auto slot_iterator = std::find_if(impl_->slots.begin(), impl_->slots.end(),
+                                    [](const Impl::Slot& slot) { return !slot.busy; });
+  if (slot_iterator == impl_->slots.end()) {
+    error = "CUDA slot state is inconsistent with the in-flight queue";
+    return false;
+  }
+  const auto slot_index = static_cast<std::size_t>(slot_iterator - impl_->slots.begin());
+  auto& slot = *slot_iterator;
+  const auto& batch = *raw_batch;
   const auto started = std::chrono::steady_clock::now();
-  const auto record_count = raw_batch.records.size();
+  const auto record_count = batch.records.size();
   const auto transform_count = record_count * 2U;
   int selected_record = -1;
   for (std::size_t index = 0; index < record_count; ++index) {
-    const auto& raw = raw_batch.records[index];
+    const auto& raw = batch.records[index];
     if (raw.metadata.frame_kind != FrameKind::FullChirpPeriod ||
         raw.samples.size() != impl_->record_length ||
         raw.metadata.record_length != impl_->record_length ||
@@ -544,35 +608,79 @@ bool CudaSignalPipeline::processBatch(const RawFrameBatch& raw_batch,
       error = "CUDA raw batch does not match the full-period segmentation contract";
       return false;
     }
-    impl_->host_positions[index] = {raw.metadata.sample_rate_hz,
-                                    raw.metadata.scan_position.x_angle_deg,
-                                    raw.metadata.scan_position.y_angle_deg,
-                                    raw.metadata.scan_position.valid ? 1 : 0};
+    if (raw.metadata.sample_format != batch.records.front().metadata.sample_format) {
+      error = "CUDA raw batch contains mixed sample formats";
+      return false;
+    }
+    slot.host_positions[index] = {raw.metadata.sample_rate_hz,
+                                  raw.metadata.scan_position.x_angle_deg,
+                                  raw.metadata.scan_position.y_angle_deg,
+                                  raw.metadata.scan_position.valid ? 1 : 0};
     if (raw.metadata.record_index_in_buffer == selected_record_index) {
       selected_record = static_cast<int>(index);
     }
   }
-  if (raw_batch.hasContiguousSamples()) {
-    std::memcpy(impl_->host_input, raw_batch.contiguous_samples.data(),
-                raw_batch.contiguous_samples.size() * sizeof(std::int16_t));
+  if (selected_record < 0) {
+    error = "Selected record is not present in the CUDA raw batch";
+    return false;
+  }
+  const std::uint16_t* source_samples = nullptr;
+  if (batch.hasContiguousSamples() && batch.hasExternalSampleStorage()) {
+    source_samples = reinterpret_cast<const std::uint16_t*>(batch.contiguous_samples.data());
+  } else if (batch.hasContiguousSamples()) {
+    std::memcpy(slot.host_input, batch.contiguous_samples.data(),
+                batch.contiguous_samples.size() * sizeof(std::int16_t));
+    source_samples = slot.host_input;
   } else {
     for (std::size_t index = 0; index < record_count; ++index) {
-      std::memcpy(impl_->host_input + index * impl_->record_length,
-                  raw_batch.records[index].samples.data(),
+      std::memcpy(slot.host_input + index * impl_->record_length,
+                  batch.records[index].samples.data(),
                   impl_->record_length * sizeof(std::int16_t));
     }
+    source_samples = slot.host_input;
   }
-  if (!impl_->ensurePlan(transform_count, error)) {
+  if (!slot.ensurePlan(impl_->fft_length, transform_count, error)) {
     return false;
   }
 
-  auto cuda_result = cudaMemcpyAsync(impl_->device_input, impl_->host_input,
+  auto result_batch = impl_->result_batch_pool.acquire();
+  result_batch->metadata = batch.metadata;
+  result_batch->records.resize(record_count);
+  for (std::size_t index = 0; index < record_count; ++index) {
+    result_batch->records[index].metadata = batch.records[index].metadata;
+    if (static_cast<int>(index) == selected_record) {
+      result_batch->records[index].samples.assign(batch.records[index].samples.begin(),
+                                                  batch.records[index].samples.end());
+    }
+  }
+
+  slot.input_batch = raw_batch;
+  slot.result_batch = std::move(result_batch);
+  slot.busy = true;
+  struct SubmissionRollback {
+    Impl::Slot* slot = nullptr;
+    bool armed = true;
+    ~SubmissionRollback() {
+      if (!armed || slot == nullptr) {
+        return;
+      }
+      cudaStreamSynchronize(slot->stream);
+      slot->input_batch.reset();
+      slot->result_batch.reset();
+      slot->busy = false;
+    }
+  } rollback{&slot, true};
+
+  auto cuda_result = cudaMemcpyAsync(slot.device_input, source_samples,
                                      record_count * impl_->record_length * sizeof(std::int16_t),
-                                     cudaMemcpyHostToDevice, impl_->stream);
+                                     cudaMemcpyHostToDevice, slot.stream);
   if (cuda_result == cudaSuccess) {
-    cuda_result = cudaMemcpyAsync(impl_->device_positions, impl_->host_positions,
+    cuda_result = cudaMemcpyAsync(slot.device_positions, slot.host_positions,
                                   record_count * sizeof(DeviceRecordPosition),
-                                  cudaMemcpyHostToDevice, impl_->stream);
+                                  cudaMemcpyHostToDevice, slot.stream);
+  }
+  if (cuda_result == cudaSuccess) {
+    cuda_result = cudaEventRecord(slot.input_consumed_event, slot.stream);
   }
   if (cuda_result != cudaSuccess) {
     error = cudaError(cuda_result, "CUDA signal batch H2D");
@@ -580,13 +688,14 @@ bool CudaSignalPipeline::processBatch(const RawFrameBatch& raw_batch,
   }
 
   segmentMeansKernel<<<static_cast<unsigned int>(transform_count), kThreadsPerBlock,
-                       kThreadsPerBlock * sizeof(float), impl_->stream>>>(
-      impl_->device_input, impl_->device_means, static_cast<int>(impl_->record_length),
+                       kThreadsPerBlock * sizeof(float), slot.stream>>>(
+      slot.device_input, slot.device_means, static_cast<int>(impl_->record_length),
       static_cast<int>(impl_->config.chirp_segmentation.up_segment.start_sample),
       static_cast<int>(impl_->config.chirp_segmentation.up_segment.length()),
       static_cast<int>(impl_->config.chirp_segmentation.down_segment.start_sample),
       static_cast<int>(impl_->config.chirp_segmentation.down_segment.length()),
-      impl_->config.processing.dc_removal);
+      impl_->config.processing.dc_removal,
+      static_cast<int>(batch.records.front().metadata.sample_format));
   cuda_result = cudaGetLastError();
   if (cuda_result != cudaSuccess) {
     error = cudaError(cuda_result, "CUDA segment mean kernel");
@@ -596,23 +705,24 @@ bool CudaSignalPipeline::processBatch(const RawFrameBatch& raw_batch,
   const auto fft_input_count = transform_count * impl_->fft_length;
   const auto preprocess_blocks = static_cast<unsigned int>(
       (fft_input_count + kThreadsPerBlock - 1U) / kThreadsPerBlock);
-  preprocessSegmentsKernel<<<preprocess_blocks, kThreadsPerBlock, 0, impl_->stream>>>(
-      impl_->device_input, impl_->device_means, impl_->device_up_window,
-      impl_->device_down_window, impl_->device_fft_input, fft_input_count,
+  preprocessSegmentsKernel<<<preprocess_blocks, kThreadsPerBlock, 0, slot.stream>>>(
+      slot.device_input, slot.device_means, slot.device_up_window,
+      slot.device_down_window, slot.device_fft_input, fft_input_count,
       static_cast<int>(impl_->record_length), static_cast<int>(impl_->fft_length),
       static_cast<int>(impl_->config.chirp_segmentation.up_segment.start_sample),
       static_cast<int>(impl_->config.chirp_segmentation.up_segment.length()),
       static_cast<int>(impl_->config.chirp_segmentation.down_segment.start_sample),
       static_cast<int>(impl_->config.chirp_segmentation.down_segment.length()),
-      impl_->config.chirp_segmentation.polarity == SegmentPolarity::InvertDown);
+      impl_->config.chirp_segmentation.polarity == SegmentPolarity::InvertDown,
+      static_cast<int>(batch.records.front().metadata.sample_format));
   cuda_result = cudaGetLastError();
   if (cuda_result != cudaSuccess) {
     error = cudaError(cuda_result, "CUDA segment preprocessing kernel");
     return false;
   }
 
-  const auto fft_result = cufftExecR2C(impl_->plan, impl_->device_fft_input,
-                                       impl_->device_spectrum);
+  const auto fft_result = cufftExecR2C(slot.plan, slot.device_fft_input,
+                                       slot.device_spectrum);
   if (fft_result != CUFFT_SUCCESS) {
     error = cufftError(fft_result, "cufftExecR2C full signal batch");
     return false;
@@ -620,8 +730,8 @@ bool CudaSignalPipeline::processBatch(const RawFrameBatch& raw_batch,
 
   const auto peak_shared_bytes = kThreadsPerBlock * (sizeof(float) + sizeof(int));
   detectPeaksKernel<<<static_cast<unsigned int>(transform_count), kThreadsPerBlock,
-                      peak_shared_bytes, impl_->stream>>>(
-      impl_->device_spectrum, impl_->device_peaks, static_cast<int>(impl_->spectrum_length),
+                      peak_shared_bytes, slot.stream>>>(
+      slot.device_spectrum, slot.device_peaks, static_cast<int>(impl_->spectrum_length),
       static_cast<int>(transform_count),
       static_cast<int>(impl_->config.processing.peak_search_start_bin),
       static_cast<int>(impl_->config.processing.peak_search_end_bin),
@@ -637,8 +747,8 @@ bool CudaSignalPipeline::processBatch(const RawFrameBatch& raw_batch,
     const auto selected_count = impl_->spectrum_length * 2U;
     const auto selected_blocks = static_cast<unsigned int>(
         (selected_count + kThreadsPerBlock - 1U) / kThreadsPerBlock);
-    selectedMagnitudeKernel<<<selected_blocks, kThreadsPerBlock, 0, impl_->stream>>>(
-        impl_->device_spectrum, impl_->device_selected_magnitude,
+    selectedMagnitudeKernel<<<selected_blocks, kThreadsPerBlock, 0, slot.stream>>>(
+        slot.device_spectrum, slot.device_selected_magnitude,
         static_cast<int>(impl_->spectrum_length), selected_record,
         impl_->up_window_sum, impl_->down_window_sum);
     cuda_result = cudaGetLastError();
@@ -650,8 +760,8 @@ bool CudaSignalPipeline::processBatch(const RawFrameBatch& raw_batch,
 
   const auto measurement_blocks = static_cast<unsigned int>(
       (record_count + kThreadsPerBlock - 1U) / kThreadsPerBlock);
-  measurementsKernel<<<measurement_blocks, kThreadsPerBlock, 0, impl_->stream>>>(
-      impl_->device_peaks, impl_->device_positions, impl_->device_measurements,
+  measurementsKernel<<<measurement_blocks, kThreadsPerBlock, 0, slot.stream>>>(
+      slot.device_peaks, slot.device_positions, slot.device_measurements,
       static_cast<int>(record_count), static_cast<int>(impl_->fft_length),
       impl_->config.laser.sweep_bandwidth_hz, impl_->config.laser.sweep_rate_hz,
       impl_->config.calibration.velocity_wavelength_nm,
@@ -664,50 +774,136 @@ bool CudaSignalPipeline::processBatch(const RawFrameBatch& raw_batch,
     return false;
   }
 
-  cuda_result = cudaMemcpyAsync(impl_->host_peaks, impl_->device_peaks,
+  cuda_result = cudaMemcpyAsync(slot.host_peaks, slot.device_peaks,
                                 transform_count * sizeof(DevicePeakResult),
-                                cudaMemcpyDeviceToHost, impl_->stream);
+                                cudaMemcpyDeviceToHost, slot.stream);
   if (cuda_result == cudaSuccess) {
-    cuda_result = cudaMemcpyAsync(impl_->host_measurements, impl_->device_measurements,
+    cuda_result = cudaMemcpyAsync(slot.host_measurements, slot.device_measurements,
                                   record_count * sizeof(DeviceMeasurementResult),
-                                  cudaMemcpyDeviceToHost, impl_->stream);
+                                  cudaMemcpyDeviceToHost, slot.stream);
   }
   if (cuda_result == cudaSuccess && selected_record >= 0) {
-    cuda_result = cudaMemcpyAsync(impl_->host_selected_magnitude,
-                                  impl_->device_selected_magnitude,
+    cuda_result = cudaMemcpyAsync(slot.host_selected_magnitude,
+                                  slot.device_selected_magnitude,
                                   impl_->spectrum_length * 2U * sizeof(float),
-                                  cudaMemcpyDeviceToHost, impl_->stream);
+                                  cudaMemcpyDeviceToHost, slot.stream);
   }
   if (cuda_result == cudaSuccess) {
-    cuda_result = cudaStreamSynchronize(impl_->stream);
+    cuda_result = cudaEventRecord(slot.completion_event, slot.stream);
   }
   if (cuda_result != cudaSuccess) {
-    error = cudaError(cuda_result, "CUDA signal result D2H");
+    error = cudaError(cuda_result, "CUDA signal result enqueue");
     return false;
   }
 
-  processed_batch.resize(record_count);
-  for (std::size_t index = 0; index < record_count; ++index) {
-    const auto& raw = raw_batch.records[index];
+  slot.started = started;
+  slot.processing_config_revision = impl_->processing_config_revision;
+  slot.record_count = record_count;
+  slot.selected_record = selected_record;
+  slot.sample_format = batch.records.front().metadata.sample_format;
+  impl_->submitted_order.push_back(slot_index);
+  rollback.armed = false;
+  error.clear();
+  return true;
+}
+
+bool CudaSignalPipeline::releaseCompletedInputs(bool wait_for_oldest,
+                                                std::string& error) {
+  if (!impl_->configured) {
+    error = "Configure the CUDA signal pipeline before releasing DMA inputs";
+    return false;
+  }
+  bool wait_consumed = false;
+  for (const auto slot_index : impl_->submitted_order) {
+    auto& slot = impl_->slots[slot_index];
+    if (!slot.input_batch) {
+      continue;
+    }
+    const bool wait_for_this_slot = wait_for_oldest && !wait_consumed;
+    wait_consumed = wait_consumed || wait_for_this_slot;
+    const auto event_result = wait_for_this_slot
+        ? cudaEventSynchronize(slot.input_consumed_event)
+        : cudaEventQuery(slot.input_consumed_event);
+    if (!wait_for_this_slot && event_result == cudaErrorNotReady) {
+      continue;
+    }
+    if (event_result != cudaSuccess) {
+      error = cudaError(event_result, "CUDA H2D completion event");
+      return false;
+    }
+    slot.input_batch.reset();
+  }
+  error.clear();
+  return true;
+}
+
+bool CudaSignalPipeline::collectNext(bool wait,
+                                     RawFrameBatchPtr& raw_batch,
+                                     std::vector<ProcessedFrame>& processed_batch,
+                                     bool& collected,
+                                     std::string& error) {
+  raw_batch.reset();
+  processed_batch.clear();
+  collected = false;
+  if (!impl_->configured) {
+    error = "Configure the CUDA signal pipeline before collecting a batch";
+    return false;
+  }
+  if (impl_->submitted_order.empty()) {
+    error.clear();
+    return true;
+  }
+
+  const auto slot_index = impl_->submitted_order.front();
+  auto& slot = impl_->slots[slot_index];
+  const auto event_result = wait
+      ? cudaEventSynchronize(slot.completion_event)
+      : cudaEventQuery(slot.completion_event);
+  if (!wait && event_result == cudaErrorNotReady) {
+    error.clear();
+    return true;
+  }
+  if (event_result != cudaSuccess) {
+    cudaStreamSynchronize(slot.stream);
+    impl_->submitted_order.pop_front();
+    slot.input_batch.reset();
+    slot.result_batch.reset();
+    slot.busy = false;
+    error = cudaError(event_result, "CUDA signal completion event");
+    return false;
+  }
+  slot.input_batch.reset();
+  if (!slot.busy || !slot.result_batch ||
+      slot.record_count != slot.result_batch->records.size()) {
+    impl_->submitted_order.pop_front();
+    slot.result_batch.reset();
+    slot.busy = false;
+    error = "CUDA completed slot has inconsistent batch ownership";
+    return false;
+  }
+
+  processed_batch.resize(slot.record_count);
+  const auto assign_peak = [](const DevicePeakResult& source, PeakMeasurement& target) {
+    if (source.valid != 0) {
+      target.discrete_bin = source.index;
+      target.peak_bin = static_cast<float>(source.index);
+      target.magnitude_db = source.magnitude_db;
+      target.state = PeakTrackState::Detected;
+      target.valid = true;
+    }
+  };
+  for (std::size_t index = 0; index < slot.record_count; ++index) {
+    const auto& raw = slot.result_batch->records[index];
     auto& processed = processed_batch[index];
     processed = {};
     processed.frame_id = raw.metadata.frame_id;
     processed.source_timestamp_ns = raw.metadata.host_timestamp_ns;
     processed.config_revision = raw.metadata.config_revision;
-    processed.processing_config_revision = impl_->processing_config_revision;
+    processed.processing_config_revision = slot.processing_config_revision;
     processed.scan_position = raw.metadata.scan_position;
-    const auto assign_peak = [](const DevicePeakResult& source, PeakMeasurement& target) {
-      if (source.valid != 0) {
-        target.discrete_bin = source.index;
-        target.peak_bin = static_cast<float>(source.index);
-        target.magnitude_db = source.magnitude_db;
-        target.state = PeakTrackState::Detected;
-        target.valid = true;
-      }
-    };
-    assign_peak(impl_->host_peaks[index * 2U], processed.up_peak);
-    assign_peak(impl_->host_peaks[index * 2U + 1U], processed.down_peak);
-    const auto& measurement = impl_->host_measurements[index];
+    assign_peak(slot.host_peaks[index * 2U], processed.up_peak);
+    assign_peak(slot.host_peaks[index * 2U + 1U], processed.down_peak);
+    const auto& measurement = slot.host_measurements[index];
     if (measurement.measurement_valid != 0) {
       processed.distance_m = measurement.distance_m;
       processed.velocity_mps = measurement.velocity_mps;
@@ -721,21 +917,53 @@ bool CudaSignalPipeline::processBatch(const RawFrameBatch& raw_batch,
       processed.point.velocity = measurement.velocity_mps;
       processed.point.valid = true;
     }
-    if (static_cast<int>(index) == selected_record) {
-      processed.up_fft_magnitude_db.assign(impl_->host_selected_magnitude,
-                                           impl_->host_selected_magnitude + impl_->spectrum_length);
+    if (static_cast<int>(index) == slot.selected_record) {
+      processed.up_fft_magnitude_db.assign(slot.host_selected_magnitude,
+                                           slot.host_selected_magnitude + impl_->spectrum_length);
       processed.down_fft_magnitude_db.assign(
-          impl_->host_selected_magnitude + impl_->spectrum_length,
-          impl_->host_selected_magnitude + impl_->spectrum_length * 2U);
+          slot.host_selected_magnitude + impl_->spectrum_length,
+          slot.host_selected_magnitude + impl_->spectrum_length * 2U);
     }
-    processed.processing_note = "cuFFT batch";
+    processed.processing_note = "cuFFT async batch";
   }
 
   const auto batch_latency_ms = std::chrono::duration<double, std::milli>(
-      std::chrono::steady_clock::now() - started).count();
-  const auto average_record_latency_ms = batch_latency_ms / static_cast<double>(record_count);
+      std::chrono::steady_clock::now() - slot.started).count();
+  const auto average_record_latency_ms = batch_latency_ms /
+      static_cast<double>(slot.record_count);
   for (auto& processed : processed_batch) {
     processed.processing_latency_ms = average_record_latency_ms;
+  }
+
+  raw_batch = std::move(slot.result_batch);
+  slot.record_count = 0U;
+  slot.selected_record = -1;
+  slot.busy = false;
+  impl_->submitted_order.pop_front();
+  collected = true;
+  error.clear();
+  return true;
+}
+
+bool CudaSignalPipeline::processBatch(const RawFrameBatch& raw_batch,
+                                      std::uint32_t selected_record_index,
+                                      std::vector<ProcessedFrame>& processed_batch,
+                                      std::string& error) {
+  if (inFlightCount() != 0U) {
+    error = "Synchronous CUDA processing requires an empty asynchronous pipeline";
+    return false;
+  }
+  RawFrameBatchPtr borrowed(&raw_batch, [](const RawFrameBatch*) {});
+  if (!submitBatch(borrowed, selected_record_index, error)) {
+    return false;
+  }
+  RawFrameBatchPtr completed_batch;
+  bool collected = false;
+  if (!collectNext(true, completed_batch, processed_batch, collected, error) || !collected) {
+    if (error.empty()) {
+      error = "Synchronous CUDA processing did not collect its submitted batch";
+    }
+    return false;
   }
   error.clear();
   return true;

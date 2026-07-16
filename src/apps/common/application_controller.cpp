@@ -10,6 +10,7 @@
 #include "processing/fft_backends.h"
 #include "processing/processing_service.h"
 #include "storage/async_storage_service.h"
+#include "storage/binary_storage.h"
 
 #include <QDateTime>
 #include <QMetaObject>
@@ -135,6 +136,20 @@ class RuntimeWorker final : public QObject {
       options.session.start_timestamp_utc_ns = utcNowNs();
       options.session.config_snapshot_json = ConfigProfileCodec::toJsonSnapshot(config_);
       options.raw_stream.channel = config_.digitizer.channel;
+      options.raw_stream.sample_format = SampleFormat::SignedInt16;
+      if (active_source_ == AcquisitionSource::Alazar) {
+        options.raw_stream.sample_format = SampleFormat::UnsignedOffsetBinary12LeftAligned;
+      } else if (active_source_ == AcquisitionSource::Replay) {
+        RawReplayReader descriptor_reader;
+        std::string descriptor_error;
+        if (!descriptor_reader.open(std::filesystem::path(config_.runtime.replay_file),
+                                    descriptor_error)) {
+          storage_.reset();
+          fail("Start", qString(descriptor_error));
+          return;
+        }
+        options.raw_stream.sample_format = descriptor_reader.streamDescriptor().sample_format;
+      }
       options.raw_stream.sample_rate_hz = config_.digitizer.sample_rate_hz;
       options.raw_stream.record_length = config_.digitizer.sample_point;
       options.raw_stream.records_per_buffer = config_.digitizer.records_per_buffer;

@@ -203,7 +203,7 @@ Phase 7.3은 batch API 구현만으로 완료하지 않는다. 7.3A부터 7.3D�
 - Each FFTW chunk is split across up to 16 independent plan/workspace lanes. OpenMP parallelizes preprocessing, lane execution, peak search, and geometry without changing the common FFTW/CUDA algorithm contract.
 - Only the selected record retains UP/DOWN magnitude spectra for Time Domain and FFT UI publication. All 998 records still produce independent peak and XYZIV results.
 - Automated parity tests compare batch results against the original single-record FFTW path for integer bins, dBFS magnitude, distance, velocity, XYZIV, and below-threshold `NaN` behavior. The 998-record execution-count test verifies exactly 16 FFT batch calls and 998 outputs.
-- The Release benchmark performs three warm-up batches, resets telemetry, and then measures 32 complete batches. Across four independent runs, average `SignalProcessor::processBatch` time was 2.46-3.11 ms and end-to-end p50 was 2.41-2.98 ms.
+- Historical 2026-07-15 measurements used three warm-up batches before 32 complete batches. Across four independent runs, average `SignalProcessor::processBatch` time was 2.46-3.11 ms and end-to-end p50 was 2.41-2.98 ms. The 2026-07-16 no-warmup procedure below supersedes this benchmark method.
 - Short-run maximum end-to-end latency varied from 4.46 to 8.29 ms, with 0-2 deadline misses. Phase 7.3B is complete, but these measurements are not a Phase 7.3D pass because maximum latency is not yet deterministic and the required 10-minute run has not been completed.
 - Windows MSVC Release and CTest passed 6/6. The packaged EXE smoke test passed with SHA-256 `D1D6A6E75EC5C41DADADE1C1C37512B829F3286529EAD7C0061803C42C02AEB4`.
 
@@ -233,7 +233,7 @@ Phase 7.3은 batch API 구현만으로 완료하지 않는다. 7.3A부터 7.3D�
 - `processing/cuda/cuda_signal_pipeline.cu` now owns persistent pinned host staging, persistent device input/window/FFT/peak/measurement buffers, one cuFFT plan-many batch, and one non-blocking stream. Production CUDA batch processing no longer routes full spectra back through the CPU FFT path.
 - Per DMA batch, the GPU performs DC removal, UP/DOWN extraction, down-polarity handling, windowing, 1,996 length-2048 FFTs, strict peak search, distance, velocity, calibration, and XYZIV. Host transfer returns 1,996 compact peaks, 998 measurements, and only the selected UP/DOWN spectra.
 - FFTW/CUDA full-batch tests require exact validity and integer peak bins, 0.05 dB agreement for signal/peak magnitudes, 2 dB agreement for the numerical floor below -100 dBFS, matching distance/velocity/XYZIV, and identical threshold-rejected `NaN` behavior.
-- The local RTX qualification test performs three warm-up batches and 32 measured 4992 x 998 batches. All 31,936 measured records produced valid XYZIV outputs, but observed p50 remained roughly 6-7 ms in the contention-free condition-wait benchmark, so Phase 7.3D does not pass.
+- The historical 2026-07-15 local RTX qualification used three warm-up batches and 32 measured 4992 x 998 batches. All 31,936 measured records produced valid XYZIV outputs, but observed p50 remained roughly 6-7 ms. The current no-warmup result is recorded below and Phase 7.3D still does not pass.
 - Nsight Systems measured only about 0.063 ms of GPU kernels per batch. Full-period H2D averaged about 2.0 ms and reached about 3.9 ms; WDDM submission/synchronization and gathering 998 separate host sample vectors dominate the remaining latency.
 - Inter-batch overlap is intentionally deferred to the contiguous DMA-block ownership work because the current synchronous per-record `RawFrame` container must first be gathered into pinned memory. No per-record or per-segment CUDA synchronization remains; there is one synchronization at batch result completion.
 - Windows MSVC Release and CTest passed 7/7, including FFTW/CUDA full-result parity and the strict CUDA qualification workload. The packaged EXE smoke test passed with SHA-256 `2C03B0FDE71B703CFFCBC86195AFDEA6A005A343ABB0AE91AD06F9252FE824B2`.
@@ -256,7 +256,7 @@ Disk write, UDP transmission, and Qt paint time은 이 5 ms signal-processing ga
 
 - laser 200 kHz, digitizer 1 GS/s, record 4992 samples, records/buffer 998 조건을 사용한다.
 - B-scan 200 Hz deadline은 DMA buffer당 `5.00 ms`다.
-- warm-up 이후 최소 10분 동안 어떤 batch도 end-to-end processing `5.00 ms`를 초과하지 않는다.
+- normal configure/start 직후 첫 batch부터 최소 10분 동안 어떤 batch도 end-to-end processing `5.00 ms`를 초과하지 않는다. 별도 warm-up batch는 사용하지 않는다.
 - p50, p95, p99, maximum latency와 deadline miss count를 모두 기록하며 평균값만으로 합격시키지 않는다.
 - processing queue가 지속적으로 증가하지 않고 DMA drop, processing drop, stale result가 모두 0이다.
 - 각 batch가 정확히 998개의 결과를 생성하고 다음 batch 도착 전에 line 결과가 완성된다.
@@ -275,6 +275,14 @@ Disk write, UDP transmission, and Qt paint time은 이 5 ms signal-processing ga
 - The probe returns success only for payload/result integrity and a valid clean-duration or overflow-to-STOP route. It prints `HARD_PASS` or `HARD_FAIL` separately so a functional test cannot be mistaken for real-time acceptance.
 - `fmcw_phase7_realtime_acceptance.exe` is a separate option-free executable with a fixed 600-second run per backend. It returns failure for any deadline miss, drop, growing queue, incomplete 998-record line, unavailable CUDA runtime, or backend failure. It is intentionally excluded from normal CTest.
 - The 20-minute combined FFTW/CUDA acceptance was not run. Current Windows results fail the 5 ms gate, and Jetson evidence is unavailable, so Phase 7.3D and overall Phase 7.3 remain blocked rather than complete.
+
+#### Single-Slot ATS DMA Event Update (2026-07-16)
+
+- This update supersedes the earlier warm-up-based benchmark procedure. Qualification now measures the first submitted batch after normal configure/start; no dummy processing batch is part of production or acceptance.
+- The CUDA processing capacity remains one slot. H2D completion and full result completion use separate CUDA events, allowing ATS DMA repost after H2D while processing and compact D2H continue.
+- Native ATS9371 12-bit left-aligned samples travel from the contiguous SDK DMA allocation to the GPU without a CPU-wide conversion or duplicate whole-buffer staging copy. Signed simulator/replay input remains supported through the same explicit sample-format contract.
+- The strict lifetime test verifies early DMA-owner release and later full result collection. The direct no-warmup CUDA benchmark still measures about 10 ms p50 for 4992 x 998, so the requested event and DMA ownership changes are complete but the 5 ms performance gate remains open.
+- Release CTest passes 9/9. The refreshed packaged GUI passes its hidden smoke test and matches the Release executable at SHA-256 `4FCE36B2FFABF7E4A27080675CB2290F38C4C258965613556CA8EE985469A4C6`.
 
 ## 8. Phase 7.4: High-Speed Raw Storage
 

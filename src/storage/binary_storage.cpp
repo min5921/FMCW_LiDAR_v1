@@ -195,7 +195,9 @@ bool readRawStreamHeader(std::istream& stream, RawStreamDescriptor& descriptor) 
   descriptor.byte_order = static_cast<ByteOrder>(byte_order);
   const bool supported_version = descriptor.format_version == kRawFrameFormatVersion ||
       descriptor.format_version == kRawFrameBatchFormatVersion;
-  return supported_version && descriptor.sample_format == SampleFormat::SignedInt16 &&
+  const bool supported_sample_format = descriptor.sample_format == SampleFormat::SignedInt16 ||
+      descriptor.sample_format == SampleFormat::UnsignedOffsetBinary12LeftAligned;
+  return supported_version && supported_sample_format &&
       descriptor.byte_order == ByteOrder::LittleEndian && descriptor.record_length > 0U;
 }
 
@@ -292,7 +294,8 @@ bool writeRawBlock(std::ostream& stream, const RawFrameBatch& batch,
     if (batch.records[record_index].samples.size() != record_length ||
         metadata.record_index_in_buffer != record_index ||
         metadata.records_in_buffer != record_count || metadata.record_length != record_length ||
-        metadata.channel != common.channel || metadata.sample_rate_hz != common.sample_rate_hz ||
+        metadata.channel != common.channel || metadata.sample_format != common.sample_format ||
+        metadata.sample_rate_hz != common.sample_rate_hz ||
         metadata.up_segment.start_sample != common.up_segment.start_sample ||
         metadata.up_segment.end_sample_exclusive != common.up_segment.end_sample_exclusive ||
         metadata.down_segment.start_sample != common.down_segment.start_sample ||
@@ -561,6 +564,7 @@ bool BinaryRawFrameWriter::writeBatch(const RawFrameBatch& batch, std::string& e
       impl_->options.raw_stream.format_version != kRawFrameBatchFormatVersion ||
       batch.records.empty() || batch.metadata.record_length != impl_->options.raw_stream.record_length ||
       batch.records.front().metadata.channel != impl_->options.raw_stream.channel ||
+      batch.records.front().metadata.sample_format != impl_->options.raw_stream.sample_format ||
       batch.records.front().metadata.sample_rate_hz != impl_->options.raw_stream.sample_rate_hz) {
     error = "Raw DMA block does not match the open v2 stream descriptor";
     return false;
@@ -928,6 +932,10 @@ ReplayReadResult RawReplayReader::readNext(RawFrame& frame, std::string& error) 
       !readScalar(impl_->stream, metadata.down_segment.start_sample) ||
       !readScalar(impl_->stream, metadata.down_segment.end_sample_exclusive) ||
       !readScalar(impl_->stream, sample_count) || sample_count != metadata.record_length ||
+      (sample_format != static_cast<std::uint32_t>(SampleFormat::SignedInt16) &&
+       sample_format != static_cast<std::uint32_t>(SampleFormat::UnsignedOffsetBinary12LeftAligned)) ||
+      static_cast<SampleFormat>(sample_format) != impl_->descriptor.sample_format ||
+      byte_order != static_cast<std::uint32_t>(ByteOrder::LittleEndian) ||
       sample_count > 100000000U) {
     error = "Raw replay record header is corrupt";
     return ReplayReadResult::Error;
@@ -1020,7 +1028,9 @@ ReplayReadResult RawReplayReader::readNextBatch(RawFrameBatch& batch, std::strin
       !readScalar(impl_->stream, down_segment.end_sample_exclusive) ||
       block_version != kRawFrameBatchFormatVersion || record_count == 0U ||
       record_count > 1000000U || record_length == 0U || record_length > 100000000U ||
-      sample_format != static_cast<std::uint32_t>(SampleFormat::SignedInt16) ||
+      (sample_format != static_cast<std::uint32_t>(SampleFormat::SignedInt16) &&
+       sample_format != static_cast<std::uint32_t>(SampleFormat::UnsignedOffsetBinary12LeftAligned)) ||
+      static_cast<SampleFormat>(sample_format) != impl_->descriptor.sample_format ||
       byte_order != static_cast<std::uint32_t>(ByteOrder::LittleEndian)) {
     error = "Raw v2 DMA block header is corrupt";
     return ReplayReadResult::Error;
