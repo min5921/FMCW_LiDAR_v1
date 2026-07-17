@@ -295,6 +295,14 @@ Disk write, UDP transmission, and Qt paint time은 이 5 ms signal-processing ga
 - The 5 ms requirement remains unchanged. Phase 7.3D is still pending because Windows scheduling tail and actual ATS9371 hardware behavior require separate acceptance evidence; no interpolation, dropped result, extra CUDA slot, or relaxed deadline was used to obtain the improved numbers.
 - The refreshed packaged GUI passed its hidden smoke test. The Release and packaged executables both have SHA-256 `5BD1213A5A51DA5A39BFEB217D64262B428DE6140A3CA1E67DB6F45C12E48405`.
 
+#### Post-Reboot Idle-Machine Acceptance Rerun (2026-07-17)
+
+- The rerun started with the RTX 5080 at P8, 2-4% GPU utilization, and 716-862 MiB allocated. Ten direct 32-batch runs had zero misses: FFTW p50 was 1.530-1.819 ms with a 4.954 ms maximum, and CUDA p50 was 0.490-0.543 ms with a 1.122 ms maximum.
+- Ten two-second strict probes produced FFTW HARD_PASS in 9/10 runs and CUDA HARD_PASS in 10/10 runs. All runs kept queue high-water at 1, DMA drops and rejections at zero, and exact 998-record XYZIV accounting. The single FFTW miss reached 5.193 ms total.
+- The fixed 600-second rerun processed 120,241 batches and 120,000,518 valid XYZIV records per backend with queue high-water 1 and zero drops or rejections. FFTW measured p50 2.087 ms, p95 2.638 ms, p99 2.930 ms, maximum 7.481 ms, and 5 misses. CUDA measured p50 1.005 ms, p95 2.256 ms, p99 2.517 ms, maximum 6.476 ms, and 8 misses.
+- Maximum signal-processing latency stayed below the gate for both backends: 4.197 ms for FFTW and 4.640 ms for CUDA. Maximum simulator ownership/materialization latency reached 5.873 ms and 5.795 ms respectively, identifying the remaining synthetic-test tail before the FFT backend rather than sustained FFT throughput.
+- Rebooting reduced the CUDA long-run miss count from 17 to 8 and its maximum from 8.497 ms to 6.476 ms, but did not produce zero misses. Phase 7.3D therefore remains pending, and the same timestamps must be collected with the ATS9371 DMA path before changing the processing pipeline again.
+
 ## 8. Phase 7.4: High-Speed Raw Storage
 
 ### Scope

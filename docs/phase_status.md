@@ -302,3 +302,11 @@ Windows latency optimization and sustained acceptance (2026-07-17):
 - CPU-set pinning was evaluated and removed after it worsened both ownership and signal latency on the local Core Ultra 9 285K. The retained policy raises only critical acquisition/processing threads and OpenMP workers; the process and Qt UI remain at normal priority.
 - Release CTest remains 9/9. Actual ATS9371 trigger/DMA hardware and Jetson were not connected, so Phase 7.3D is not marked complete.
 - The refreshed packaged GUI passed its hidden smoke test. Release and package SHA-256 both equal `5BD1213A5A51DA5A39BFEB217D64262B428DE6140A3CA1E67DB6F45C12E48405`.
+
+Post-reboot idle-machine acceptance rerun (2026-07-17):
+
+- Ten direct runs completed with zero misses. FFTW p50 was 1.530-1.819 ms with 4.954 ms maximum; CUDA p50 was 0.490-0.543 ms with 1.122 ms maximum.
+- Ten short strict runs gave FFTW HARD_PASS 9/10 and CUDA HARD_PASS 10/10. Every run preserved all 998-record results with queue high-water 1 and zero DMA drops or rejected batches.
+- The 600-second-per-backend rerun processed 120,241 batches and 120,000,518 valid XYZIV records per backend. FFTW had 5 misses and 7.481 ms maximum; CUDA had 8 misses and 6.476 ms maximum. Functional and sustained-throughput checks passed, but both hard gates failed.
+- Signal-processing maxima stayed below 5 ms at 4.197 ms for FFTW and 4.640 ms for CUDA. The maxima above the deadline occurred in simulator ownership/materialization, which reached 5.873 ms for FFTW and 5.795 ms for CUDA.
+- Rebooting removed the former external training load and improved the CUDA long-run tail, but did not eliminate Windows/simulator outliers. Phase 7.3D remains pending until the ATS9371 path provides matching completion-to-ownership telemetry.
