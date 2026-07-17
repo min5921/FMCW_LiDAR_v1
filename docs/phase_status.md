@@ -310,3 +310,12 @@ Post-reboot idle-machine acceptance rerun (2026-07-17):
 - The 600-second-per-backend rerun processed 120,241 batches and 120,000,518 valid XYZIV records per backend. FFTW had 5 misses and 7.481 ms maximum; CUDA had 8 misses and 6.476 ms maximum. Functional and sustained-throughput checks passed, but both hard gates failed.
 - Signal-processing maxima stayed below 5 ms at 4.197 ms for FFTW and 4.640 ms for CUDA. The maxima above the deadline occurred in simulator ownership/materialization, which reached 5.873 ms for FFTW and 5.795 ms for CUDA.
 - Rebooting removed the former external training load and improved the CUDA long-run tail, but did not eliminate Windows/simulator outliers. Phase 7.3D remains pending until the ATS9371 path provides matching completion-to-ownership telemetry.
+
+Ownership-stage instrumentation and descriptor reuse (2026-07-17):
+
+- Runtime telemetry now reports arithmetic mean and maximum latency for acquisition wakeup, digitizer materialization, session validation, enqueue dispatch, queue wait, and processing compute. The timestamps are memory-only and preserve the raw v2 storage contract.
+- Fake and ATS adapters reuse prebuilt metadata templates for all 998 records. Release CTest passed 9/9; ten direct runs had zero misses with FFTW mean 1.648-1.922 ms and CUDA mean 0.517-0.611 ms.
+- Ten strict two-second runs produced FFTW HARD_PASS 9/10 and CUDA HARD_PASS 10/10. Descriptor materialization averaged 0.026-0.040 ms and session validation about 0.004 ms, excluding both from the primary bottleneck set.
+- The 600-second run processed 120,241 FFTW and 120,242 CUDA batches with exact XYZIV accounting, zero drops/rejections, and queue high-water 1/2. FFTW had 6 misses and 6.944 ms maximum; CUDA had 38 misses and 8.128 ms maximum.
+- FFTW's largest remaining tail was compute at 6.372 ms. CUDA's largest was simulator acquisition wakeup at 6.203 ms; materialization stayed below 0.334 ms. Sustained 200 Hz throughput passes, but the 5 ms hard gate and ATS9371 hardware acceptance remain pending.
+- The refreshed packaged GUI passed `--smoke-test`; Release and package SHA-256 are `19C0938C8998500EA3788A33B0B0C1E7DCA0A90F1B927712472136EFAE47F81C`.

@@ -164,12 +164,29 @@ QualificationResult runQualification(fmcw::FftBackendKind backend_kind) {
             << "/" << processing_status.queue_capacity
             << " dma_drops=" << digitizer_status.dma_buffer_drops
             << " rejected_batches=" << rejected_batches.load()
+            << " mean_ms=" << processing_status.average_batch_latency_ms
+            << " mean_ownership_ms=" << processing_status.average_latency.ownership_ms
+            << " mean_signal_ms=" << processing_status.average_latency.signal_ms
+            << " mean_wakeup_ms=" << processing_status.average_latency.acquisition_wakeup_ms
+            << " mean_materialize_ms="
+            << processing_status.average_latency.digitizer_materialization_ms
+            << " mean_session_ms=" << processing_status.average_latency.session_validation_ms
+            << " mean_dispatch_ms=" << processing_status.average_latency.enqueue_dispatch_ms
+            << " mean_queue_ms=" << processing_status.average_latency.queue_wait_ms
+            << " mean_compute_ms=" << processing_status.average_latency.compute_ms
             << " p50_ms=" << processing_status.batch_latency_p50_ms
             << " p95_ms=" << processing_status.batch_latency_p95_ms
             << " p99_ms=" << processing_status.batch_latency_p99_ms
             << " max_ms=" << processing_status.maximum_batch_latency_ms
             << " max_ownership_ms=" << processing_status.maximum_ownership_copy_latency_ms
             << " max_signal_ms=" << processing_status.maximum_signal_processing_latency_ms
+            << " max_wakeup_ms=" << processing_status.maximum_latency.acquisition_wakeup_ms
+            << " max_materialize_ms="
+            << processing_status.maximum_latency.digitizer_materialization_ms
+            << " max_session_ms=" << processing_status.maximum_latency.session_validation_ms
+            << " max_dispatch_ms=" << processing_status.maximum_latency.enqueue_dispatch_ms
+            << " max_queue_ms=" << processing_status.maximum_latency.queue_wait_ms
+            << " max_compute_ms=" << processing_status.maximum_latency.compute_ms
             << " deadline_misses=" << processing_status.batch_deadline_misses
             << " stop_reason=\"" << acquisition_status.stop_reason << "\"";
   if (!session_stop_error.empty()) {

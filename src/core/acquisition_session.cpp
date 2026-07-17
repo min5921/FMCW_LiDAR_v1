@@ -221,18 +221,20 @@ FrameWaitResult AcquisitionSession::waitForBatch(RawFrameBatchPtr& batch,
 
   const auto record_count = static_cast<std::uint32_t>(mutable_batch->records.size());
   const auto edfa_status = edfa_.status();
+  const auto config_revision = config_revision_.load();
   for (std::uint32_t index = 0; index < record_count; ++index) {
     auto& frame = mutable_batch->records[index];
     if (frame.metadata.dma_buffer_sequence != mutable_batch->metadata.sequence ||
         frame.metadata.record_index_in_buffer != index ||
         frame.metadata.records_in_buffer != record_count ||
-        !validateAndStampFrame(config_, config_revision_.load(), edfa_status, frame, error)) {
+        !validateAndStampFrame(config_, config_revision, edfa_status, frame, error)) {
       if (error.empty()) {
         error = "Digitizer DMA batch record metadata is inconsistent";
       }
       return FrameWaitResult::Error;
     }
   }
+  mutable_batch->metadata.session_ready_timestamp_ns = nowNs();
   batch = std::move(mutable_batch);
   error.clear();
   return FrameWaitResult::FrameReady;

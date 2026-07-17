@@ -61,6 +61,7 @@ struct RuntimeStatus {
   bool storage_failed = false;
   double processing_latency_ms = 0.0;
   double processing_batch_latency_ms = 0.0;
+  double processing_batch_average_ms = 0.0;
   double processing_copy_latency_ms = 0.0;
   double processing_signal_latency_ms = 0.0;
   double processing_batch_p50_ms = 0.0;

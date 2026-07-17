@@ -55,6 +55,7 @@ class FakeDigitizer final : public IDigitizer {
   void producerLoop();
   void stopProducer();
   void buildSignalTemplates();
+  void buildRecordMetadataTemplates();
   void buildDmaRing();
   void fillFrame(RawFrame& frame, std::uint64_t frame_id, std::uint64_t batch_sequence,
                  std::uint32_t record_index, std::uint32_t records_in_batch,
@@ -66,6 +67,7 @@ class FakeDigitizer final : public IDigitizer {
   SystemConfig config_;
   DigitizerTelemetry telemetry_;
   std::vector<std::vector<std::int16_t>> signal_templates_;
+  std::vector<RawFrameMetadata> record_metadata_templates_;
   std::vector<DmaSlot> dma_slots_;
   std::deque<std::uint32_t> completed_dma_slots_;
   std::thread producer_thread_;

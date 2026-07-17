@@ -148,6 +148,7 @@ struct AlazarDigitizer::Impl {
   HANDLE board = nullptr;
   U8 bits_per_sample = 0;
   std::vector<std::shared_ptr<AlazarDmaBuffer>> buffers;
+  std::vector<RawFrameMetadata> record_metadata_templates;
   std::deque<U32> posted_indices;
   std::shared_ptr<AlazarDmaLeaseState> lease_state;
   U32 bytes_per_buffer = 0;
@@ -268,6 +269,23 @@ bool AlazarDigitizer::start(std::string& error) {
   releaseBuffers();
   impl_->records_per_buffer = config_.digitizer.acquisition_mode == AcquisitionMode::Finite ?
       1U : config_.digitizer.records_per_buffer;
+  impl_->record_metadata_templates.assign(impl_->records_per_buffer, {});
+  for (U32 record_index = 0U; record_index < impl_->records_per_buffer; ++record_index) {
+    auto& metadata = impl_->record_metadata_templates[record_index];
+    metadata.frame_kind = FrameKind::FullChirpPeriod;
+    metadata.record_index_in_buffer = record_index;
+    metadata.records_in_buffer = impl_->records_per_buffer;
+    metadata.trigger.valid = true;
+    metadata.channel = config_.digitizer.channel;
+    metadata.sample_format = SampleFormat::UnsignedOffsetBinary12LeftAligned;
+    metadata.byte_order = ByteOrder::LittleEndian;
+    metadata.sample_rate_hz = config_.digitizer.sample_rate_hz;
+    metadata.record_length = config_.digitizer.sample_point;
+    metadata.pre_trigger_samples = config_.digitizer.pre_trigger_samples;
+    metadata.post_trigger_samples = config_.digitizer.post_trigger_samples;
+    metadata.up_segment = config_.chirp_segmentation.up_segment;
+    metadata.down_segment = config_.chirp_segmentation.down_segment;
+  }
   const std::uint64_t bytes = static_cast<std::uint64_t>(config_.digitizer.sample_point) *
                               impl_->records_per_buffer * sizeof(U16);
   if (bytes == 0 || bytes > std::numeric_limits<U32>::max()) {
@@ -416,6 +434,7 @@ FrameWaitResult AlazarDigitizer::waitForBatch(MutableRawFrameBatchPtr& batch,
   const auto wait_ms = static_cast<U32>(std::clamp<std::int64_t>(
       remaining.count(), 0, std::numeric_limits<U32>::max()));
   const auto result = AlazarWaitAsyncBufferComplete(impl_->board, buffer, wait_ms);
+  const auto acquisition_wakeup_timestamp_ns = nowNs();
   if (result == ApiWaitTimeout) {
     error.clear();
     return FrameWaitResult::Timeout;
@@ -429,7 +448,7 @@ FrameWaitResult AlazarDigitizer::waitForBatch(MutableRawFrameBatchPtr& batch,
   }
   impl_->posted_indices.pop_front();
 
-  impl_->current_buffer_timestamp_ns = nowNs();
+  impl_->current_buffer_timestamp_ns = acquisition_wakeup_timestamp_ns;
   if (impl_->previous_buffer_timestamp_ns != 0U &&
       impl_->current_buffer_timestamp_ns > impl_->previous_buffer_timestamp_ns) {
     const auto period_ms = static_cast<double>(impl_->current_buffer_timestamp_ns -
@@ -457,32 +476,22 @@ FrameWaitResult AlazarDigitizer::waitForBatch(MutableRawFrameBatchPtr& batch,
   const auto batch_sequence = telemetry_.dma_buffers_received;
   for (U32 record_index = 0; record_index < impl_->records_per_buffer; ++record_index) {
     auto& frame = mutable_batch->records[record_index];
-    frame.metadata = {};
+    frame.metadata = impl_->record_metadata_templates[record_index];
     const auto offset = static_cast<std::size_t>(record_index) * config_.digitizer.sample_point;
     frame.samples.setView(mutable_batch->contiguous_samples.data() + offset,
                           config_.digitizer.sample_point);
 
     const auto frame_id = impl_->next_frame_id++;
-    frame.metadata.frame_kind = FrameKind::FullChirpPeriod;
     frame.metadata.frame_id = frame_id;
     frame.metadata.dma_buffer_sequence = batch_sequence;
-    frame.metadata.record_index_in_buffer = record_index;
-    frame.metadata.records_in_buffer = impl_->records_per_buffer;
     frame.metadata.host_timestamp_ns = impl_->current_buffer_timestamp_ns;
     frame.metadata.trigger.sequence = frame_id;
     frame.metadata.trigger.timestamp_ns = frame.metadata.host_timestamp_ns;
-    frame.metadata.trigger.valid = true;
-    frame.metadata.channel = config_.digitizer.channel;
-    frame.metadata.sample_format = SampleFormat::UnsignedOffsetBinary12LeftAligned;
-    frame.metadata.sample_rate_hz = config_.digitizer.sample_rate_hz;
-    frame.metadata.record_length = config_.digitizer.sample_point;
-    frame.metadata.pre_trigger_samples = config_.digitizer.pre_trigger_samples;
-    frame.metadata.post_trigger_samples = config_.digitizer.post_trigger_samples;
-    frame.metadata.up_segment = config_.chirp_segmentation.up_segment;
-    frame.metadata.down_segment = config_.chirp_segmentation.down_segment;
   }
   mutable_batch->metadata.sequence = batch_sequence;
   mutable_batch->metadata.completion_timestamp_ns = impl_->current_buffer_timestamp_ns;
+  mutable_batch->metadata.acquisition_wakeup_timestamp_ns =
+      acquisition_wakeup_timestamp_ns;
   mutable_batch->metadata.ownership_ready_timestamp_ns = nowNs();
   mutable_batch->metadata.record_count = impl_->records_per_buffer;
   mutable_batch->metadata.record_length = config_.digitizer.sample_point;

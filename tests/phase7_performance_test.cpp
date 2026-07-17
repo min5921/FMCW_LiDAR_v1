@@ -97,6 +97,7 @@ int main() {
             << " ffts_per_batch=" << config.digitizer.records_per_buffer * 2U
             << " valid_xyziv=" << valid_point_count.load()
             << " processor_average_ms=" << processor_batch_ms
+            << " mean_end_to_end_ms=" << status.average_batch_latency_ms
             << " last_end_to_end_ms=" << status.last_batch_latency_ms
             << " p50_ms=" << status.batch_latency_p50_ms
             << " p95_ms=" << status.batch_latency_p95_ms

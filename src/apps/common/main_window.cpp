@@ -1909,8 +1909,9 @@ void MainWindow::updateStatus(RuntimeStatus status) {
                                .arg(records_per_buffer_->value())
                                .arg(records_per_buffer_->value() * 2)
                                .arg(fft_length_->value()));
-  batch_latency_->setText(QString("%1 ms total\n%2 ms copy | %3 ms signal")
+  batch_latency_->setText(QString("%1 ms last | %2 ms mean\n%3 ms ownership | %4 ms signal")
                               .arg(runtime_status_.processing_batch_latency_ms, 0, 'f', 3)
+                              .arg(runtime_status_.processing_batch_average_ms, 0, 'f', 3)
                               .arg(runtime_status_.processing_copy_latency_ms, 0, 'f', 3)
                               .arg(runtime_status_.processing_signal_latency_ms, 0, 'f', 3));
   batch_percentiles_->setText(QString("p50 %1 | p95 %2\np99 %3 | max %4 ms")

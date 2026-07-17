@@ -170,6 +170,7 @@ bool FakeDigitizer::configure(const SystemConfig& config, std::string& error) {
   }
   config_ = config;
   buildSignalTemplates();
+  buildRecordMetadataTemplates();
   buildDmaRing();
   configured_ = true;
   telemetry_.device.ready = telemetry_.device.connected;
@@ -281,6 +282,7 @@ FrameWaitResult FakeDigitizer::waitForBatch(MutableRawFrameBatchPtr& batch,
     return FrameWaitResult::Timeout;
   }
 
+  const auto acquisition_wakeup_timestamp_ns = nowNs();
   const auto slot_index = completed_dma_slots_.front();
   completed_dma_slots_.pop_front();
   auto& dma_slot = dma_slots_[slot_index];
@@ -307,6 +309,8 @@ FrameWaitResult FakeDigitizer::waitForBatch(MutableRawFrameBatchPtr& batch,
   }
   mutable_batch->metadata.sequence = completed.sequence;
   mutable_batch->metadata.completion_timestamp_ns = completed.completion_timestamp_ns;
+  mutable_batch->metadata.acquisition_wakeup_timestamp_ns =
+      acquisition_wakeup_timestamp_ns;
   mutable_batch->metadata.ownership_ready_timestamp_ns = nowNs();
   mutable_batch->metadata.record_count = record_count;
   mutable_batch->metadata.record_length = config_.digitizer.sample_point;
@@ -487,6 +491,27 @@ void FakeDigitizer::buildSignalTemplates() {
   }
 }
 
+void FakeDigitizer::buildRecordMetadataTemplates() {
+  record_metadata_templates_.assign(config_.digitizer.records_per_buffer, {});
+  for (std::uint32_t record_index = 0;
+       record_index < config_.digitizer.records_per_buffer; ++record_index) {
+    auto& metadata = record_metadata_templates_[record_index];
+    metadata.frame_kind = FrameKind::FullChirpPeriod;
+    metadata.record_index_in_buffer = record_index;
+    metadata.records_in_buffer = config_.digitizer.records_per_buffer;
+    metadata.trigger.valid = true;
+    metadata.channel = config_.digitizer.channel;
+    metadata.sample_format = SampleFormat::SignedInt16;
+    metadata.byte_order = ByteOrder::LittleEndian;
+    metadata.sample_rate_hz = config_.digitizer.sample_rate_hz;
+    metadata.record_length = config_.digitizer.sample_point;
+    metadata.pre_trigger_samples = config_.digitizer.pre_trigger_samples;
+    metadata.post_trigger_samples = config_.digitizer.post_trigger_samples;
+    metadata.up_segment = config_.chirp_segmentation.up_segment;
+    metadata.down_segment = config_.chirp_segmentation.down_segment;
+  }
+}
+
 void FakeDigitizer::buildDmaRing() {
   dma_slots_.clear();
   dma_slots_.resize(config_.digitizer.dma_buffer_count);
@@ -510,12 +535,11 @@ void FakeDigitizer::fillFrame(RawFrame& frame, std::uint64_t frame_id,
                               std::uint64_t batch_sequence, std::uint32_t record_index,
                               std::uint32_t records_in_batch,
                               std::uint64_t completion_timestamp_ns) const {
-  frame.metadata = {};
-  const auto& up = config_.chirp_segmentation.up_segment;
-  const auto& down = config_.chirp_segmentation.down_segment;
+  frame.metadata = record_index < record_metadata_templates_.size()
+      ? record_metadata_templates_[record_index]
+      : RawFrameMetadata{};
 
   auto& metadata = frame.metadata;
-  metadata.frame_kind = FrameKind::FullChirpPeriod;
   metadata.frame_id = frame_id;
   metadata.dma_buffer_sequence = batch_sequence;
   metadata.record_index_in_buffer = record_index;
@@ -523,16 +547,6 @@ void FakeDigitizer::fillFrame(RawFrame& frame, std::uint64_t frame_id,
   metadata.host_timestamp_ns = completion_timestamp_ns;
   metadata.trigger.sequence = frame_id;
   metadata.trigger.timestamp_ns = metadata.host_timestamp_ns;
-  metadata.trigger.valid = true;
-  metadata.channel = config_.digitizer.channel;
-  metadata.sample_format = SampleFormat::SignedInt16;
-  metadata.byte_order = ByteOrder::LittleEndian;
-  metadata.sample_rate_hz = config_.digitizer.sample_rate_hz;
-  metadata.record_length = config_.digitizer.sample_point;
-  metadata.pre_trigger_samples = config_.digitizer.pre_trigger_samples;
-  metadata.post_trigger_samples = config_.digitizer.post_trigger_samples;
-  metadata.up_segment = up;
-  metadata.down_segment = down;
 
   const auto zero_based = frame_id - 1;
   const auto y = static_cast<std::uint32_t>((zero_based / config_.scan.x_pixel_count) % config_.scan.y_line_count);

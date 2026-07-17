@@ -31,6 +31,62 @@ double elapsedMs(std::uint64_t start_ns, std::uint64_t end_ns) {
       static_cast<double>(end_ns - start_ns) * 1.0e-6;
 }
 
+std::uint64_t orderedTimestamp(std::uint64_t timestamp_ns,
+                               std::uint64_t preceding_timestamp_ns) {
+  return timestamp_ns == 0U || timestamp_ns < preceding_timestamp_ns
+      ? preceding_timestamp_ns
+      : timestamp_ns;
+}
+
+void addLatency(ProcessingLatencyBreakdown& total,
+                const ProcessingLatencyBreakdown& value) {
+  total.end_to_end_ms += value.end_to_end_ms;
+  total.ownership_ms += value.ownership_ms;
+  total.signal_ms += value.signal_ms;
+  total.acquisition_wakeup_ms += value.acquisition_wakeup_ms;
+  total.digitizer_materialization_ms += value.digitizer_materialization_ms;
+  total.session_validation_ms += value.session_validation_ms;
+  total.enqueue_dispatch_ms += value.enqueue_dispatch_ms;
+  total.queue_wait_ms += value.queue_wait_ms;
+  total.compute_ms += value.compute_ms;
+}
+
+void maximizeLatency(ProcessingLatencyBreakdown& maximum,
+                     const ProcessingLatencyBreakdown& value) {
+  maximum.end_to_end_ms = std::max(maximum.end_to_end_ms, value.end_to_end_ms);
+  maximum.ownership_ms = std::max(maximum.ownership_ms, value.ownership_ms);
+  maximum.signal_ms = std::max(maximum.signal_ms, value.signal_ms);
+  maximum.acquisition_wakeup_ms = std::max(
+      maximum.acquisition_wakeup_ms, value.acquisition_wakeup_ms);
+  maximum.digitizer_materialization_ms = std::max(
+      maximum.digitizer_materialization_ms, value.digitizer_materialization_ms);
+  maximum.session_validation_ms = std::max(
+      maximum.session_validation_ms, value.session_validation_ms);
+  maximum.enqueue_dispatch_ms = std::max(
+      maximum.enqueue_dispatch_ms, value.enqueue_dispatch_ms);
+  maximum.queue_wait_ms = std::max(maximum.queue_wait_ms, value.queue_wait_ms);
+  maximum.compute_ms = std::max(maximum.compute_ms, value.compute_ms);
+}
+
+ProcessingLatencyBreakdown averageLatency(
+    const ProcessingLatencyBreakdown& total, std::uint64_t count) {
+  if (count == 0U) {
+    return {};
+  }
+  const auto divisor = static_cast<double>(count);
+  return {
+      total.end_to_end_ms / divisor,
+      total.ownership_ms / divisor,
+      total.signal_ms / divisor,
+      total.acquisition_wakeup_ms / divisor,
+      total.digitizer_materialization_ms / divisor,
+      total.session_validation_ms / divisor,
+      total.enqueue_dispatch_ms / divisor,
+      total.queue_wait_ms / divisor,
+      total.compute_ms / divisor,
+  };
+}
+
 double percentile(std::vector<double> values, double quantile) {
   if (values.empty()) {
     return 0.0;
@@ -50,6 +106,65 @@ struct ProcessingService::Impl {
     ProcessingConfig config;
     std::uint64_t revision = 0;
   };
+
+  struct BatchTiming {
+    std::uint64_t enqueue_timestamp_ns = 0;
+    std::uint64_t processing_start_timestamp_ns = 0;
+  };
+
+  struct QueuedBatch {
+    RawFrameBatchPtr batch;
+    BatchTiming timing;
+  };
+
+  ProcessingLatencyBreakdown latencyBreakdown(
+      const RawFrameBatch& batch, const BatchTiming& timing,
+      std::uint64_t line_completed_timestamp_ns) const {
+    const auto completion_ns = batch.metadata.completion_timestamp_ns;
+    const auto wakeup_ns = orderedTimestamp(
+        batch.metadata.acquisition_wakeup_timestamp_ns, completion_ns);
+    const auto ownership_ns = orderedTimestamp(
+        batch.metadata.ownership_ready_timestamp_ns, wakeup_ns);
+    const auto session_ns = orderedTimestamp(
+        batch.metadata.session_ready_timestamp_ns, ownership_ns);
+    const auto enqueue_ns = orderedTimestamp(timing.enqueue_timestamp_ns, session_ns);
+    const auto processing_start_ns = orderedTimestamp(
+        timing.processing_start_timestamp_ns, enqueue_ns);
+    const auto line_completed_ns = orderedTimestamp(
+        line_completed_timestamp_ns, processing_start_ns);
+
+    ProcessingLatencyBreakdown latency;
+    latency.end_to_end_ms = elapsedMs(completion_ns, line_completed_ns);
+    latency.ownership_ms = elapsedMs(completion_ns, ownership_ns);
+    latency.signal_ms = elapsedMs(ownership_ns, line_completed_ns);
+    latency.acquisition_wakeup_ms = elapsedMs(completion_ns, wakeup_ns);
+    latency.digitizer_materialization_ms = elapsedMs(wakeup_ns, ownership_ns);
+    latency.session_validation_ms = elapsedMs(ownership_ns, session_ns);
+    latency.enqueue_dispatch_ms = elapsedMs(session_ns, enqueue_ns);
+    latency.queue_wait_ms = elapsedMs(enqueue_ns, processing_start_ns);
+    latency.compute_ms = elapsedMs(processing_start_ns, line_completed_ns);
+    return latency;
+  }
+
+  void recordCompletedBatch(const RawFrameBatchPtr& batch,
+                            const BatchTiming& timing,
+                            std::uint64_t line_completed_timestamp_ns) {
+    const auto latency = latencyBreakdown(
+        *batch, timing, line_completed_timestamp_ns);
+    std::lock_guard<std::mutex> lock(mutex);
+    last_latency = latency;
+    addLatency(latency_total, latency);
+    maximizeLatency(maximum_latency, latency);
+    if (latency.end_to_end_ms > kBatchDeadlineMs) {
+      ++batch_deadline_misses;
+    }
+    batch_latency_window.push_back(latency.end_to_end_ms);
+    if (batch_latency_window.size() > kLatencyWindowSize) {
+      batch_latency_window.pop_front();
+    }
+    ++batches_processed;
+    condition.notify_all();
+  }
 
   bool publishProcessedBatch(const RawFrameBatchPtr& batch,
                              const ProcessedFrameCallback& current_callback,
@@ -106,7 +221,7 @@ struct ProcessingService::Impl {
 
   void workerLoopSync() {
     while (true) {
-      RawFrameBatchPtr batch;
+      QueuedBatch queued_batch;
       std::optional<PendingRuntimeConfig> runtime_update;
       ProcessedFrameCallback current_callback;
       {
@@ -115,7 +230,7 @@ struct ProcessingService::Impl {
         if (queue.empty() && !accepting) {
           break;
         }
-        batch = std::move(queue.front());
+        queued_batch = std::move(queue.front());
         queue.pop_front();
         runtime_update = std::move(pending_runtime_config);
         pending_runtime_config.reset();
@@ -134,9 +249,10 @@ struct ProcessingService::Impl {
       }
       bool batch_complete = true;
       std::uint64_t line_completed_timestamp_ns = 0U;
-      if (!processor.processBatch(*batch, snapshots.selectedRecordIndex(),
+      queued_batch.timing.processing_start_timestamp_ns = nowNs();
+      if (!processor.processBatch(*queued_batch.batch, snapshots.selectedRecordIndex(),
                                   processed_batch_workspace, error) ||
-          processed_batch_workspace.size() != batch->records.size()) {
+          processed_batch_workspace.size() != queued_batch.batch->records.size()) {
         std::lock_guard<std::mutex> lock(mutex);
         worker_error = error.empty() ? "DMA batch processing returned an invalid result count" : error;
         stop_reason = "Signal processing failed";
@@ -146,7 +262,7 @@ struct ProcessingService::Impl {
         batch_complete = false;
       }
       if (batch_complete &&
-          !publishProcessedBatch(batch, current_callback,
+          !publishProcessedBatch(queued_batch.batch, current_callback,
                                  line_completed_timestamp_ns, error)) {
         if (!error.empty()) {
           std::lock_guard<std::mutex> lock(mutex);
@@ -159,28 +275,8 @@ struct ProcessingService::Impl {
         batch_complete = false;
       }
       if (batch_complete) {
-        std::lock_guard<std::mutex> lock(mutex);
-        const auto completion_ns = batch->metadata.completion_timestamp_ns;
-        const auto ownership_ns = batch->metadata.ownership_ready_timestamp_ns == 0U
-            ? completion_ns
-            : batch->metadata.ownership_ready_timestamp_ns;
-        last_ownership_copy_latency_ms = elapsedMs(completion_ns, ownership_ns);
-        last_signal_processing_latency_ms = elapsedMs(ownership_ns, line_completed_timestamp_ns);
-        last_batch_latency_ms = elapsedMs(completion_ns, line_completed_timestamp_ns);
-        maximum_ownership_copy_latency_ms = std::max(
-            maximum_ownership_copy_latency_ms, last_ownership_copy_latency_ms);
-        maximum_signal_processing_latency_ms = std::max(
-            maximum_signal_processing_latency_ms, last_signal_processing_latency_ms);
-        maximum_batch_latency_ms = std::max(maximum_batch_latency_ms, last_batch_latency_ms);
-        if (last_batch_latency_ms > kBatchDeadlineMs) {
-          ++batch_deadline_misses;
-        }
-        batch_latency_window.push_back(last_batch_latency_ms);
-        if (batch_latency_window.size() > kLatencyWindowSize) {
-          batch_latency_window.pop_front();
-        }
-        ++batches_processed;
-        condition.notify_all();
+        recordCompletedBatch(queued_batch.batch, queued_batch.timing,
+                             line_completed_timestamp_ns);
       }
       if (!batch_complete) {
         break;
@@ -202,6 +298,7 @@ struct ProcessingService::Impl {
   }
 
   bool publishAsyncBatch(const RawFrameBatchPtr& batch,
+                         const BatchTiming& timing,
                          const ProcessedFrameCallback& current_callback) {
     std::uint64_t line_completed_timestamp_ns = 0U;
     std::string error;
@@ -212,30 +309,7 @@ struct ProcessingService::Impl {
       }
       return false;
     }
-    {
-      std::lock_guard<std::mutex> lock(mutex);
-      const auto completion_ns = batch->metadata.completion_timestamp_ns;
-      const auto ownership_ns = batch->metadata.ownership_ready_timestamp_ns == 0U
-          ? completion_ns
-          : batch->metadata.ownership_ready_timestamp_ns;
-      last_ownership_copy_latency_ms = elapsedMs(completion_ns, ownership_ns);
-      last_signal_processing_latency_ms = elapsedMs(ownership_ns, line_completed_timestamp_ns);
-      last_batch_latency_ms = elapsedMs(completion_ns, line_completed_timestamp_ns);
-      maximum_ownership_copy_latency_ms = std::max(
-          maximum_ownership_copy_latency_ms, last_ownership_copy_latency_ms);
-      maximum_signal_processing_latency_ms = std::max(
-          maximum_signal_processing_latency_ms, last_signal_processing_latency_ms);
-      maximum_batch_latency_ms = std::max(maximum_batch_latency_ms, last_batch_latency_ms);
-      if (last_batch_latency_ms > kBatchDeadlineMs) {
-        ++batch_deadline_misses;
-      }
-      batch_latency_window.push_back(last_batch_latency_ms);
-      if (batch_latency_window.size() > kLatencyWindowSize) {
-        batch_latency_window.pop_front();
-      }
-      ++batches_processed;
-      condition.notify_all();
-    }
+    recordCompletedBatch(batch, timing, line_completed_timestamp_ns);
     return true;
   }
 
@@ -255,6 +329,7 @@ struct ProcessingService::Impl {
 
   void workerLoopAsync() {
     constexpr auto kEventPollInterval = std::chrono::microseconds(100);
+    std::deque<BatchTiming> in_flight_timings;
     bool failed = false;
     while (!failed) {
       std::optional<PendingRuntimeConfig> runtime_update;
@@ -276,21 +351,24 @@ struct ProcessingService::Impl {
       }
 
       while (processor.inFlightBatchCount() < processor.asyncBatchCapacity()) {
-        RawFrameBatchPtr batch;
+        QueuedBatch queued_batch;
         {
           std::lock_guard<std::mutex> lock(mutex);
           if (pending_runtime_config.has_value() || queue.empty()) {
             break;
           }
-          batch = std::move(queue.front());
+          queued_batch = std::move(queue.front());
           queue.pop_front();
         }
+        queued_batch.timing.processing_start_timestamp_ns = nowNs();
         std::string error;
-        if (!processor.submitBatch(std::move(batch), snapshots.selectedRecordIndex(), error)) {
+        if (!processor.submitBatch(std::move(queued_batch.batch),
+                                   snapshots.selectedRecordIndex(), error)) {
           failAsyncWorker(std::move(error), "Signal processing submission failed");
           failed = true;
           break;
         }
+        in_flight_timings.push_back(queued_batch.timing);
       }
       if (failed) {
         break;
@@ -319,12 +397,20 @@ struct ProcessingService::Impl {
           break;
         }
         if (collected) {
+          if (in_flight_timings.empty()) {
+            failAsyncWorker("CUDA completion has no matching timing record",
+                            "Signal processing collection failed");
+            failed = true;
+            break;
+          }
+          const auto timing = in_flight_timings.front();
+          in_flight_timings.pop_front();
           ProcessedFrameCallback current_callback;
           {
             std::lock_guard<std::mutex> lock(mutex);
             current_callback = callback;
           }
-          if (!publishAsyncBatch(completed_batch, current_callback)) {
+          if (!publishAsyncBatch(completed_batch, timing, current_callback)) {
             failed = true;
             break;
           }
@@ -355,7 +441,7 @@ struct ProcessingService::Impl {
 
   mutable std::mutex mutex;
   std::condition_variable condition;
-  std::deque<RawFrameBatchPtr> queue;
+  std::deque<QueuedBatch> queue;
   std::thread worker;
   SignalProcessor processor;
   ProcessingSnapshotStore snapshots;
@@ -370,12 +456,9 @@ struct ProcessingService::Impl {
   std::uint64_t last_processed_frame_id = 0;
   std::uint64_t processing_config_revision = 0;
   double latency_total_ms = 0.0;
-  double last_batch_latency_ms = 0.0;
-  double last_ownership_copy_latency_ms = 0.0;
-  double last_signal_processing_latency_ms = 0.0;
-  double maximum_ownership_copy_latency_ms = 0.0;
-  double maximum_signal_processing_latency_ms = 0.0;
-  double maximum_batch_latency_ms = 0.0;
+  ProcessingLatencyBreakdown latency_total;
+  ProcessingLatencyBreakdown last_latency;
+  ProcessingLatencyBreakdown maximum_latency;
   std::uint64_t batch_deadline_misses = 0;
   std::deque<double> batch_latency_window;
   bool configured = false;
@@ -426,12 +509,9 @@ bool ProcessingService::start(std::string& error) {
   impl_->frames_processed = 0;
   impl_->last_processed_frame_id = 0;
   impl_->latency_total_ms = 0.0;
-  impl_->last_batch_latency_ms = 0.0;
-  impl_->last_ownership_copy_latency_ms = 0.0;
-  impl_->last_signal_processing_latency_ms = 0.0;
-  impl_->maximum_ownership_copy_latency_ms = 0.0;
-  impl_->maximum_signal_processing_latency_ms = 0.0;
-  impl_->maximum_batch_latency_ms = 0.0;
+  impl_->latency_total = {};
+  impl_->last_latency = {};
+  impl_->maximum_latency = {};
   impl_->batch_deadline_misses = 0;
   impl_->batch_latency_window.clear();
   impl_->stop_requested = false;
@@ -449,6 +529,7 @@ ProcessingEnqueueResult ProcessingService::enqueueBatch(RawFrameBatchPtr batch, 
     error = "Cannot enqueue a null or empty raw DMA batch";
     return ProcessingEnqueueResult::Error;
   }
+  const auto enqueue_timestamp_ns = nowNs();
   std::lock_guard<std::mutex> lock(impl_->mutex);
   if (!impl_->running || !impl_->accepting) {
     error = impl_->stop_reason.empty() ? "Processing service is stopping" : impl_->stop_reason;
@@ -462,7 +543,7 @@ ProcessingEnqueueResult ProcessingService::enqueueBatch(RawFrameBatchPtr batch, 
     error = impl_->stop_reason;
     return ProcessingEnqueueResult::Overflow;
   }
-  impl_->queue.push_back(std::move(batch));
+  impl_->queue.push_back({std::move(batch), {enqueue_timestamp_ns, 0U}});
   impl_->queue_high_water_mark = std::max(impl_->queue_high_water_mark, impl_->queue.size());
   impl_->condition.notify_one();
   error.clear();
@@ -477,6 +558,9 @@ ProcessingEnqueueResult ProcessingService::enqueue(RawFramePtr frame, std::strin
   auto batch = std::make_shared<RawFrameBatch>();
   batch->metadata.sequence = frame->metadata.dma_buffer_sequence;
   batch->metadata.completion_timestamp_ns = frame->metadata.host_timestamp_ns;
+  batch->metadata.acquisition_wakeup_timestamp_ns = frame->metadata.host_timestamp_ns;
+  batch->metadata.ownership_ready_timestamp_ns = frame->metadata.host_timestamp_ns;
+  batch->metadata.session_ready_timestamp_ns = frame->metadata.host_timestamp_ns;
   batch->metadata.record_count = 1;
   batch->metadata.record_length = frame->metadata.record_length;
   batch->records.push_back(*frame);
@@ -574,12 +658,17 @@ ProcessingServiceStatus ProcessingService::status() const {
     status.average_latency_ms = impl_->frames_processed == 0U
         ? 0.0
         : impl_->latency_total_ms / static_cast<double>(impl_->frames_processed);
-    status.last_batch_latency_ms = impl_->last_batch_latency_ms;
-    status.last_ownership_copy_latency_ms = impl_->last_ownership_copy_latency_ms;
-    status.last_signal_processing_latency_ms = impl_->last_signal_processing_latency_ms;
-    status.maximum_ownership_copy_latency_ms = impl_->maximum_ownership_copy_latency_ms;
-    status.maximum_signal_processing_latency_ms = impl_->maximum_signal_processing_latency_ms;
-    status.maximum_batch_latency_ms = impl_->maximum_batch_latency_ms;
+    status.last_latency = impl_->last_latency;
+    status.average_latency = averageLatency(
+        impl_->latency_total, impl_->batches_processed);
+    status.maximum_latency = impl_->maximum_latency;
+    status.average_batch_latency_ms = status.average_latency.end_to_end_ms;
+    status.last_batch_latency_ms = status.last_latency.end_to_end_ms;
+    status.last_ownership_copy_latency_ms = status.last_latency.ownership_ms;
+    status.last_signal_processing_latency_ms = status.last_latency.signal_ms;
+    status.maximum_ownership_copy_latency_ms = status.maximum_latency.ownership_ms;
+    status.maximum_signal_processing_latency_ms = status.maximum_latency.signal_ms;
+    status.maximum_batch_latency_ms = status.maximum_latency.end_to_end_ms;
     status.batch_deadline_ms = kBatchDeadlineMs;
     status.batch_deadline_misses = impl_->batch_deadline_misses;
     status.backend_name = impl_->processor.backendName();

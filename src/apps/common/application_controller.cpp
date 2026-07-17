@@ -673,6 +673,7 @@ class RuntimeWorker final : public QObject {
       status.processing_queue_capacity = processing_status.queue_capacity;
       status.processing_latency_ms = processing_status.average_latency_ms;
       status.processing_batch_latency_ms = processing_status.last_batch_latency_ms;
+      status.processing_batch_average_ms = processing_status.average_batch_latency_ms;
       status.processing_copy_latency_ms = processing_status.last_ownership_copy_latency_ms;
       status.processing_signal_latency_ms = processing_status.last_signal_processing_latency_ms;
       status.processing_batch_p50_ms = processing_status.batch_latency_p50_ms;

@@ -448,9 +448,13 @@ void testFakeDmaBatchSession() {
   expect(batch && batch->records.size() == 4U && batch->metadata.record_count == 4U &&
              batch->metadata.record_length == config.digitizer.sample_point,
          "DMA batch owns all configured records and record-length metadata");
-  expect(batch && batch->metadata.ownership_ready_timestamp_ns >=
-                         batch->metadata.completion_timestamp_ns,
-         "DMA batch timestamps completion before simulator ownership copy is ready");
+  expect(batch && batch->metadata.acquisition_wakeup_timestamp_ns >=
+                         batch->metadata.completion_timestamp_ns &&
+             batch->metadata.ownership_ready_timestamp_ns >=
+                         batch->metadata.acquisition_wakeup_timestamp_ns &&
+             batch->metadata.session_ready_timestamp_ns >=
+                         batch->metadata.ownership_ready_timestamp_ns,
+         "DMA batch timestamps completion, wakeup, ownership, and session readiness in order");
   bool metadata_consistent = batch != nullptr;
   for (std::size_t index = 0; batch && index < batch->records.size(); ++index) {
     const auto frame = fmcw::rawFrameAt(batch, index);

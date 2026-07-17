@@ -244,7 +244,7 @@ Phase 7.3은 batch API 구현만으로 완료하지 않는다. 7.3A부터 7.3D�
 
 측정 시작은 Alazar DMA completion이고 종료는 998번째 distance/velocity/XYZ와 한 B-scan line snapshot이 완성된 시점이다. 다음 항목을 포함한다.
 
-- ATS sample conversion and ownership copy
+- ATS wait completion, DMA ownership lease, and record descriptor materialization
 - UP/DOWN segmentation, DC removal, polarity, and window
 - 1996 real-to-complex FFTs of length 2048
 - magnitude dBFS, strict threshold, maximum integer-bin peak, and `NaN` validity
@@ -302,6 +302,18 @@ Disk write, UDP transmission, and Qt paint time은 이 5 ms signal-processing ga
 - The fixed 600-second rerun processed 120,241 batches and 120,000,518 valid XYZIV records per backend with queue high-water 1 and zero drops or rejections. FFTW measured p50 2.087 ms, p95 2.638 ms, p99 2.930 ms, maximum 7.481 ms, and 5 misses. CUDA measured p50 1.005 ms, p95 2.256 ms, p99 2.517 ms, maximum 6.476 ms, and 8 misses.
 - Maximum signal-processing latency stayed below the gate for both backends: 4.197 ms for FFTW and 4.640 ms for CUDA. Maximum simulator ownership/materialization latency reached 5.873 ms and 5.795 ms respectively, identifying the remaining synthetic-test tail before the FFT backend rather than sustained FFT throughput.
 - Rebooting reduced the CUDA long-run miss count from 17 to 8 and its maximum from 8.497 ms to 6.476 ms, but did not produce zero misses. Phase 7.3D therefore remains pending, and the same timestamps must be collected with the ATS9371 DMA path before changing the processing pipeline again.
+
+#### Ownership-Stage Instrumentation and Descriptor Reuse (2026-07-17)
+
+- Runtime-only timestamps now split the DMA-to-result path into acquisition wakeup, digitizer materialization, session validation, enqueue dispatch, queue wait, and processing compute. Their sum equals the existing end-to-end batch latency. Raw v2 serialization is unchanged.
+- The simulator and ATS9371 adapters prebuild the static metadata for all 998 records at start and stamp only per-batch values during acquisition. The ATS SDK does not expose a separate hardware-completion host timestamp, so the ATS adapter records completion and acquisition wakeup at the successful wait return and measures materialization from that point.
+- Release CTest passed 9/9. Ten direct runs had zero misses: FFTW arithmetic mean end-to-end latency was 1.648-1.922 ms with 4.204 ms maximum, and CUDA was 0.517-0.611 ms with 1.044 ms maximum.
+- Ten two-second strict probes produced FFTW HARD_PASS in 9/10 runs and CUDA HARD_PASS in 10/10 runs. Simulator descriptor materialization averaged 0.026-0.040 ms, session validation about 0.004 ms, and queue wait about 0.01-0.02 ms. The one FFTW miss reached 5.335 ms and was dominated by a 4.497 ms compute tail.
+- The 600-second run processed 120,241 FFTW batches and 120,242 CUDA batches, totaling 120,000,518 and 120,001,516 valid XYZIV results respectively. DMA drops and rejections stayed at zero; queue high-water was 1 for FFTW and 2 for CUDA.
+- FFTW measured 2.009 ms arithmetic mean, 1.988 ms p50, 6.944 ms maximum, and 6 misses. Its mean wakeup/materialization/compute stages were 0.342/0.027/1.622 ms; maximum wakeup and compute were 4.491 and 6.372 ms.
+- CUDA measured 1.607 ms arithmetic mean, 1.512 ms p50, 8.128 ms maximum, and 38 misses. Its mean wakeup/materialization/compute stages were 0.391/0.040/1.160 ms; maximum wakeup and compute were 6.203 and 2.759 ms. A following short probe returned CUDA compute to 0.571 ms mean, showing that the long-run CUDA compute level was not a permanent pipeline regression.
+- Descriptor construction, session validation, dispatch, and normal queueing are not the remaining bottlenecks. Sustained 200 Hz throughput passes, while rare Windows simulator wakeup and compute scheduling tails keep the strict 5 ms hard gate open. Actual ATS9371 measurements remain required before Phase 7.3D hardware acceptance.
+- The refreshed packaged GUI passed `--smoke-test`. Release and package SHA-256 both equal `19C0938C8998500EA3788A33B0B0C1E7DCA0A90F1B927712472136EFAE47F81C`.
 
 ## 8. Phase 7.4: High-Speed Raw Storage
 
