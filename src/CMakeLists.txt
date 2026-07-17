@@ -25,6 +25,7 @@ set(FMCW_CORE_SOURCES
   core/logging.cpp
   core/operation_controller.cpp
   core/raw_frame_batch_pool.cpp
+  core/realtime_thread.cpp
   core/system_state.cpp
   drivers/alazar/alazar_digitizer.cpp
   drivers/alazar/alazar_sample_conversion.cpp

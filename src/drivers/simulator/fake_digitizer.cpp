@@ -1,11 +1,22 @@
 #include "drivers/simulator/fake_digitizer.h"
 
 #include "core/config_validation.h"
+#include "core/realtime_thread.h"
 
 #include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <limits>
+
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#endif
 
 #ifndef FMCW_HAS_CUDA_FFT
 #define FMCW_HAS_CUDA_FFT 0
@@ -21,6 +32,46 @@ namespace {
 constexpr double kPi = 3.14159265358979323846;
 constexpr std::size_t kSignalTemplateCount = 32U;
 constexpr double kDevelopmentSimulatorBatchRateHz = 30.0;
+
+#if defined(_WIN32)
+class HighResolutionDeadlineTimer {
+ public:
+  HighResolutionDeadlineTimer()
+      : timer_(CreateWaitableTimerExW(
+            nullptr, nullptr, 0x00000002,
+            TIMER_MODIFY_STATE | SYNCHRONIZE)) {}
+
+  ~HighResolutionDeadlineTimer() {
+    if (timer_ != nullptr) {
+      CancelWaitableTimer(timer_);
+      CloseHandle(timer_);
+    }
+  }
+
+  HighResolutionDeadlineTimer(const HighResolutionDeadlineTimer&) = delete;
+  HighResolutionDeadlineTimer& operator=(const HighResolutionDeadlineTimer&) = delete;
+
+  bool valid() const { return timer_ != nullptr; }
+
+  bool waitUntil(std::chrono::steady_clock::time_point deadline) const {
+    const auto now = std::chrono::steady_clock::now();
+    if (deadline <= now) {
+      return true;
+    }
+    const auto remaining_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        deadline - now).count();
+    auto relative_100ns = (remaining_ns + 99) / 100;
+    relative_100ns = std::max<std::int64_t>(relative_100ns, 1);
+    LARGE_INTEGER due_time{};
+    due_time.QuadPart = -static_cast<LONGLONG>(relative_100ns);
+    return SetWaitableTimer(timer_, &due_time, 0, nullptr, nullptr, FALSE) != FALSE &&
+        WaitForSingleObject(timer_, INFINITE) == WAIT_OBJECT_0;
+  }
+
+ private:
+  HANDLE timer_ = nullptr;
+};
+#endif
 
 std::uint64_t nowNs() {
   return static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -331,10 +382,28 @@ bool FakeDigitizer::stop(std::string& error) {
 
 void FakeDigitizer::producerLoop() {
   std::unique_lock<std::mutex> lock(mutex_);
+  if (config_.runtime.simulator_realtime_dma) {
+    prioritizeCurrentRealtimeThread(RealtimeThreadPriority::Critical);
+  }
+#if defined(_WIN32)
+  HighResolutionDeadlineTimer high_resolution_timer;
+#endif
   while (!producer_stop_requested_) {
-    condition_.wait_until(lock, next_batch_due_, [this] {
-      return producer_stop_requested_ || aborted_ || !telemetry_.device.running;
-    });
+    bool precise_wait_completed = false;
+#if defined(_WIN32)
+    if (config_.runtime.simulator_realtime_dma && high_resolution_timer.valid() &&
+        next_batch_due_ > std::chrono::steady_clock::now()) {
+      const auto deadline = next_batch_due_;
+      lock.unlock();
+      precise_wait_completed = high_resolution_timer.waitUntil(deadline);
+      lock.lock();
+    }
+#endif
+    if (!precise_wait_completed) {
+      condition_.wait_until(lock, next_batch_due_, [this] {
+        return producer_stop_requested_ || aborted_ || !telemetry_.device.running;
+      });
+    }
     if (producer_stop_requested_ || aborted_ || !telemetry_.device.running) {
       break;
     }

@@ -1,6 +1,7 @@
 #include "processing/signal_processor.h"
 
 #include "core/config_validation.h"
+#include "core/realtime_thread.h"
 #include "processing/cuda/cuda_signal_pipeline.h"
 
 #include <algorithm>
@@ -13,12 +14,28 @@
 #include <utility>
 #include <vector>
 
+#ifndef FMCW_HAS_OPENMP
+#define FMCW_HAS_OPENMP 0
+#endif
+
+#if FMCW_HAS_OPENMP
+#include <omp.h>
+#endif
+
 namespace fmcw {
 namespace {
 
 constexpr double kSpeedOfLightMps = 299792458.0;
 constexpr double kPi = 3.14159265358979323846;
 constexpr std::size_t kFftwBatchRecordChunk = 64U;
+constexpr int kMaximumOpenMpBatchThreads = 16;
+
+#if FMCW_HAS_OPENMP
+int openMpBatchThreadCount(std::size_t work_item_count) {
+  return std::max(1, std::min({static_cast<int>(work_item_count),
+                               omp_get_max_threads(), kMaximumOpenMpBatchThreads}));
+}
+#endif
 
 std::vector<float> makeWindow(WindowFunction function, std::size_t length) {
   std::vector<float> window(length, 1.0F);
@@ -57,7 +74,9 @@ bool preprocessSegmentInto(const RawFrame& raw, SegmentRange range, const Proces
     error = "Segment preprocessing received an invalid range, window, or FFT length";
     return false;
   }
-  std::fill_n(output, fft_length, 0.0F);
+  if (fft_length > range.length()) {
+    std::fill(output + range.length(), output + fft_length, 0.0F);
+  }
   double mean = 0.0;
   if (processing.dc_removal) {
     for (std::uint32_t index = range.start_sample; index < range.end_sample_exclusive; ++index) {
@@ -72,10 +91,7 @@ bool preprocessSegmentInto(const RawFrame& raw, SegmentRange range, const Proces
     if (down_segment && polarity == SegmentPolarity::InvertDown) {
       value = -value;
     }
-    output[local] = value;
-  }
-  for (std::size_t local = 0; local < range.length(); ++local) {
-    output[local] *= window[local];
+    output[local] = value * window[local];
   }
   error.clear();
   return true;
@@ -428,10 +444,14 @@ bool SignalProcessor::processBatch(const RawFrameBatch& raw_batch,
     std::fill(impl_->batch_input.begin(), impl_->batch_input.end(), 0.0F);
     std::atomic<bool> preprocess_failed{false};
 #if FMCW_HAS_OPENMP
-#pragma omp parallel for schedule(static)
+    const auto batch_thread_count = openMpBatchThreadCount(chunk_record_count);
+#pragma omp parallel for schedule(static) num_threads(batch_thread_count)
 #endif
     for (std::int64_t local_record = 0;
          local_record < static_cast<std::int64_t>(chunk_record_count); ++local_record) {
+#if FMCW_HAS_OPENMP
+      prioritizeCurrentRealtimeThread(RealtimeThreadPriority::High);
+#endif
       const auto local_index = static_cast<std::size_t>(local_record);
       const auto record_index = chunk_start + local_index;
       const auto& raw = raw_batch.records[record_index];
@@ -466,10 +486,13 @@ bool SignalProcessor::processBatch(const RawFrameBatch& raw_batch,
     }
 
 #if FMCW_HAS_OPENMP
-#pragma omp parallel for schedule(static)
+#pragma omp parallel for schedule(static) num_threads(batch_thread_count)
 #endif
     for (std::int64_t local_record = 0;
          local_record < static_cast<std::int64_t>(chunk_record_count); ++local_record) {
+#if FMCW_HAS_OPENMP
+      prioritizeCurrentRealtimeThread(RealtimeThreadPriority::High);
+#endif
       const auto local_index = static_cast<std::size_t>(local_record);
       const auto record_index = chunk_start + local_index;
       const auto& raw = raw_batch.records[record_index];

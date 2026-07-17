@@ -78,6 +78,8 @@ class ProcessingSnapshotStore {
   void setSelectedRecordIndex(std::uint32_t record_index);
   std::uint32_t selectedRecordIndex() const;
   void publish(const RawFrame& raw, const ProcessedFrame& processed);
+  bool publishBatch(const RawFrameBatch& raw_batch,
+                    const std::vector<ProcessedFrame>& processed_batch);
 
   std::shared_ptr<const WaveformSnapshot> latestWaveform() const;
   std::shared_ptr<const FftSnapshot> latestFft() const;
@@ -87,6 +89,7 @@ class ProcessingSnapshotStore {
 
  private:
   void resetLine(std::uint32_t y_index);
+  void publishUnlocked(const RawFrame& raw, const ProcessedFrame& processed);
 
   mutable std::mutex mutex_;
   std::uint32_t width_ = 0;

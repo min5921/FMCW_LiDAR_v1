@@ -168,6 +168,8 @@ QualificationResult runQualification(fmcw::FftBackendKind backend_kind) {
             << " p95_ms=" << processing_status.batch_latency_p95_ms
             << " p99_ms=" << processing_status.batch_latency_p99_ms
             << " max_ms=" << processing_status.maximum_batch_latency_ms
+            << " max_ownership_ms=" << processing_status.maximum_ownership_copy_latency_ms
+            << " max_signal_ms=" << processing_status.maximum_signal_processing_latency_ms
             << " deadline_misses=" << processing_status.batch_deadline_misses
             << " stop_reason=\"" << acquisition_status.stop_reason << "\"";
   if (!session_stop_error.empty()) {

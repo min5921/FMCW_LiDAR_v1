@@ -36,6 +36,8 @@ struct ProcessingServiceStatus {
   double last_batch_latency_ms = 0.0;
   double last_ownership_copy_latency_ms = 0.0;
   double last_signal_processing_latency_ms = 0.0;
+  double maximum_ownership_copy_latency_ms = 0.0;
+  double maximum_signal_processing_latency_ms = 0.0;
   double batch_latency_p50_ms = 0.0;
   double batch_latency_p95_ms = 0.0;
   double batch_latency_p99_ms = 0.0;

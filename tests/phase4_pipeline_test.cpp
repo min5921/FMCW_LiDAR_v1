@@ -660,10 +660,16 @@ void testProcessingServiceBatch(const fmcw::SystemConfig& config,
   expect(status.batches_processed == 1U && status.frames_processed == frames.size(),
          "processing service accounts for one batch and every record in it");
   expect(status.last_ownership_copy_latency_ms >= 1.99 &&
+             status.last_signal_processing_latency_ms >= 7.99 &&
              status.last_batch_latency_ms >= 10.0 &&
+             status.maximum_ownership_copy_latency_ms ==
+                 status.last_ownership_copy_latency_ms &&
+             status.maximum_signal_processing_latency_ms ==
+                 status.last_signal_processing_latency_ms &&
+             status.maximum_batch_latency_ms == status.last_batch_latency_ms &&
              status.batch_latency_p50_ms == status.batch_latency_p99_ms &&
              status.batch_deadline_misses == 1U,
-         "processing telemetry reports DMA-copy, end-to-end percentile, and deadline miss timing");
+         "processing telemetry reports DMA-copy, signal, maximum, percentile, and deadline timing");
 }
 
 struct BlockingFftState {

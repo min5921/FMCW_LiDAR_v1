@@ -284,6 +284,17 @@ Disk write, UDP transmission, and Qt paint time은 이 5 ms signal-processing ga
 - The strict lifetime test verifies early DMA-owner release and later full result collection. The direct no-warmup CUDA benchmark still measures about 10 ms p50 for 4992 x 998, so the requested event and DMA ownership changes are complete but the 5 ms performance gate remains open.
 - Release CTest passes 9/9. The refreshed packaged GUI passes its hidden smoke test and matches the Release executable at SHA-256 `4FCE36B2FFABF7E4A27080675CB2290F38C4C258965613556CA8EE985469A4C6`.
 
+#### Windows Latency Optimization Update (2026-07-17)
+
+- The single CUDA slot now waits directly on its H2D and completion events when the slot is full. The previous 100 us condition-variable poll could sleep for roughly 10 ms on Windows even though Nsight measured only about 0.31 ms of GPU work per batch.
+- Snapshot publication now consumes all 998 results under one lock and timestamps B-scan completion before optional disk/UDP callbacks. FFTW preprocessing keeps the 64-record cache-local chunk but fixes OpenMP at 16 lanes and combines zero-fill, conversion, polarity, and window work to remove two full segment-memory passes.
+- The strict simulator uses a Windows high-resolution waitable timer. Acquisition, processing, and simulator source threads use critical priority without changing the process or Qt UI priority; OpenMP workers use high priority. CPU-set pinning was tested and removed because it increased latency on the local hybrid CPU.
+- Final direct no-warmup measurements produced CUDA p50 0.514 ms and maximum 0.948 ms with zero misses. Ten independent 32-batch FFTW runs produced p50 1.460-1.686 ms and maximum at most 4.307 ms with zero direct misses.
+- The fixed 600-second acceptance was run before the final preprocessing pass. Each backend processed 120,242 complete DMA batches and 120,001,516 valid XYZIV results with zero drops or rejections. FFTW recorded 3 deadline misses and 5.763 ms maximum; CUDA recorded 17 misses and 8.497 ms maximum. Functional and sustained-throughput checks passed, but the hard gate did not.
+- After the final preprocessing pass, ten two-second strict runs produced about 4,000 complete batches per backend with queue high-water 1 and zero drops. FFTW and CUDA each had one Windows scheduling outlier: FFTW signal latency reached 5.331 ms, while CUDA ownership handoff reached 4.979 ms and total latency reached 5.689 ms.
+- The 5 ms requirement remains unchanged. Phase 7.3D is still pending because Windows scheduling tail and actual ATS9371 hardware behavior require separate acceptance evidence; no interpolation, dropped result, extra CUDA slot, or relaxed deadline was used to obtain the improved numbers.
+- The refreshed packaged GUI passed its hidden smoke test. The Release and packaged executables both have SHA-256 `5BD1213A5A51DA5A39BFEB217D64262B428DE6140A3CA1E67DB6F45C12E48405`.
+
 ## 8. Phase 7.4: High-Speed Raw Storage
 
 ### Scope

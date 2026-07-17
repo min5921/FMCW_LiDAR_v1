@@ -291,3 +291,14 @@ ATS DMA and single-slot CUDA event refinement (2026-07-16):
 - The final no-warmup 32-batch local run measured FFTW p50 2.3285 ms, p95 2.7824 ms, maximum 5.35 ms, and 1 deadline miss. CUDA measured p50 10.0609 ms, p95 10.4379 ms, maximum 10.5553 ms, and 32 deadline misses.
 - Repeated two-second strict probes completed about 398-400 FFTW batches without DMA drop but still missed the end-to-end deadline. CUDA could not sustain the 4.99 ms producer cadence with one slot; repeated runs varied from 27 to 354 delivered batches before the eight-buffer simulated DMA ring overflowed. The STOP route and exact 998-result accounting passed; the 5 ms gate did not.
 - ATS9371 hardware was not connected for this verification. Phase 7.3D and hardware acceptance remain pending rather than complete.
+
+Windows latency optimization and sustained acceptance (2026-07-17):
+
+- CUDA event polling was replaced by direct event waits for the fixed single slot. Batch snapshot publication uses one lock and excludes optional disk/UDP callbacks from the signal-processing deadline. The strict simulator now uses a high-resolution Windows timer.
+- FFTW uses a fixed 16-worker OpenMP team, keeps the measured 64-record chunk, and combines segment initialization and windowing to remove redundant full-buffer passes. FFTW/CUDA parity, strict threshold behavior, integer bins, `NaN` propagation, distance, velocity, and XYZIV remained unchanged.
+- Direct no-warmup results were FFTW p50 1.460-1.686 ms across ten 32-batch runs with zero misses, and CUDA p50 0.514 ms with 0.948 ms maximum and zero misses. The previous roughly 10 ms CUDA median was host timer polling, not cuFFT execution.
+- The fixed ten-minute-per-backend acceptance processed 120,242 batches and 120,001,516 valid XYZIV results per backend with no DMA drop or rejection. FFTW had 3 deadline misses with 5.763 ms maximum; CUDA had 17 misses with 8.497 ms maximum. Both retained functional PASS and sustained throughput but correctly reported HARD_FAIL.
+- The final short stress after the preprocessing change reduced normal FFTW latency to roughly 2.0 ms and CUDA to roughly 1.0 ms. Ten strict runs still exposed one FFTW signal-scheduling outlier and one CUDA simulator-ownership outlier above 5 ms, so the hard gate remains open.
+- CPU-set pinning was evaluated and removed after it worsened both ownership and signal latency on the local Core Ultra 9 285K. The retained policy raises only critical acquisition/processing threads and OpenMP workers; the process and Qt UI remain at normal priority.
+- Release CTest remains 9/9. Actual ATS9371 trigger/DMA hardware and Jetson were not connected, so Phase 7.3D is not marked complete.
+- The refreshed packaged GUI passed its hidden smoke test. Release and package SHA-256 both equal `5BD1213A5A51DA5A39BFEB217D64262B428DE6140A3CA1E67DB6F45C12E48405`.

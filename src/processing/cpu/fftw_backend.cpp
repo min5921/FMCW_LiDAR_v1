@@ -1,5 +1,7 @@
 #include "processing/fft_backends.h"
 
+#include "core/realtime_thread.h"
+
 #ifndef FMCW_HAS_FFTW
 #define FMCW_HAS_FFTW 0
 #endif
@@ -90,6 +92,9 @@ bool FftwBackend::prepare(const FftPlan& plan, std::string& error) {
   }
   impl_->destroyPlans();
 
+#if FMCW_HAS_OPENMP
+  omp_set_dynamic(0);
+#endif
   const int length = static_cast<int>(plan.length);
   const auto spectrum_length = plan.length / 2U + 1U;
   const auto lane_count = availableLaneCount(plan.batch);
@@ -130,10 +135,12 @@ bool FftwBackend::execute(const std::vector<float>& input,
   const auto spectrum_length = impl_->plan.length / 2U + 1U;
   output.resize(spectrum_length * impl_->plan.batch);
 #if FMCW_HAS_OPENMP
-#pragma omp parallel for schedule(static)
+  const auto lane_thread_count = static_cast<int>(impl_->lanes.size());
+#pragma omp parallel for schedule(static) num_threads(lane_thread_count)
 #endif
   for (std::int64_t lane_number = 0;
        lane_number < static_cast<std::int64_t>(impl_->lanes.size()); ++lane_number) {
+    prioritizeCurrentRealtimeThread(RealtimeThreadPriority::High);
     auto& lane = impl_->lanes[static_cast<std::size_t>(lane_number)];
     const auto input_offset = lane.transform_offset * impl_->plan.length;
     const auto output_offset = lane.transform_offset * spectrum_length;

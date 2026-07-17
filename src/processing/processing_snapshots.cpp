@@ -66,6 +66,24 @@ std::uint32_t ProcessingSnapshotStore::selectedRecordIndex() const {
 
 void ProcessingSnapshotStore::publish(const RawFrame& raw, const ProcessedFrame& processed) {
   std::lock_guard<std::mutex> lock(mutex_);
+  publishUnlocked(raw, processed);
+}
+
+bool ProcessingSnapshotStore::publishBatch(
+    const RawFrameBatch& raw_batch,
+    const std::vector<ProcessedFrame>& processed_batch) {
+  if (raw_batch.records.size() != processed_batch.size()) {
+    return false;
+  }
+  std::lock_guard<std::mutex> lock(mutex_);
+  for (std::size_t index = 0; index < raw_batch.records.size(); ++index) {
+    publishUnlocked(raw_batch.records[index], processed_batch[index]);
+  }
+  return true;
+}
+
+void ProcessingSnapshotStore::publishUnlocked(const RawFrame& raw,
+                                               const ProcessedFrame& processed) {
   if (raw.metadata.record_index_in_buffer == selected_record_index_) {
     auto waveform = std::make_shared<WaveformSnapshot>();
     waveform->frame_id = raw.metadata.frame_id;

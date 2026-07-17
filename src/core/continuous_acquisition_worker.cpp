@@ -1,5 +1,7 @@
 #include "core/continuous_acquisition_worker.h"
 
+#include "core/realtime_thread.h"
+
 #include <chrono>
 #include <utility>
 
@@ -57,6 +59,7 @@ ContinuousAcquisitionStatus ContinuousAcquisitionWorker::status() const {
 }
 
 void ContinuousAcquisitionWorker::workerLoop() {
+  prioritizeCurrentRealtimeThread(RealtimeThreadPriority::Critical);
   bool failed = false;
   std::string reason;
   while (!stop_requested_.load()) {
