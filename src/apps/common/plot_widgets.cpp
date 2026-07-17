@@ -127,6 +127,83 @@ QColor heatColor(float value) {
   return QColor::fromRgbF(0.95F, 0.68F - t * 0.55F, 0.12F - t * 0.08F);
 }
 
+QPainterPath plotPath(const QVector<float>& values, const QRectF& area,
+                      float minimum, float maximum) {
+  QPainterPath path;
+  if (values.size() < 2 || !(maximum > minimum)) {
+    return path;
+  }
+  bool drawing = false;
+  auto append_index = [&](int index) {
+    const float value = values[index];
+    if (!std::isfinite(value)) {
+      drawing = false;
+      return;
+    }
+    const auto x = area.left() + area.width() * static_cast<double>(index) /
+                                    static_cast<double>(values.size() - 1);
+    const auto y = area.bottom() - area.height() * static_cast<double>(value - minimum) /
+                                      static_cast<double>(maximum - minimum);
+    if (drawing) {
+      path.lineTo(x, y);
+    } else {
+      path.moveTo(x, y);
+      drawing = true;
+    }
+  };
+
+  const int output_limit = std::max(2, static_cast<int>(std::floor(area.width())));
+  const bool contains_gap = std::any_of(values.cbegin(), values.cend(), [](float value) {
+    return !std::isfinite(value);
+  });
+  if (values.size() <= output_limit || contains_gap) {
+    for (int index = 0; index < values.size(); ++index) {
+      append_index(index);
+    }
+    return path;
+  }
+
+  const int bucket_count = std::max(1, output_limit / 2);
+  for (int bucket = 0; bucket < bucket_count; ++bucket) {
+    const int begin = static_cast<int>(
+        static_cast<qint64>(bucket) * values.size() / bucket_count);
+    const int end = std::max(begin + 1, static_cast<int>(
+        static_cast<qint64>(bucket + 1) * values.size() / bucket_count));
+    int minimum_index = -1;
+    int maximum_index = -1;
+    float bucket_minimum = std::numeric_limits<float>::max();
+    float bucket_maximum = std::numeric_limits<float>::lowest();
+    for (int index = begin; index < std::min(end, static_cast<int>(values.size())); ++index) {
+      const float value = values[index];
+      if (!std::isfinite(value)) {
+        continue;
+      }
+      if (value < bucket_minimum) {
+        bucket_minimum = value;
+        minimum_index = index;
+      }
+      if (value > bucket_maximum) {
+        bucket_maximum = value;
+        maximum_index = index;
+      }
+    }
+    if (minimum_index < 0 || maximum_index < 0) {
+      drawing = false;
+      continue;
+    }
+    if (minimum_index <= maximum_index) {
+      append_index(minimum_index);
+      if (maximum_index != minimum_index) {
+        append_index(maximum_index);
+      }
+    } else {
+      append_index(maximum_index);
+      append_index(minimum_index);
+    }
+  }
+  return path;
+}
+
 }  // namespace
 
 LinePlotWidget::LinePlotWidget(QWidget* parent) : QWidget(parent) {
@@ -221,28 +298,12 @@ void LinePlotWidget::paintEvent(QPaintEvent* event) {
     if (series.values.size() < 2) {
       continue;
     }
-    QPainterPath path;
-    bool drawing = false;
-    for (int index = 0; index < series.values.size(); ++index) {
-      const float value = series.values[index];
-      if (!std::isfinite(value)) {
-        drawing = false;
-        continue;
-      }
-      const auto x = area.left() + area.width() * static_cast<double>(index) /
-                                      static_cast<double>(series.values.size() - 1);
-      const auto y = area.bottom() - area.height() * static_cast<double>(value - minimum) /
-                                        static_cast<double>(maximum - minimum);
-      if (!drawing) {
-        path.moveTo(x, y);
-        drawing = true;
-      } else {
-        path.lineTo(x, y);
-      }
-    }
+    const bool dense = series.values.size() > static_cast<int>(area.width());
+    painter.setRenderHint(QPainter::Antialiasing, !dense);
     painter.setPen(QPen(series.color, 1.6));
-    painter.drawPath(path);
+    painter.drawPath(plotPath(series.values, area, minimum, maximum));
   }
+  painter.setRenderHint(QPainter::Antialiasing, true);
   painter.setClipping(false);
 
   painter.setFont(QFont(painter.font().family(), 8));

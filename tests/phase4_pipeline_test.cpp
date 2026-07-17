@@ -751,6 +751,10 @@ void testProcessingOverflow(fmcw::SystemConfig config, const std::vector<fmcw::R
   expect(service.enqueue(frames.at(2), error) == fmcw::ProcessingEnqueueResult::Overflow,
          "third frame triggers processing stop-on-overflow");
   expect(service.status().stop_requested, "processing overflow is exposed as a stop request");
+  std::string stop_reason;
+  expect(service.stopRequested(stop_reason) &&
+             stop_reason == "Processing queue capacity exceeded",
+         "lightweight processing stop check preserves the overflow reason");
   {
     std::lock_guard<std::mutex> lock(state->mutex);
     state->release = true;

@@ -106,6 +106,7 @@ class ApplicationController final : public QObject {
   void emergencyStop();
   void updateProcessing(const ProcessingConfig& config);
   void setSelectedAScan(std::uint32_t record_index);
+  void setLivePlotIndex(int plot_index);
   void setEdfaOutput(bool enabled);
   void uploadMcuWaveform();
   void captureSegmentationSnapshot();

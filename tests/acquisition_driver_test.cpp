@@ -528,6 +528,42 @@ void testAtsQualificationSimulatorLoad() {
              std::abs(running_telemetry.dma_buffer_rate_hz - (1000.0 / 4.99)) < 0.5,
          "qualification DMA batch arrives at the 998 / 200 kHz interval");
 
+  std::size_t positive_noise_samples = 0U;
+  std::size_t negative_noise_samples = 0U;
+  std::uint64_t noise_sum_squares = 0U;
+  if (batch && !batch->records.empty()) {
+    const auto& samples = batch->records.front().samples;
+    for (std::uint32_t index = config.chirp_segmentation.up_segment.end_sample_exclusive;
+         index < config.chirp_segmentation.down_segment.start_sample; ++index) {
+      positive_noise_samples += samples[index] > 0 ? 1U : 0U;
+      negative_noise_samples += samples[index] < 0 ? 1U : 0U;
+      const auto sample = static_cast<std::int64_t>(samples[index]);
+      noise_sum_squares += static_cast<std::uint64_t>(sample * sample);
+    }
+  }
+  const auto quiet_sample_count =
+      config.chirp_segmentation.down_segment.start_sample -
+      config.chirp_segmentation.up_segment.end_sample_exclusive;
+  expect(positive_noise_samples > quiet_sample_count / 3U &&
+             negative_noise_samples > quiet_sample_count / 3U,
+         "qualification simulator adds bipolar ADC noise outside the chirp segments");
+  const double quiet_noise_rms = quiet_sample_count == 0U
+      ? 0.0
+      : std::sqrt(static_cast<double>(noise_sum_squares) /
+                  static_cast<double>(quiet_sample_count));
+  expect(quiet_noise_rms >= 80.0 && quiet_noise_rms <= 112.0,
+         "qualification simulator keeps quiet-region noise near 96 ADC counts RMS");
+
+  std::vector<std::int16_t> first_waveform;
+  if (batch && !batch->records.empty()) {
+    first_waveform.assign(batch->records.front().samples.begin(),
+                          batch->records.front().samples.end());
+  }
+  batch.reset();
+  expect(digitizer.waitForBatch(batch, std::chrono::milliseconds(20), error) ==
+             fmcw::FrameWaitResult::FrameReady && batch && !batch->records.empty() &&
+             !(batch->records.front().samples == first_waveform),
+         "qualification simulator varies the displayed waveform between DMA slots");
   batch.reset();
   std::this_thread::sleep_for(std::chrono::milliseconds(55));
   expect(digitizer.waitForBatch(batch, std::chrono::milliseconds(20), error) ==

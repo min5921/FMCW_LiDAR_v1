@@ -5,6 +5,7 @@
 #include "storage/writer_interfaces.h"
 
 #include <iostream>
+#include <limits>
 #include <string>
 
 namespace {
@@ -22,6 +23,13 @@ void testSegmentRange() {
   const fmcw::SegmentRange segment{100, 300};
   expect(segment.length() == 200, "segment length uses a half-open interval");
   expect(segment.validFor(300), "segment end may equal record length");
+  const auto from_length = fmcw::segmentRangeFromStartAndLength(100, 200);
+  expect(from_length.start_sample == 100 && from_length.end_sample_exclusive == 300,
+         "start plus length creates the expected half-open range");
+  const auto overflow = fmcw::segmentRangeFromStartAndLength(
+      std::numeric_limits<std::uint32_t>::max() - 4U, 8U);
+  expect(!overflow.validFor(std::numeric_limits<std::uint32_t>::max()),
+         "overflowing start plus length produces an invalid range");
   expect(!fmcw::SegmentRange{300, 300}.validFor(300), "empty segment is invalid");
   expect(!fmcw::SegmentRange{200, 100}.validFor(300), "reversed segment is invalid");
   expect(!fmcw::SegmentRange{100, 301}.validFor(300), "segment outside record is invalid");

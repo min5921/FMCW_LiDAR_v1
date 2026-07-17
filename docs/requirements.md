@@ -164,11 +164,11 @@ UI에서 다음 항목을 설정할 수 있어야 한다.
 - Trigger delay
 - Laser trigger mode: `up_chirp_only`로 고정
 - Full-period acquisition: 항상 enable
-- Chirp period samples
+- Full-period start/length samples
 - Pre-trigger samples
 - Post-trigger samples
-- Up segment start/end sample
-- Down segment start/end sample
+- Up segment start/length sample
+- Down segment start/length sample
 - Segment guard samples
 - Timeout
 - DMA buffer count
@@ -199,7 +199,7 @@ UI에서 다음 항목을 설정할 수 있어야 한다.
 실행 중 변경 정책:
 
 - 실행 중 변경 가능: peak threshold/search range, DC removal, plot range, color map, segment overlay 표시
-- Preview 중 변경 가능: up/down segment start/end, guard samples
+- Preview 중 변경 가능: full-period 및 up/down segment start/length, guard samples
 - 재시작 필요: board capability, sampling rate, sample point, channel, record count, chirp period samples, DMA buffer count, FFT backend/length, raw/processed save 조건, UDP endpoint
 - 재시작 필요 설정은 Running 중 잠그고, STOP 후 `Apply Setup`으로 disconnect/configure/reconnect한다. 자동 START는 하지 않는다.
 
@@ -365,7 +365,7 @@ legacy 참고:
 UI 요구사항:
 
 - Processing 페이지는 사용자가 요청한 한 개 full-period frame을 고정 snapshot으로 표시하고 trigger, up segment, down segment, guard zone을 색상 overlay로 표시한다.
-- segment start/end는 sample index와 시간 단위(us/ns)를 함께 보여준다.
+- UI는 full-period와 각 segment의 start/length를 입력받고, end는 `start + length`로 계산해 sample index와 시간 단위(us/ns)를 함께 보여준다.
 - 사용자가 고정 snapshot에서 segment boundary를 조정하면 overlay와 validation 결과를 즉시 갱신한다.
 - 연속 실시간 waveform은 Live View의 Time Domain 탭에서만 표시한다.
 - segment가 record 밖으로 나가거나 서로 겹치면 Start를 막는다.
@@ -378,7 +378,7 @@ UI 요구사항:
 - replay 모드는 저장된 full-period raw buffer에 동일한 segmentation 설정을 적용해야 한다.
 - segmentation 설정 변경 이력은 session metadata에 frame range와 함께 남긴다.
 - `RawFrame` 1개는 단일 채널에서 up 시작 trigger 1회로 획득한 full up+down period record 1개로 정의한다.
-- sample segment는 `[start_sample, end_sample_exclusive)` 규칙을 사용하며 자세한 계약은 `docs/data_contract.md`를 따른다.
+- UI 입력은 `start_sample`과 `length_samples`를 사용한다. 내부 저장과 처리에서는 이를 `[start_sample, start_sample + length_samples)`의 `end_sample_exclusive`로 변환하며 자세한 계약은 `docs/data_contract.md`를 따른다.
 
 FFT 모드:
 
@@ -468,6 +468,10 @@ UI 기능:
 - plot은 전체 raw buffer를 매 frame 그리지 않고 필요 시 downsample한다.
 - UI 렌더링 속도와 acquisition frame rate를 분리한다.
 - 오래된 frame을 모두 그리려 하지 않고 최신 frame 우선 정책을 둔다.
+- 현재 보이는 Live tab만 Qt GUI 전달, QVector 변환, repaint를 수행하며 숨은 tab은 GUI 갱신하지 않는다.
+- dense Time Domain/FFT는 화면 픽셀 기반 min/max envelope로 렌더링하고, acquisition/processing은 원본 전체 sample을 그대로 처리한다.
+- Windows plot은 최대 30 Hz, 상태 telemetry는 10 Hz로 갱신한다. UI에서 합쳐진 frame은 DMA drop이나 processing miss로 간주하지 않는다.
+- Selected A-scan은 숫자 입력과 가로 slider를 동기화하며 slider drag 완료 시 선택을 적용한다.
 - 사용자가 freeze를 누르면 acquisition은 계속 돌고 화면만 정지한다.
 - cursor가 가리키는 sample index, FFT bin, distance 값을 표시한다.
 

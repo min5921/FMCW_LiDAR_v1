@@ -319,3 +319,13 @@ Ownership-stage instrumentation and descriptor reuse (2026-07-17):
 - The 600-second run processed 120,241 FFTW and 120,242 CUDA batches with exact XYZIV accounting, zero drops/rejections, and queue high-water 1/2. FFTW had 6 misses and 6.944 ms maximum; CUDA had 38 misses and 8.128 ms maximum.
 - FFTW's largest remaining tail was compute at 6.372 ms. CUDA's largest was simulator acquisition wakeup at 6.203 ms; materialization stayed below 0.334 ms. Sustained 200 Hz throughput passes, but the 5 ms hard gate and ATS9371 hardware acceptance remain pending.
 - The refreshed packaged GUI passed `--smoke-test`; Release and package SHA-256 are `19C0938C8998500EA3788A33B0B0C1E7DCA0A90F1B927712472136EFAE47F81C`.
+
+Live-view and segmentation usability refinement (2026-07-17):
+
+- Chirp segmentation controls now accept full-period, UP, and DOWN start/length values. The UI converts these values to the existing half-open `[start, end)` processing contract with overflow validation, and the frozen snapshot overlay follows the same conversion.
+- Only the visible Live tab is delivered to the Qt GUI thread. Acquisition, all 998-record FFT/peak/distance processing, B-scan assembly, storage, and UDP remain active while hidden plot conversion and repaint work is skipped.
+- Plot repaint is capped at 30 Hz and full status aggregation at 10 Hz. Dense finite Time Domain and FFT traces use a per-pixel min/max envelope, while series containing threshold-invalid `NaN` values retain their gaps.
+- Selected A-scan can be changed with a synchronized horizontal slider or numeric control. Slider dragging applies the runtime selection once on release and does not restart or reconfigure acquisition.
+- The digitizer simulator precomputes deterministic DMA-slot-varying templates with approximately 96 ADC-count RMS Gaussian-like noise. The runtime path does not generate random samples, preserving qualification cadence and DMA-overflow behavior.
+- Windows MSVC Release CTest passed 9/9, and the refreshed packaged EXE passed `--smoke-test`. Release and package SHA-256 are `C71D59952652858E73139FD92B36BC84F95EAB545BC994FB0CB505A390D29938`.
+- No new real-time acceptance claim is made from this run because an external model-training workload was active. The preceding idle-machine and sustained acceptance records remain the current performance evidence.

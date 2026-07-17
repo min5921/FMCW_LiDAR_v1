@@ -61,6 +61,14 @@ struct SegmentRange {
   }
 };
 
+constexpr SegmentRange segmentRangeFromStartAndLength(std::uint32_t start_sample,
+                                                       std::uint32_t length_samples) {
+  if (length_samples > std::numeric_limits<std::uint32_t>::max() - start_sample) {
+    return {start_sample, start_sample};
+  }
+  return {start_sample, start_sample + length_samples};
+}
+
 struct TriggerMetadata {
   std::uint64_t sequence = 0;
   std::uint64_t timestamp_ns = 0;

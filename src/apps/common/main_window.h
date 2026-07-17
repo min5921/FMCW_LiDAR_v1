@@ -18,6 +18,7 @@ class QLineEdit;
 class QListWidget;
 class QPlainTextEdit;
 class QPushButton;
+class QSlider;
 class QSpinBox;
 class QStackedWidget;
 class QTabWidget;
@@ -59,6 +60,11 @@ class MainWindow final : public QMainWindow {
                                      double preferred_range_volts, std::uint32_t preferred_impedance);
   void updateRuntimeSourceControls();
   void updateDerivedAcquisitionLabels();
+  void updateLivePlotSubscription();
+  bool isLivePlotActive(int plot_index) const;
+  void updateSelectedAScanStatus(std::uint32_t record_index,
+                                 std::uint32_t records_in_buffer,
+                                 std::uint64_t dma_sequence);
   void applyProfile();
   void loadProfile();
   void saveProfile();
@@ -106,6 +112,7 @@ class MainWindow final : public QMainWindow {
   QTabWidget* live_tabs_ = nullptr;
   QToolButton* freeze_button_ = nullptr;
   QSpinBox* selected_a_scan_ = nullptr;
+  QSlider* selected_a_scan_slider_ = nullptr;
   QLabel* selected_a_scan_status_ = nullptr;
   LinePlotWidget* time_plot_ = nullptr;
   LinePlotWidget* fft_plot_ = nullptr;
@@ -173,10 +180,12 @@ class MainWindow final : public QMainWindow {
   QDoubleSpinBox* peak_threshold_ = nullptr;
   QSpinBox* peak_start_ = nullptr;
   QSpinBox* peak_end_ = nullptr;
+  QSpinBox* period_start_ = nullptr;
+  QSpinBox* period_length_ = nullptr;
   QSpinBox* up_start_ = nullptr;
-  QSpinBox* up_end_ = nullptr;
+  QSpinBox* up_length_ = nullptr;
   QSpinBox* down_start_ = nullptr;
-  QSpinBox* down_end_ = nullptr;
+  QSpinBox* down_length_ = nullptr;
   QSpinBox* guard_samples_ = nullptr;
   QSpinBox* fft_length_ = nullptr;
   QLabel* batch_workload_ = nullptr;

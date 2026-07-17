@@ -7,6 +7,7 @@
 #include <chrono>
 #include <cmath>
 #include <limits>
+#include <random>
 
 #if defined(_WIN32)
 #ifndef NOMINMAX
@@ -32,6 +33,15 @@ namespace {
 constexpr double kPi = 3.14159265358979323846;
 constexpr std::size_t kSignalTemplateCount = 32U;
 constexpr double kDevelopmentSimulatorBatchRateHz = 30.0;
+constexpr std::uint32_t kSimulatorNoiseSeed = 0x5A17C0DEU;
+
+std::int16_t simulatorNoise(std::mt19937& random_generator) {
+  std::int32_t sum = 0;
+  for (int draw = 0; draw < 12; ++draw) {
+    sum += static_cast<std::int32_t>(random_generator() & 0xFFU);
+  }
+  return static_cast<std::int16_t>(((sum - 1530) * 3) / 8);
+}
 
 #if defined(_WIN32)
 class HighResolutionDeadlineTimer {
@@ -89,6 +99,13 @@ std::int16_t tone(std::uint32_t index, std::uint32_t length, double bin, double 
   return static_cast<std::int16_t>(std::clamp(sample,
       static_cast<double>(std::numeric_limits<std::int16_t>::min()),
       static_cast<double>(std::numeric_limits<std::int16_t>::max())));
+}
+
+std::int16_t addSamples(std::int16_t first, std::int16_t second) {
+  const auto sum = static_cast<std::int32_t>(first) + static_cast<std::int32_t>(second);
+  return static_cast<std::int16_t>(std::clamp(
+      sum, static_cast<std::int32_t>(std::numeric_limits<std::int16_t>::min()),
+      static_cast<std::int32_t>(std::numeric_limits<std::int16_t>::max())));
 }
 
 }  // namespace
@@ -477,16 +494,22 @@ void FakeDigitizer::stopProducer() {
 void FakeDigitizer::buildSignalTemplates() {
   signal_templates_.assign(kSignalTemplateCount,
                            std::vector<std::int16_t>(config_.digitizer.sample_point, 0));
+  std::mt19937 random_generator(kSimulatorNoiseSeed);
   const auto& up = config_.chirp_segmentation.up_segment;
   const auto& down = config_.chirp_segmentation.down_segment;
   for (std::size_t template_index = 0; template_index < signal_templates_.size(); ++template_index) {
     const double phase = static_cast<double>(template_index) * 0.03;
     auto& samples = signal_templates_[template_index];
+    for (auto& sample : samples) {
+      sample = simulatorNoise(random_generator);
+    }
     for (std::uint32_t index = 0; index < up.length(); ++index) {
-      samples[up.start_sample + index] = tone(index, up.length(), 37.0, 12000.0, phase);
+      auto& sample = samples[up.start_sample + index];
+      sample = addSamples(sample, tone(index, up.length(), 37.0, 12000.0, phase));
     }
     for (std::uint32_t index = 0; index < down.length(); ++index) {
-      samples[down.start_sample + index] = tone(index, down.length(), 43.0, 10000.0, -phase);
+      auto& sample = samples[down.start_sample + index];
+      sample = addSamples(sample, tone(index, down.length(), 43.0, 10000.0, -phase));
     }
   }
 }
@@ -518,13 +541,15 @@ void FakeDigitizer::buildDmaRing() {
   const auto record_length = static_cast<std::size_t>(config_.digitizer.sample_point);
   const auto record_count = static_cast<std::size_t>(config_.digitizer.records_per_buffer);
   const auto sample_count = record_length * record_count;
-  for (auto& slot : dma_slots_) {
+  for (std::size_t slot_index = 0; slot_index < dma_slots_.size(); ++slot_index) {
+    auto& slot = dma_slots_[slot_index];
     slot.samples = std::make_shared<DmaStorage>(
         sample_count, config_.processing.fft_backend == FftBackendKind::Cuda);
     slot.state = DmaSlotState::Posted;
     slot.completion = {};
     for (std::size_t record_index = 0; record_index < record_count; ++record_index) {
-      const auto& source = signal_templates_[record_index % signal_templates_.size()];
+      const auto template_index = (record_index + slot_index * 3U) % signal_templates_.size();
+      const auto& source = signal_templates_[template_index];
       std::copy(source.begin(), source.end(),
                 slot.samples->samples.begin() + record_index * record_length);
     }

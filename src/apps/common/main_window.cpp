@@ -223,6 +223,9 @@ QString darkStyleSheet() {
     QCheckBox { color: #d6dfe1; spacing: 7px; }
     QCheckBox::indicator { width: 15px; height: 15px; border: 1px solid #53666d; border-radius: 2px; background: #12191d; }
     QCheckBox::indicator:checked { background: #2da899; border-color: #55cbbd; }
+    QSlider::groove:horizontal { height: 4px; background: #344248; border-radius: 2px; }
+    QSlider::sub-page:horizontal { background: #35b2a3; border-radius: 2px; }
+    QSlider::handle:horizontal { width: 14px; margin: -5px 0; background: #dce7e8; border: 1px solid #54c1b4; border-radius: 7px; }
     QTabWidget::pane { border-color: #303c41; background: #192226; }
     QTabBar::tab { background: #141c20; color: #8fa0a6; border-color: #303c41; }
     QTabBar::tab:hover { background: #202b30; color: #dce5e7; }
@@ -280,6 +283,9 @@ MainWindow::MainWindow(QString platform_name, QWidget* parent)
     QToolButton:hover, QToolButton:checked { background: #e6f3f1; border-color: #67afa7; }
     QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox { min-height: 28px; padding: 0 7px; background: #ffffff; border: 1px solid #cbd5d8; border-radius: 3px; }
     QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus { border-color: #238b82; }
+    QSlider::groove:horizontal { height: 4px; background: #d4dfe1; border-radius: 2px; }
+    QSlider::sub-page:horizontal { background: #2b9b90; border-radius: 2px; }
+    QSlider::handle:horizontal { width: 14px; margin: -5px 0; background: #ffffff; border: 1px solid #238b82; border-radius: 7px; }
     QTabWidget::pane { border: 1px solid #d9e1e3; background: #ffffff; }
     QTabBar::tab { min-width: 106px; height: 31px; padding: 0 10px; background: #e8edef; color: #56656b; border: 1px solid #d8e0e2; }
     QTabBar::tab:selected { background: #ffffff; color: #176f68; border-top: 2px solid #25988d; }
@@ -505,9 +511,17 @@ QWidget* MainWindow::buildLivePage() {
   selected_a_scan_->setAlignment(Qt::AlignRight);
   selected_a_scan_->setFixedWidth(72);
   selected_a_scan_->setToolTip("Record index displayed from each Alazar DMA buffer");
+  selected_a_scan_slider_ = new QSlider(Qt::Horizontal, content);
+  selected_a_scan_slider_->setRange(0, 0);
+  selected_a_scan_slider_->setTracking(false);
+  selected_a_scan_slider_->setMinimumWidth(220);
+  selected_a_scan_slider_->setMaximumWidth(420);
+  selected_a_scan_slider_->setFixedHeight(28);
+  selected_a_scan_slider_->setToolTip("Drag to select the displayed A-scan record");
   selected_a_scan_status_ = new QLabel("Waiting for selected record", content);
   selected_a_scan_status_->setProperty("statusKind", "neutral");
   tools->addWidget(selected_label);
+  tools->addWidget(selected_a_scan_slider_);
   tools->addWidget(selected_a_scan_);
   tools->addWidget(selected_a_scan_status_);
   tools->addStretch(1);
@@ -528,11 +542,14 @@ QWidget* MainWindow::buildLivePage() {
   save_view->setToolTip("Save current view as PNG");
   connect(save_view, &QToolButton::clicked, this, &MainWindow::saveCurrentView);
   connect(selected_a_scan_, &QSpinBox::valueChanged, this, [this](int value) {
+    selected_a_scan_slider_->setValue(value);
     selected_a_scan_status_->setText(QString("Waiting for A-scan %1").arg(value));
     selected_a_scan_status_->setProperty("statusKind", "neutral");
     repolish(selected_a_scan_status_);
     controller_->setSelectedAScan(static_cast<std::uint32_t>(value));
   });
+  connect(selected_a_scan_slider_, &QSlider::valueChanged,
+          selected_a_scan_, &QSpinBox::setValue);
   tools->addWidget(auto_range);
   tools->addWidget(manual_range);
   tools->addWidget(freeze_button_);
@@ -989,10 +1006,12 @@ QWidget* MainWindow::buildProcessingPage() {
     spin->setMaximumWidth(105);
     return spin;
   };
+  period_start_ = segmentSpin();
+  period_length_ = segmentSpin();
   up_start_ = segmentSpin();
-  up_end_ = segmentSpin();
+  up_length_ = segmentSpin();
   down_start_ = segmentSpin();
-  down_end_ = segmentSpin();
+  down_length_ = segmentSpin();
   guard_samples_ = segmentSpin();
   int control_column = 0;
   auto addControl = [&controls, &control_column](const QString& label, QWidget* widget) {
@@ -1004,10 +1023,12 @@ QWidget* MainWindow::buildProcessingPage() {
     controls->setColumnMinimumWidth(control_column, 112);
     ++control_column;
   };
+  addControl("Period start", period_start_);
+  addControl("Period length", period_length_);
   addControl("UP start", up_start_);
-  addControl("UP end", up_end_);
+  addControl("UP length", up_length_);
   addControl("DOWN start", down_start_);
-  addControl("DOWN end", down_end_);
+  addControl("DOWN length", down_length_);
   addControl("Guard", guard_samples_);
   controls->setColumnStretch(control_column, 1);
   auto* capture = new QPushButton("Capture Snapshot", segmentation);
@@ -1147,6 +1168,10 @@ QWidget* MainWindow::buildLogPage() {
 
 void MainWindow::connectUi() {
   connect(navigation_, &QListWidget::currentRowChanged, pages_, &QStackedWidget::setCurrentIndex);
+  connect(navigation_, &QListWidget::currentRowChanged, this,
+          [this] { updateLivePlotSubscription(); });
+  connect(live_tabs_, &QTabWidget::currentChanged, this,
+          [this] { updateLivePlotSubscription(); });
   connect(load_button_, &QToolButton::clicked, this, &MainWindow::loadProfile);
   connect(save_button_, &QToolButton::clicked, this, &MainWindow::saveProfile);
   connect(apply_button_, &QPushButton::clicked, this, &MainWindow::applyProfile);
@@ -1185,6 +1210,7 @@ void MainWindow::connectUi() {
     freeze_live_ = checked;
     freeze_button_->setIcon(style()->standardIcon(checked ? QStyle::SP_MediaPlay : QStyle::SP_MediaPause));
     freeze_button_->setToolTip(checked ? "Resume live plot display" : "Freeze plot display");
+    updateLivePlotSubscription();
   });
 
   connect(controller_, &ApplicationController::statusChanged, this, &MainWindow::updateStatus);
@@ -1212,32 +1238,38 @@ void MainWindow::connectUi() {
             }
           });
   connect(controller_, &ApplicationController::waveformReady, this, [this](WaveformSnapshotPtr snapshot) {
-    if (freeze_live_ || snapshot == nullptr) {
+    if (!isLivePlotActive(0) || snapshot == nullptr) {
       return;
     }
     time_plot_->setSeries({{"Full period", qVector(snapshot->full_scale_samples), QColor("#167a86")}});
-    selected_a_scan_status_->setText(QString("A-scan %1 / %2 | DMA %3")
-                                         .arg(snapshot->record_index_in_buffer)
-                                         .arg(snapshot->records_in_buffer - 1U)
-                                         .arg(snapshot->dma_buffer_sequence));
-    selected_a_scan_status_->setProperty("statusKind", "ready");
-    repolish(selected_a_scan_status_);
+    updateSelectedAScanStatus(snapshot->record_index_in_buffer,
+                              snapshot->records_in_buffer,
+                              snapshot->dma_buffer_sequence);
   });
   connect(controller_, &ApplicationController::fftReady, this, [this](FftSnapshotPtr snapshot) {
-    if (freeze_live_ || snapshot == nullptr) {
+    if (!isLivePlotActive(1) || snapshot == nullptr) {
       return;
     }
     fft_plot_->setSeries({{"UP", qVector(snapshot->up_magnitude_db), QColor("#188266")},
                           {"DOWN", qVector(snapshot->down_magnitude_db), QColor("#d06432")}});
+    updateSelectedAScanStatus(snapshot->record_index_in_buffer,
+                              snapshot->records_in_buffer,
+                              snapshot->dma_buffer_sequence);
   });
   connect(controller_, &ApplicationController::scanLineReady, this, [this](ScanLineSnapshotPtr snapshot) {
-    if (freeze_live_ || snapshot == nullptr) {
+    if (snapshot == nullptr) {
       return;
     }
-    peak_index_plot_->setSeries({{"UP", qVector(snapshot->up_peak_index), QColor("#188266")},
-                                 {"DOWN", qVector(snapshot->down_peak_index), QColor("#d06432")}});
-    peak_value_plot_->setSeries({{"UP", qVector(snapshot->up_peak_value_db), QColor("#188266")},
-                                 {"DOWN", qVector(snapshot->down_peak_value_db), QColor("#d06432")}});
+    if (isLivePlotActive(2)) {
+      peak_index_plot_->setSeries({{"UP", qVector(snapshot->up_peak_index), QColor("#188266")},
+                                   {"DOWN", qVector(snapshot->down_peak_index), QColor("#d06432")}});
+      peak_value_plot_->setSeries({{"UP", qVector(snapshot->up_peak_value_db), QColor("#188266")},
+                                   {"DOWN", qVector(snapshot->down_peak_value_db), QColor("#d06432")}});
+      return;
+    }
+    if (!isLivePlotActive(3)) {
+      return;
+    }
     auto distance = qVector(snapshot->distance_m);
     auto velocity = qVector(snapshot->velocity_mps);
     for (int index = 0; index < distance.size() && index < static_cast<int>(snapshot->valid.size()); ++index) {
@@ -1250,13 +1282,13 @@ void MainWindow::connectUi() {
                                 {"Velocity (m/s)", std::move(velocity), QColor("#ad4e61")}});
   });
   connect(controller_, &ApplicationController::bscanReady, this, [this](BScanSnapshotPtr snapshot) {
-    if (!freeze_live_ && snapshot != nullptr) {
+    if (isLivePlotActive(4) && snapshot != nullptr) {
       bscan_plot_->setData(snapshot->width, snapshot->height, snapshot->depth_m, snapshot->valid,
                            snapshot->completed_lines);
     }
   });
   connect(controller_, &ApplicationController::pointCloudReady, this, [this](PointCloudSnapshotPtr snapshot) {
-    if (freeze_live_ || snapshot == nullptr || !snapshot->complete) {
+    if (!isLivePlotActive(5) || snapshot == nullptr || !snapshot->complete) {
       return;
     }
     const auto update_interval_ms = static_cast<qint64>(
@@ -1281,11 +1313,12 @@ void MainWindow::connectUi() {
   connect(controller_, &ApplicationController::segmentationSnapshotReady, this,
           [this](WaveformSnapshotPtr snapshot) {
             segmentation_plot_->setSnapshot(snapshot);
-            segmentation_plot_->setSegments({static_cast<std::uint32_t>(up_start_->value()),
-                                              static_cast<std::uint32_t>(up_end_->value())},
-                                             {static_cast<std::uint32_t>(down_start_->value()),
-                                              static_cast<std::uint32_t>(down_end_->value())},
-                                             static_cast<std::uint32_t>(guard_samples_->value()));
+            segmentation_plot_->setSegments(
+                segmentRangeFromStartAndLength(static_cast<std::uint32_t>(up_start_->value()),
+                                               static_cast<std::uint32_t>(up_length_->value())),
+                segmentRangeFromStartAndLength(static_cast<std::uint32_t>(down_start_->value()),
+                                               static_cast<std::uint32_t>(down_length_->value())),
+                static_cast<std::uint32_t>(guard_samples_->value()));
             segmentation_state_->setText(QString("Frozen frame %1 | overlay follows current controls").arg(snapshot->frame_id));
             segmentation_state_->setProperty("statusKind", "ready");
             repolish(segmentation_state_);
@@ -1299,7 +1332,8 @@ void MainWindow::connectUi() {
       edfa_control_mode_, edfa_setpoint_, edfa_warmup_, x_start_, x_end_, y_start_, y_end_, y_lines_,
       bidirectional_, mcu_enabled_, mcu_port_, fft_backend_, window_function_, dc_removal_,
       peak_threshold_, peak_start_, peak_end_,
-      up_start_, up_end_, down_start_, down_end_, guard_samples_, fft_length_, raw_enabled_, processed_enabled_,
+      period_start_, period_length_, up_start_, up_length_, down_start_, down_length_, guard_samples_, fft_length_,
+      raw_enabled_, processed_enabled_,
       output_directory_, storage_queue_, split_size_, udp_enabled_, udp_ip_, udp_port_, udp_points_, udp_version_,
       udp_queue_, udp_policy_};
   const QList<QObject*> runtime_controls = {dc_removal_, peak_threshold_, peak_start_, peak_end_};
@@ -1359,10 +1393,12 @@ void MainWindow::markDirty() {
     digitizer_lock_state_->setProperty("statusKind", "warn");
     repolish(digitizer_lock_state_);
   }
-  segmentation_plot_->setSegments({static_cast<std::uint32_t>(up_start_->value()),
-                                    static_cast<std::uint32_t>(up_end_->value())},
-                                   {static_cast<std::uint32_t>(down_start_->value()),
-                                    static_cast<std::uint32_t>(down_end_->value())},
+  segmentation_plot_->setSegments(segmentRangeFromStartAndLength(
+                                       static_cast<std::uint32_t>(up_start_->value()),
+                                       static_cast<std::uint32_t>(up_length_->value())),
+                                   segmentRangeFromStartAndLength(
+                                       static_cast<std::uint32_t>(down_start_->value()),
+                                       static_cast<std::uint32_t>(down_length_->value())),
                                    static_cast<std::uint32_t>(guard_samples_->value()));
   validateControls();
 }
@@ -1513,10 +1549,14 @@ SystemConfig MainWindow::configFromControls() const {
   config.processing.peak_threshold_db = peak_threshold_->value();
   config.processing.peak_search_start_bin = static_cast<std::uint32_t>(peak_start_->value());
   config.processing.peak_search_end_bin = static_cast<std::uint32_t>(peak_end_->value());
-  config.chirp_segmentation.up_segment = {static_cast<std::uint32_t>(up_start_->value()),
-                                         static_cast<std::uint32_t>(up_end_->value())};
-  config.chirp_segmentation.down_segment = {static_cast<std::uint32_t>(down_start_->value()),
-                                           static_cast<std::uint32_t>(down_end_->value())};
+  config.chirp_segmentation.trigger_to_period_offset = period_start_->value();
+  config.chirp_segmentation.chirp_period_samples = static_cast<std::uint32_t>(period_length_->value());
+  config.chirp_segmentation.up_segment = segmentRangeFromStartAndLength(
+      static_cast<std::uint32_t>(up_start_->value()),
+      static_cast<std::uint32_t>(up_length_->value()));
+  config.chirp_segmentation.down_segment = segmentRangeFromStartAndLength(
+      static_cast<std::uint32_t>(down_start_->value()),
+      static_cast<std::uint32_t>(down_length_->value()));
   config.chirp_segmentation.guard_samples = static_cast<std::uint32_t>(guard_samples_->value());
   config.storage.raw_enabled = raw_enabled_->isChecked();
   config.storage.processed_enabled = processed_enabled_->isChecked();
@@ -1643,6 +1683,9 @@ void MainWindow::updateDerivedAcquisitionLabels() {
   if (selected_a_scan_ != nullptr) {
     selected_a_scan_->setMaximum(std::max(0, a_scans - 1));
   }
+  if (selected_a_scan_slider_ != nullptr) {
+    selected_a_scan_slider_->setMaximum(std::max(0, a_scans - 1));
+  }
   const auto b_scans = y_lines_->value();
   const auto frame_points = static_cast<qulonglong>(a_scans) * static_cast<qulonglong>(b_scans);
   a_scan_count_->setText(QString("%1 records | one DMA buffer").arg(a_scans));
@@ -1733,10 +1776,12 @@ void MainWindow::loadConfigToControls(const SystemConfig& config, bool mark_pend
   peak_threshold_->setValue(config.processing.peak_threshold_db);
   peak_start_->setValue(static_cast<int>(config.processing.peak_search_start_bin));
   peak_end_->setValue(static_cast<int>(config.processing.peak_search_end_bin));
+  period_start_->setValue(config.chirp_segmentation.trigger_to_period_offset);
+  period_length_->setValue(static_cast<int>(config.chirp_segmentation.chirp_period_samples));
   up_start_->setValue(static_cast<int>(config.chirp_segmentation.up_segment.start_sample));
-  up_end_->setValue(static_cast<int>(config.chirp_segmentation.up_segment.end_sample_exclusive));
+  up_length_->setValue(static_cast<int>(config.chirp_segmentation.up_segment.length()));
   down_start_->setValue(static_cast<int>(config.chirp_segmentation.down_segment.start_sample));
-  down_end_->setValue(static_cast<int>(config.chirp_segmentation.down_segment.end_sample_exclusive));
+  down_length_->setValue(static_cast<int>(config.chirp_segmentation.down_segment.length()));
   guard_samples_->setValue(static_cast<int>(config.chirp_segmentation.guard_samples));
   raw_enabled_->setChecked(config.storage.raw_enabled);
   processed_enabled_->setChecked(config.storage.processed_enabled);
@@ -1761,10 +1806,12 @@ void MainWindow::loadConfigToControls(const SystemConfig& config, bool mark_pend
   udp_indicator_->setProperty("statusKind", udp_enabled_->isChecked() ? "ready" : "neutral");
   repolish(raw_indicator_);
   repolish(udp_indicator_);
-  segmentation_plot_->setSegments({static_cast<std::uint32_t>(up_start_->value()),
-                                    static_cast<std::uint32_t>(up_end_->value())},
-                                   {static_cast<std::uint32_t>(down_start_->value()),
-                                    static_cast<std::uint32_t>(down_end_->value())},
+  segmentation_plot_->setSegments(segmentRangeFromStartAndLength(
+                                       static_cast<std::uint32_t>(up_start_->value()),
+                                       static_cast<std::uint32_t>(up_length_->value())),
+                                   segmentRangeFromStartAndLength(
+                                       static_cast<std::uint32_t>(down_start_->value()),
+                                       static_cast<std::uint32_t>(down_length_->value())),
                                    static_cast<std::uint32_t>(guard_samples_->value()));
   digitizer_lock_state_->setText(mark_pending ? "APPLY REQUIRED | reconnect before START"
                                               : "READY | board settings applied");
@@ -1782,6 +1829,34 @@ void MainWindow::updateRuntimeSourceControls() {
   board_address_->setText(source == AcquisitionSource::Alazar
       ? "System 1 / Board 1 | fixed"
       : source == AcquisitionSource::Replay ? "Recorded DMA stream" : "Generated signal batches");
+}
+
+void MainWindow::updateLivePlotSubscription() {
+  if (controller_ == nullptr || navigation_ == nullptr || live_tabs_ == nullptr) {
+    return;
+  }
+  const int plot_index = !freeze_live_ && navigation_->currentRow() == 1
+      ? live_tabs_->currentIndex()
+      : -1;
+  controller_->setLivePlotIndex(plot_index);
+}
+
+bool MainWindow::isLivePlotActive(int plot_index) const {
+  return !freeze_live_ && navigation_ != nullptr && navigation_->currentRow() == 1 &&
+      live_tabs_ != nullptr && live_tabs_->currentIndex() == plot_index;
+}
+
+void MainWindow::updateSelectedAScanStatus(std::uint32_t record_index,
+                                           std::uint32_t records_in_buffer,
+                                           std::uint64_t dma_sequence) {
+  selected_a_scan_status_->setText(QString("A-scan %1 / %2 | latest DMA %3")
+                                       .arg(record_index)
+                                       .arg(records_in_buffer == 0U ? 0U : records_in_buffer - 1U)
+                                       .arg(dma_sequence));
+  if (selected_a_scan_status_->property("statusKind").toString() != "ready") {
+    selected_a_scan_status_->setProperty("statusKind", "ready");
+    repolish(selected_a_scan_status_);
+  }
 }
 
 void MainWindow::applyProfile() {
@@ -1827,6 +1902,15 @@ void MainWindow::saveProfile() {
 }
 
 void MainWindow::updateStatus(RuntimeStatus status) {
+  const bool control_state_changed =
+      runtime_status_.state != status.state ||
+      runtime_status_.configured != status.configured ||
+      runtime_status_.connected != status.connected ||
+      runtime_status_.running != status.running ||
+      runtime_status_.recording != status.recording ||
+      runtime_status_.config_revision != status.config_revision ||
+      runtime_status_.processing_revision != status.processing_revision ||
+      runtime_status_.source_name != status.source_name;
   runtime_status_ = std::move(status);
   const auto state = QString::fromStdString(toString(runtime_status_.state)).toUpper();
   runtime_state_label_->setText(state);
@@ -1969,7 +2053,9 @@ void MainWindow::updateStatus(RuntimeStatus status) {
   edfa_output_button_->setText(runtime_status_.edfa_output_enabled ? "Disable Output" : "Enable Output");
   edfa_output_button_->setEnabled(runtime_status_.connected && edfa_mode_->currentIndex() == 2 &&
                                   !runtime_status_.edfa_bypassed && !runtime_status_.running);
-  validateControls();
+  if (control_state_changed) {
+    validateControls();
+  }
 }
 
 void MainWindow::setStatusText(QLabel* label, QString text, bool ready, bool bypassed) {

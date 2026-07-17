@@ -13,6 +13,7 @@
 #include "storage/binary_storage.h"
 
 #include <QDateTime>
+#include <QElapsedTimer>
 #include <QMetaObject>
 #include <QTimer>
 
@@ -26,6 +27,8 @@
 
 namespace fmcw {
 namespace {
+
+constexpr qint64 kStatusUpdateIntervalMs = 100;
 
 std::uint64_t utcNowNs() {
   return static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -246,6 +249,7 @@ class RuntimeWorker final : public QObject {
     ui_timer_->setInterval(std::max(
         16, static_cast<int>(std::lround(1000.0 / std::clamp(config_.ui.plot_update_hz, 1.0, 60.0)))));
     ui_timer_->start();
+    status_publish_timer_.restart();
     emitLog("INFO", "Acquisition",
             "Global START completed; continuous full-period DMA batches are active");
     if (udp_ != nullptr) {
@@ -318,6 +322,24 @@ class RuntimeWorker final : public QObject {
     }
     emitLog("INFO", "Live View", QString("Selected A-scan %1 for Time Domain and FFT display")
                                      .arg(selected_record_index_));
+  }
+
+  void setLivePlotIndexRuntime(int plot_index) {
+    const int next_index = std::clamp(plot_index, -1, 5);
+    if (next_index == active_live_plot_index_) {
+      return;
+    }
+    active_live_plot_index_ = next_index;
+    switch (active_live_plot_index_) {
+      case 0: last_waveform_snapshot_.reset(); break;
+      case 1: last_fft_snapshot_.reset(); break;
+      case 2:
+      case 3: last_scan_line_snapshot_.reset(); break;
+      case 4: last_bscan_snapshot_.reset(); break;
+      case 5: last_point_cloud_snapshot_.reset(); break;
+      default: break;
+    }
+    publishSnapshots();
   }
 
   void setEdfaOutputRuntime(bool enabled) {
@@ -516,9 +538,9 @@ class RuntimeWorker final : public QObject {
       stopRuntime(false, "Processed storage queue stopped", true);
       return;
     }
-    const auto processing_status = processing_->status();
-    if (processing_status.stop_requested) {
-      stopRuntime(false, qString(processing_status.stop_reason), true);
+    std::string processing_stop_reason;
+    if (processing_->stopRequested(processing_stop_reason)) {
+      stopRuntime(false, qString(processing_stop_reason), true);
       return;
     }
     if (storage_ != nullptr && storage_->status().stop_requested) {
@@ -526,29 +548,61 @@ class RuntimeWorker final : public QObject {
       return;
     }
     publishSnapshots();
-    publishStatus(recording_ ? "Acquiring DMA batches and recording" : "Acquiring DMA batches");
+    if (!status_publish_timer_.isValid() ||
+        status_publish_timer_.elapsed() >= kStatusUpdateIntervalMs) {
+      status_publish_timer_.restart();
+      publishStatus(recording_ ? "Acquiring DMA batches and recording" : "Acquiring DMA batches");
+    }
   }
 
   void publishSnapshots() {
-    const auto waveform = processing_->snapshots().latestWaveform();
-    const auto fft = processing_->snapshots().latestFft();
-    const auto line = processing_->snapshots().latestScanLine();
-    const auto bscan = processing_->snapshots().latestBScan();
-    const auto point_cloud = processing_->snapshots().latestPointCloud();
-    if (waveform != nullptr) {
-      emit waveformReady(waveform);
+    if (processing_ == nullptr) {
+      return;
     }
-    if (fft != nullptr) {
-      emit fftReady(fft);
-    }
-    if (line != nullptr) {
-      emit scanLineReady(line);
-    }
-    if (bscan != nullptr) {
-      emit bscanReady(bscan);
-    }
-    if (point_cloud != nullptr) {
-      emit pointCloudReady(point_cloud);
+    switch (active_live_plot_index_) {
+      case 0: {
+        const auto snapshot = processing_->snapshots().latestWaveform();
+        if (snapshot != nullptr && snapshot != last_waveform_snapshot_) {
+          last_waveform_snapshot_ = snapshot;
+          emit waveformReady(snapshot);
+        }
+        break;
+      }
+      case 1: {
+        const auto snapshot = processing_->snapshots().latestFft();
+        if (snapshot != nullptr && snapshot != last_fft_snapshot_) {
+          last_fft_snapshot_ = snapshot;
+          emit fftReady(snapshot);
+        }
+        break;
+      }
+      case 2:
+      case 3: {
+        const auto snapshot = processing_->snapshots().latestScanLine();
+        if (snapshot != nullptr && snapshot != last_scan_line_snapshot_) {
+          last_scan_line_snapshot_ = snapshot;
+          emit scanLineReady(snapshot);
+        }
+        break;
+      }
+      case 4: {
+        const auto snapshot = processing_->snapshots().latestBScan();
+        if (snapshot != nullptr && snapshot != last_bscan_snapshot_) {
+          last_bscan_snapshot_ = snapshot;
+          emit bscanReady(snapshot);
+        }
+        break;
+      }
+      case 5: {
+        const auto snapshot = processing_->snapshots().latestPointCloud();
+        if (snapshot != nullptr && snapshot != last_point_cloud_snapshot_) {
+          last_point_cloud_snapshot_ = snapshot;
+          emit pointCloudReady(snapshot);
+        }
+        break;
+      }
+      default:
+        break;
     }
   }
 
@@ -738,6 +792,7 @@ class RuntimeWorker final : public QObject {
 
   QString platform_name_;
   QTimer* ui_timer_ = nullptr;
+  QElapsedTimer status_publish_timer_;
   RuntimeAdapters adapters_;
   std::unique_ptr<AcquisitionSession> session_;
   std::unique_ptr<ContinuousAcquisitionWorker> acquisition_worker_;
@@ -749,6 +804,12 @@ class RuntimeWorker final : public QObject {
   std::uint64_t config_revision_ = 0;
   std::uint64_t processing_revision_ = 0;
   std::uint32_t selected_record_index_ = 0;
+  int active_live_plot_index_ = -1;
+  WaveformSnapshotPtr last_waveform_snapshot_;
+  FftSnapshotPtr last_fft_snapshot_;
+  ScanLineSnapshotPtr last_scan_line_snapshot_;
+  BScanSnapshotPtr last_bscan_snapshot_;
+  PointCloudSnapshotPtr last_point_cloud_snapshot_;
   AcquisitionSource active_source_ = AcquisitionSource::Simulator;
   ContinuousAcquisitionStatus acquisition_status_;
   bool configured_ = false;
@@ -828,6 +889,12 @@ void ApplicationController::updateProcessing(const ProcessingConfig& config) {
 void ApplicationController::setSelectedAScan(std::uint32_t record_index) {
   QMetaObject::invokeMethod(worker_, [worker = worker_, record_index] {
     worker->setSelectedAScanRuntime(record_index);
+  }, Qt::QueuedConnection);
+}
+
+void ApplicationController::setLivePlotIndex(int plot_index) {
+  QMetaObject::invokeMethod(worker_, [worker = worker_, plot_index] {
+    worker->setLivePlotIndexRuntime(plot_index);
   }, Qt::QueuedConnection);
 }
 

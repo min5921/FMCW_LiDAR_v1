@@ -86,6 +86,7 @@ class ProcessingService {
   bool waitForProcessedBatches(std::uint64_t target_count,
                                std::chrono::milliseconds timeout,
                                std::string& error);
+  bool stopRequested(std::string& reason) const;
   ProcessingServiceStatus status() const;
 
   ProcessingSnapshotStore& snapshots();

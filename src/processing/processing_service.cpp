@@ -87,14 +87,13 @@ ProcessingLatencyBreakdown averageLatency(
   };
 }
 
-double percentile(std::vector<double> values, double quantile) {
-  if (values.empty()) {
+double percentile(const std::vector<double>& sorted_values, double quantile) {
+  if (sorted_values.empty()) {
     return 0.0;
   }
-  std::sort(values.begin(), values.end());
   const auto index = static_cast<std::size_t>(std::ceil(
-      quantile * static_cast<double>(values.size()))) - 1U;
-  return values[std::min(index, values.size() - 1U)];
+      quantile * static_cast<double>(sorted_values.size()))) - 1U;
+  return sorted_values[std::min(index, sorted_values.size() - 1U)];
 }
 
 }  // namespace
@@ -640,6 +639,12 @@ bool ProcessingService::waitForProcessedBatches(std::uint64_t target_count,
   return true;
 }
 
+bool ProcessingService::stopRequested(std::string& reason) const {
+  std::lock_guard<std::mutex> lock(impl_->mutex);
+  reason = impl_->stop_reason;
+  return impl_->stop_requested;
+}
+
 ProcessingServiceStatus ProcessingService::status() const {
   ProcessingServiceStatus status;
   std::vector<double> latency_values;
@@ -675,6 +680,7 @@ ProcessingServiceStatus ProcessingService::status() const {
     status.stop_reason = impl_->stop_reason;
     latency_values.assign(impl_->batch_latency_window.begin(), impl_->batch_latency_window.end());
   }
+  std::sort(latency_values.begin(), latency_values.end());
   status.batch_latency_p50_ms = percentile(latency_values, 0.50);
   status.batch_latency_p95_ms = percentile(latency_values, 0.95);
   status.batch_latency_p99_ms = percentile(latency_values, 0.99);

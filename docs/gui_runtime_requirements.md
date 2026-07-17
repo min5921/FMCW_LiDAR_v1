@@ -143,7 +143,7 @@ Processing 페이지의 chirp segmentation graph는 실시간 plot이 아니다.
 - `Capture Snapshot`은 Running 상태에서 최신 full-period raw frame을 복사해 화면에 고정한다.
 - Idle 상태에서는 마지막 cached frame 또는 replay frame을 사용한다.
 - 사용 가능한 frame이 없으면 숨은 acquisition을 시작하지 않고 `No frame available`을 표시한다.
-- 사용자가 up/down/guard boundary를 바꾸면 고정된 frame 위 overlay와 validation 결과만 즉시 갱신한다.
+- 사용자는 full-period와 up/down 구간을 start/length로 입력하며, end는 `start + length`로 계산한다. 값을 바꾸면 고정된 frame 위 overlay와 validation 결과만 즉시 갱신한다.
 - boundary가 record/period 밖으로 나가거나 겹치면 global START를 막는다.
 - Live View의 Time Domain plot만 연속 실시간 waveform을 표시한다.
 
@@ -169,6 +169,10 @@ Peak Analysis 탭은 FFT spectrum을 다시 그리지 않는다. 다음 두 plot
 ## 9. Live Plot Rules
 
 - Time Domain과 FFT는 최신 frame 우선이다.
+- 200 Hz acquisition과 모든 A-scan 신호처리는 계속 수행하되, Live View는 `ui.plot_update_hz`에 맞춰 최신 snapshot만 표시한다. 중간 UI frame을 합치는 것은 DMA/processing drop으로 집계하지 않는다.
+- Qt runtime은 현재 보이는 Live tab 한 개만 GUI thread로 전달한다. 숨은 Time Domain, FFT, Peak, Distance, B-scan, 3D tab은 GUI thread 전달, QVector 변환, repaint를 수행하지 않는다.
+- dense Time Domain/FFT trace는 화면 가로 픽셀 수에 맞춘 min/max envelope로 축약하여 narrow peak를 보존하면서 렌더링한다.
+- Windows 기본 plot 갱신은 최대 30 Hz, 숫자와 상태 telemetry 갱신은 10 Hz로 분리한다. 정지/오류 플래그는 plot cadence에서 가볍게 확인하되 percentile 등 상태 집계는 10 Hz에서만 수행하며, acquisition 및 signal-processing cadence와 독립적이어야 한다.
 - Peak Analysis, Distance/Velocity, B-scan은 scan line 또는 frame aggregation 완료 시 publish한다.
 - B-scan은 `X Pixel x B Scan` Z heatmap으로 표시한다.
 - 3D point cloud는 partial line을 표시하지 않고 모든 B-scan line이 완료된 raster frame만 교체한다. 다음 frame 수집 중에는 직전 complete frame을 유지한다.
@@ -180,6 +184,7 @@ Peak Analysis 탭은 FFT spectrum을 다시 그리지 않는다. 다음 두 plot
 ## 10. Selected A-scan And Phase 6 Runtime
 
 - Live Time Domain and FFT display the selected zero-based A-scan record from each Alazar DMA buffer.
+- Selected A-scan은 가로 slider와 숫자 입력을 함께 제공하고 양방향으로 동기화한다. slider drag는 release 시 한 번만 runtime selection을 갱신하여 command queue 적체를 만들지 않는다.
 - Changing the selected A-scan is display-only and applies while acquisition is running; it does not restart or reconfigure the digitizer.
 - Peak Analysis, Distance/Velocity, B-scan, 3D, UDP, and raw/processed storage continue to consume all A-scans.
 - The 3D tab consumes complete immutable point-cloud frames only. `ui.point_cloud_update_hz` caps rendering independently from acquisition and never exposes partial raster assembly.
