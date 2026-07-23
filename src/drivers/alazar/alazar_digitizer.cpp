@@ -161,6 +161,8 @@ struct AlazarDigitizer::Impl {
   std::uint64_t current_buffer_timestamp_ns = 0;
   std::uint64_t previous_buffer_timestamp_ns = 0;
   double buffer_period_ema_ms = 0.0;
+  std::condition_variable api_wait_condition;
+  bool api_wait_active = false;
 #endif
 };
 
@@ -175,7 +177,7 @@ bool AlazarDigitizer::sdkAvailable() { return FMCW_HAS_ALAZAR_SDK != 0; }
 std::string AlazarDigitizer::name() const { return "AlazarTech ATS AutoDMA digitizer"; }
 
 DigitizerTelemetry AlazarDigitizer::telemetry() const {
-  std::lock_guard<std::mutex> lock(mutex_);
+  std::lock_guard<std::mutex> lock(telemetry_mutex_);
   return telemetry_;
 }
 
@@ -186,9 +188,12 @@ bool AlazarDigitizer::configure(const SystemConfig& config, std::string& error) 
     return false;
   }
   std::lock_guard<std::mutex> lock(mutex_);
-  if (telemetry_.device.running) {
-    error = "Cannot configure Alazar digitizer while acquisition is running";
-    return false;
+  {
+    std::lock_guard<std::mutex> telemetry_lock(telemetry_mutex_);
+    if (telemetry_.device.running) {
+      error = "Cannot configure Alazar digitizer while acquisition is running";
+      return false;
+    }
   }
   const auto* capabilities = findDigitizerBoardCapabilities(config.digitizer.board_profile);
   if (capabilities == nullptr || !supportsSampleRate(*capabilities, config.digitizer.sample_rate_hz) ||
@@ -200,7 +205,11 @@ bool AlazarDigitizer::configure(const SystemConfig& config, std::string& error) 
   }
   config_ = config;
   configured_ = true;
-  telemetry_.device.detail = "Alazar configuration cached for channel " + toString(config_.digitizer.channel);
+  {
+    std::lock_guard<std::mutex> telemetry_lock(telemetry_mutex_);
+    telemetry_.device.detail =
+        "Alazar configuration cached for channel " + toString(config_.digitizer.channel);
+  }
 #if FMCW_HAS_ALAZAR_SDK
   if (impl_->board != nullptr && !configureBoard(error)) {
     return false;
@@ -229,14 +238,21 @@ bool AlazarDigitizer::connect(std::string& error) {
     impl_->board = nullptr;
     return false;
   }
-  telemetry_.device.connected = true;
+  {
+    std::lock_guard<std::mutex> telemetry_lock(telemetry_mutex_);
+    telemetry_.device.connected = true;
+  }
   if (!configureBoard(error)) {
     impl_->board = nullptr;
+    std::lock_guard<std::mutex> telemetry_lock(telemetry_mutex_);
     telemetry_.device.connected = false;
     return false;
   }
-  telemetry_.device.ready = true;
-  telemetry_.device.detail = "ATS9371 System 1 / Board 1 connected and configured";
+  {
+    std::lock_guard<std::mutex> telemetry_lock(telemetry_mutex_);
+    telemetry_.device.ready = true;
+    telemetry_.device.detail = "ATS9371 System 1 / Board 1 connected and configured";
+  }
   error.clear();
   return true;
 #else
@@ -246,25 +262,34 @@ bool AlazarDigitizer::connect(std::string& error) {
 }
 
 void AlazarDigitizer::disconnect() {
-  std::lock_guard<std::mutex> lock(mutex_);
+  std::unique_lock<std::mutex> lock(mutex_);
 #if FMCW_HAS_ALAZAR_SDK
-  if (impl_->async_prepared && impl_->board != nullptr) {
-    AlazarAbortAsyncRead(impl_->board);
-    impl_->async_prepared = false;
+  std::string ignored;
+  if (!abortAsyncReadLocked(lock, ignored)) {
+    std::lock_guard<std::mutex> telemetry_lock(telemetry_mutex_);
+    telemetry_.device.detail = ignored;
+    return;
   }
   releaseBuffers();
   impl_->board = nullptr;
 #endif
-  telemetry_.device = {};
-  telemetry_.device.detail = sdkAvailable() ? "Alazar disconnected" : "Alazar SDK not linked";
+  {
+    std::lock_guard<std::mutex> telemetry_lock(telemetry_mutex_);
+    telemetry_.device = {};
+    telemetry_.device.detail = sdkAvailable() ? "Alazar disconnected" : "Alazar SDK not linked";
+  }
 }
 
 bool AlazarDigitizer::start(std::string& error) {
   std::lock_guard<std::mutex> lock(mutex_);
 #if FMCW_HAS_ALAZAR_SDK
-  if (!configured_ || impl_->board == nullptr || !telemetry_.device.ready || telemetry_.device.running) {
-    error = "Alazar digitizer is not ready or is already running";
-    return false;
+  {
+    std::lock_guard<std::mutex> telemetry_lock(telemetry_mutex_);
+    if (!configured_ || impl_->board == nullptr || !telemetry_.device.ready ||
+        telemetry_.device.running) {
+      error = "Alazar digitizer is not ready or is already running";
+      return false;
+    }
   }
   releaseBuffers();
   impl_->records_per_buffer = config_.digitizer.acquisition_mode == AcquisitionMode::Finite ?
@@ -346,17 +371,20 @@ bool AlazarDigitizer::start(std::string& error) {
   impl_->compatibility_batch.reset();
   impl_->compatibility_record_index = 0;
   impl_->next_frame_id = 1;
-  telemetry_.frames_received = 0;
-  telemetry_.dma_buffers_received = 0;
-  telemetry_.dma_buffer_drops = 0;
-  telemetry_.trigger_misses = 0;
-  telemetry_.dma_buffer_rate_hz = 0.0;
-  telemetry_.dma_buffer_period_ms = 0.0;
   impl_->current_buffer_timestamp_ns = 0;
   impl_->previous_buffer_timestamp_ns = 0;
   impl_->buffer_period_ema_ms = 0.0;
-  telemetry_.device.running = true;
-  telemetry_.device.detail = "Alazar NPT AutoDMA acquisition active";
+  {
+    std::lock_guard<std::mutex> telemetry_lock(telemetry_mutex_);
+    telemetry_.frames_received = 0;
+    telemetry_.dma_buffers_received = 0;
+    telemetry_.dma_buffer_drops = 0;
+    telemetry_.trigger_misses = 0;
+    telemetry_.dma_buffer_rate_hz = 0.0;
+    telemetry_.dma_buffer_period_ms = 0.0;
+    telemetry_.device.running = true;
+    telemetry_.device.detail = "Alazar NPT AutoDMA acquisition active";
+  }
   error.clear();
   return true;
 #else
@@ -371,15 +399,18 @@ FrameWaitResult AlazarDigitizer::waitForBatch(MutableRawFrameBatchPtr& batch,
   std::unique_lock<std::mutex> lock(mutex_);
   batch.reset();
 #if FMCW_HAS_ALAZAR_SDK
-  if (!telemetry_.device.running || !impl_->async_prepared) {
-    error.clear();
-    return FrameWaitResult::Stopped;
-  }
-  if (config_.digitizer.acquisition_mode == AcquisitionMode::Finite &&
-      telemetry_.frames_received >= config_.digitizer.finite_frame_count) {
-    telemetry_.device.running = false;
-    error.clear();
-    return FrameWaitResult::Stopped;
+  {
+    std::lock_guard<std::mutex> telemetry_lock(telemetry_mutex_);
+    if (!telemetry_.device.running || !impl_->async_prepared) {
+      error.clear();
+      return FrameWaitResult::Stopped;
+    }
+    if (config_.digitizer.acquisition_mode == AcquisitionMode::Finite &&
+        telemetry_.frames_received >= config_.digitizer.finite_frame_count) {
+      telemetry_.device.running = false;
+      error.clear();
+      return FrameWaitResult::Stopped;
+    }
   }
   const auto deadline = std::chrono::steady_clock::now() + timeout;
   const auto repostReleasedBuffers = [&]() -> bool {
@@ -433,16 +464,28 @@ FrameWaitResult AlazarDigitizer::waitForBatch(MutableRawFrameBatchPtr& batch,
                std::chrono::steady_clock::duration::zero()));
   const auto wait_ms = static_cast<U32>(std::clamp<std::int64_t>(
       remaining.count(), 0, std::numeric_limits<U32>::max()));
+
+  impl_->api_wait_active = true;
+  lock.unlock();
   const auto result = AlazarWaitAsyncBufferComplete(impl_->board, buffer, wait_ms);
   const auto acquisition_wakeup_timestamp_ns = nowNs();
+  lock.lock();
+  impl_->api_wait_active = false;
+  impl_->api_wait_condition.notify_all();
+  if (!impl_->async_prepared) {
+    error.clear();
+    return FrameWaitResult::Stopped;
+  }
   if (result == ApiWaitTimeout) {
     error.clear();
     return FrameWaitResult::Timeout;
   }
   if (result == ApiBufferOverflow) {
+    std::lock_guard<std::mutex> telemetry_lock(telemetry_mutex_);
     ++telemetry_.dma_buffer_drops;
   }
   if (!check(result, "AlazarWaitAsyncBufferComplete", error)) {
+    std::lock_guard<std::mutex> telemetry_lock(telemetry_mutex_);
     telemetry_.device.detail = error;
     return FrameWaitResult::Error;
   }
@@ -457,10 +500,22 @@ FrameWaitResult AlazarDigitizer::waitForBatch(MutableRawFrameBatchPtr& batch,
     impl_->buffer_period_ema_ms = impl_->buffer_period_ema_ms > 0.0
         ? kTelemetryAlpha * period_ms + (1.0 - kTelemetryAlpha) * impl_->buffer_period_ema_ms
         : period_ms;
-    telemetry_.dma_buffer_period_ms = impl_->buffer_period_ema_ms;
-    telemetry_.dma_buffer_rate_hz = 1000.0 / impl_->buffer_period_ema_ms;
   }
   impl_->previous_buffer_timestamp_ns = impl_->current_buffer_timestamp_ns;
+
+  std::uint64_t batch_sequence = 0U;
+  std::uint64_t dropped_buffer_count = 0U;
+  std::uint64_t missed_trigger_count = 0U;
+  {
+    std::lock_guard<std::mutex> telemetry_lock(telemetry_mutex_);
+    if (impl_->buffer_period_ema_ms > 0.0) {
+      telemetry_.dma_buffer_period_ms = impl_->buffer_period_ema_ms;
+      telemetry_.dma_buffer_rate_hz = 1000.0 / impl_->buffer_period_ema_ms;
+    }
+    batch_sequence = telemetry_.dma_buffers_received;
+    dropped_buffer_count = telemetry_.dma_buffer_drops;
+    missed_trigger_count = telemetry_.trigger_misses;
+  }
 
   auto mutable_batch = impl_->batch_pool.acquire();
   const auto sample_count = static_cast<std::size_t>(impl_->records_per_buffer) *
@@ -473,7 +528,6 @@ FrameWaitResult AlazarDigitizer::waitForBatch(MutableRawFrameBatchPtr& batch,
   mutable_batch->sample_owner = std::make_shared<AlazarDmaLease>(
       impl_->buffers[buffer_index], impl_->lease_state, buffer_index);
   mutable_batch->records.resize(impl_->records_per_buffer);
-  const auto batch_sequence = telemetry_.dma_buffers_received;
   for (U32 record_index = 0; record_index < impl_->records_per_buffer; ++record_index) {
     auto& frame = mutable_batch->records[record_index];
     frame.metadata = impl_->record_metadata_templates[record_index];
@@ -495,11 +549,14 @@ FrameWaitResult AlazarDigitizer::waitForBatch(MutableRawFrameBatchPtr& batch,
   mutable_batch->metadata.ownership_ready_timestamp_ns = nowNs();
   mutable_batch->metadata.record_count = impl_->records_per_buffer;
   mutable_batch->metadata.record_length = config_.digitizer.sample_point;
-  mutable_batch->metadata.dropped_buffer_count = telemetry_.dma_buffer_drops;
-  mutable_batch->metadata.missed_trigger_count = telemetry_.trigger_misses;
+  mutable_batch->metadata.dropped_buffer_count = dropped_buffer_count;
+  mutable_batch->metadata.missed_trigger_count = missed_trigger_count;
 
-  telemetry_.frames_received += impl_->records_per_buffer;
-  ++telemetry_.dma_buffers_received;
+  {
+    std::lock_guard<std::mutex> telemetry_lock(telemetry_mutex_);
+    telemetry_.frames_received += impl_->records_per_buffer;
+    ++telemetry_.dma_buffers_received;
+  }
   batch = std::move(mutable_batch);
   error.clear();
   return FrameWaitResult::FrameReady;
@@ -548,7 +605,45 @@ FrameWaitResult AlazarDigitizer::waitForFrame(RawFrame& frame, std::chrono::mill
 }
 
 bool AlazarDigitizer::abort(std::string& error) {
-  std::lock_guard<std::mutex> lock(mutex_);
+  std::unique_lock<std::mutex> lock(mutex_);
+#if FMCW_HAS_ALAZAR_SDK
+  if (!abortAsyncReadLocked(lock, error)) {
+    std::lock_guard<std::mutex> telemetry_lock(telemetry_mutex_);
+    telemetry_.device.detail = error;
+    return false;
+  }
+#endif
+  {
+    std::lock_guard<std::mutex> telemetry_lock(telemetry_mutex_);
+    telemetry_.device.running = false;
+    telemetry_.device.detail = "Alazar acquisition aborted";
+  }
+  error.clear();
+  return true;
+}
+
+bool AlazarDigitizer::stop(std::string& error) {
+  std::unique_lock<std::mutex> lock(mutex_);
+#if FMCW_HAS_ALAZAR_SDK
+  if (!abortAsyncReadLocked(lock, error)) {
+    std::lock_guard<std::mutex> telemetry_lock(telemetry_mutex_);
+    telemetry_.device.detail = error;
+    return false;
+  }
+  releaseBuffers();
+#endif
+  {
+    std::lock_guard<std::mutex> telemetry_lock(telemetry_mutex_);
+    telemetry_.device.running = false;
+    telemetry_.device.ready = telemetry_.device.connected;
+    telemetry_.device.detail = telemetry_.device.connected ? "Alazar ready" : "Alazar disconnected";
+  }
+  error.clear();
+  return true;
+}
+
+bool AlazarDigitizer::abortAsyncReadLocked(std::unique_lock<std::mutex>& lock,
+                                           std::string& error) {
 #if FMCW_HAS_ALAZAR_SDK
   if (impl_->async_prepared && impl_->board != nullptr) {
     if (!check(AlazarAbortAsyncRead(impl_->board), "AlazarAbortAsyncRead", error)) {
@@ -561,27 +656,10 @@ bool AlazarDigitizer::abort(std::string& error) {
     impl_->lease_state->repost_enabled = false;
     impl_->lease_state->condition.notify_all();
   }
+  impl_->api_wait_condition.wait(lock, [this] { return !impl_->api_wait_active; });
+#else
+  static_cast<void>(lock);
 #endif
-  telemetry_.device.running = false;
-  telemetry_.device.detail = "Alazar acquisition aborted";
-  error.clear();
-  return true;
-}
-
-bool AlazarDigitizer::stop(std::string& error) {
-  std::lock_guard<std::mutex> lock(mutex_);
-#if FMCW_HAS_ALAZAR_SDK
-  if (impl_->async_prepared && impl_->board != nullptr) {
-    if (!check(AlazarAbortAsyncRead(impl_->board), "AlazarAbortAsyncRead", error)) {
-      return false;
-    }
-    impl_->async_prepared = false;
-  }
-  releaseBuffers();
-#endif
-  telemetry_.device.running = false;
-  telemetry_.device.ready = telemetry_.device.connected;
-  telemetry_.device.detail = telemetry_.device.connected ? "Alazar ready" : "Alazar disconnected";
   error.clear();
   return true;
 }

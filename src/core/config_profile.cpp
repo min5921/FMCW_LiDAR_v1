@@ -222,7 +222,7 @@ ConfigDocument ConfigProfileCodec::encode(const SystemConfig& config) {
 
   document.setString("chirp_segmentation.mode", toString(config.chirp_segmentation.mode));
   document.setInteger("chirp_segmentation.trigger_to_period_offset", config.chirp_segmentation.trigger_to_period_offset);
-  setUnsigned(document, "chirp_segmentation.chirp_period_samples", config.chirp_segmentation.chirp_period_samples);
+  setUnsigned(document, "chirp_segmentation.chirp_period_samples", config.digitizer.sample_point);
   setUnsigned(document, "chirp_segmentation.up_segment.start_sample", config.chirp_segmentation.up_segment.start_sample);
   setUnsigned(document, "chirp_segmentation.up_segment.end_sample_exclusive",
               config.chirp_segmentation.up_segment.end_sample_exclusive);
@@ -356,8 +356,9 @@ bool ConfigProfileCodec::decode(const ConfigDocument& document, SystemConfig& co
   readEnum(document, "chirp_segmentation.mode", config.chirp_segmentation.mode, issues, source);
   readInteger(document, "chirp_segmentation.trigger_to_period_offset",
               config.chirp_segmentation.trigger_to_period_offset, issues, source);
+  std::uint32_t legacy_chirp_period_samples = config.digitizer.sample_point;
   readInteger(document, "chirp_segmentation.chirp_period_samples",
-              config.chirp_segmentation.chirp_period_samples, issues, source);
+              legacy_chirp_period_samples, issues, source);
   readInteger(document, "chirp_segmentation.up_segment.start_sample",
               config.chirp_segmentation.up_segment.start_sample, issues, source);
   readInteger(document, "chirp_segmentation.up_segment.end_sample_exclusive",

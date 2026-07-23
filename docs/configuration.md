@@ -60,7 +60,7 @@ Full-period sample segmentation은 Laser 설정과 독립적이다. 일반 devel
 
 `digitizer.board_profile`은 선택 가능한 sampling rate, input range, impedance를 제한한다. SDK 25.1.0의 `AlazarSysInfo`로 확인한 장치는 `ATS9371`, System 1 / Board 1, 12-bit, FPGA 35.3이다. System/Board ID는 1로 고정한다. 내부 clock sampling rate는 SDK 보드 표의 1 kS/s부터 1 GS/s까지 20개 discrete 값만 ComboBox로 제공한다. 현재 입력 경로는 legacy와 실제 설정에 맞춰 `+/-400 mV`, DC coupling, `50 ohm`으로 제한한다.
 
-Trigger는 `TRIG IN`, External TTL, DC coupling을 고정 contract로 사용한다. UI는 rising/falling edge, trigger delay, pre/post-trigger samples만 표시하며 analog `% FS` threshold는 제공하지 않는다. ATS SDK 호출에 필요한 trigger level 인자는 legacy 장비 코드와 동일한 내부 고정 code `150`을 사용하고 외부 입력 range는 `ETR_TTL`로 설정한다. Delay 기본값은 `400 samples`, trigger timeout은 `0 ticks`로 hardware trigger를 계속 기다린다. ATS9371 record와 pre-trigger alignment는 128 samples, single-channel trigger delay alignment는 16 samples이다.
+Trigger는 `TRIG IN`, External TTL, DC coupling을 고정 contract로 사용한다. UI는 rising/falling edge, trigger delay, pre/post-trigger samples만 표시하며 analog `% FS` threshold는 제공하지 않는다. ATS SDK 호출에 필요한 trigger level 인자는 legacy 장비 코드와 동일한 내부 고정 code `150`을 사용하고 외부 입력 range는 `ETR_TTL`로 설정한다. Delay 기본값은 `0 samples`, trigger timeout은 `0 ticks`로 hardware trigger를 계속 기다린다. ATS9371 record와 pre-trigger alignment는 128 samples, single-channel trigger delay alignment는 16 samples이다.
 
 Scan 계산에서 A-scans/B-scan은 별도 입력값이 아니라 `digitizer.records_per_buffer`와 동일하다. B-scans/frame은 사용자가 지정하며, 한 프레임의 position 수는 두 값의 곱이다. B-scan rate와 period는 Alazar DMA buffer 완료 timestamp에서 실측하고, frame time은 실측 period와 B-scans/frame의 곱으로 계산한다. MCU의 100 kHz point rate는 전체 프레임 파형 cycle time 계산에만 사용한다.
 
@@ -68,7 +68,7 @@ Scan 계산에서 A-scans/B-scan은 별도 입력값이 아니라 `digitizer.rec
 
 ### Alazar Record Length
 
-`digitizer.sample_point`는 사용자가 직접 정하는 Alazar record 길이다. ATS9371은 최소 256 samples, record resolution 128 samples, pre-trigger alignment 128 samples, NPT pre-trigger 최대 8176 samples, post-trigger 최소 64 samples를 적용한다. UI는 입력값의 ATS 유효성, sample rate로 계산한 실제 record 시간, 설정된 `chirp_period_samples` 한 주기 초과 시간을 즉시 표시한다. Record가 한 주기보다 긴 경우는 의도적인 capture margin일 수 있으므로 Warning만 발생하며 START는 허용한다. 설정된 full-period와 UP/DOWN segment가 record 밖으로 나가는 경우에는 처리가 불가능하므로 Error를 유지한다.
+`digitizer.sample_point`는 사용자가 직접 정하는 Alazar record 길이이자 캡처된 full-period 길이의 단일 기준이다. ATS9371은 최소 256 samples, record resolution 128 samples, pre-trigger alignment 128 samples, NPT pre-trigger 최대 8176 samples, post-trigger 최소 64 samples를 적용한다. UI는 입력값의 ATS 유효성과 sample rate로 계산한 실제 record 시간을 즉시 표시한다. Segmentation Snapshot은 별도 period length를 입력받지 않고 Digitizer의 `sample_point`를 그대로 사용하며, UP/DOWN segment가 record 밖으로 나가는 경우에는 Error를 유지한다. YAML의 `chirp_period_samples`는 기존 profile 호환을 위한 파생 mirror이며 저장 시 항상 `sample_point`와 같은 값으로 기록된다.
 
 ### Runtime Acquisition Source
 
@@ -77,6 +77,8 @@ The `runtime` profile group selects `simulator`, `alazar`, or `replay`. Source c
 전역 Basic/Advanced mode는 schema version 2부터 사용하지 않는다. 모든 설정 페이지는 항상 접근 가능하며, field policy의 `primary`는 페이지에 바로 표시하고 `detailed`는 같은 페이지의 `Details` 영역에 표시한다. 이 구분은 접근 권한이나 별도 운용 mode가 아니다.
 
 Processing group은 `peak_threshold_db`, `peak_search_start_bin`, `peak_search_end_bin`만 runtime peak 설정으로 저장한다. 각 A-scan은 이전 결과를 추적하지 않고 search range 안에서 threshold를 초과하는 최대 정수 bin을 독립적으로 검출한다. 현재 version은 peak interpolation을 사용하지 않으며, 초과 peak가 없으면 실수형 peak 및 측정 필드는 `NaN`이다.
+
+실수 입력 FFT의 내부 R2C 결과는 Nyquist bin까지 보존한다. 단, 측정용 peak search와 Live FFT 표시는 `[0, FFT length / 2 - 1]`만 사용하므로 FFT length 2048에서는 inclusive 범위가 `0..1023`이고 bin 1024는 표시 및 검출에서 제외된다.
 
 Live View의 `Selected A-scan`은 profile 설정이 아니라 표시 상태다. 0부터 `records_per_buffer - 1` 사이의 record index를 acquisition 중에도 바꿀 수 있으며 digitizer 재설정이나 processing 결과에는 영향을 주지 않는다.
 

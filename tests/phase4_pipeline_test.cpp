@@ -763,6 +763,39 @@ void testProcessingOverflow(fmcw::SystemConfig config, const std::vector<fmcw::R
   expect(service.waitUntilStopped(error), "overflowed processing service drains accepted frames and stops");
 }
 
+void testProcessingOperatorStopDiscardsBacklog(fmcw::SystemConfig config,
+                                               const std::vector<fmcw::RawFramePtr>& frames) {
+  config.processing.queue_capacity = 4;
+  auto state = std::make_shared<BlockingFftState>();
+  fmcw::ProcessingService service(std::make_unique<BlockingFftBackend>(state));
+  std::string error;
+  expect(service.configure(config, 6, error) && service.start(error),
+         "operator-stop processing service starts");
+  expect(service.enqueue(frames.at(0), error) == fmcw::ProcessingEnqueueResult::Accepted,
+         "operator-stop test starts one processing batch");
+  {
+    std::unique_lock<std::mutex> lock(state->mutex);
+    expect(state->condition.wait_for(lock, std::chrono::seconds(2), [state] { return state->execute_started; }),
+           "operator-stop test enters the active FFT batch");
+  }
+  expect(service.enqueue(frames.at(1), error) == fmcw::ProcessingEnqueueResult::Accepted &&
+             service.enqueue(frames.front(), error) == fmcw::ProcessingEnqueueResult::Accepted,
+         "operator-stop test queues two pending batches");
+  service.requestStop("Stopped by operator", fmcw::ProcessingStopMode::DiscardPending);
+  const auto stopping_status = service.status();
+  expect(stopping_status.queue_size == 0U &&
+             stopping_status.batches_discarded_on_stop == 2U,
+         "operator Stop discards processing batches that have not started");
+  {
+    std::lock_guard<std::mutex> lock(state->mutex);
+    state->release = true;
+    state->condition.notify_all();
+  }
+  expect(service.waitUntilStopped(error), "operator-stop processing worker joins");
+  expect(service.status().frames_processed == 1U,
+         "operator Stop finishes only the batch that was already executing");
+}
+
 std::filesystem::path uniqueTestDirectory() {
   const auto suffix = std::chrono::steady_clock::now().time_since_epoch().count();
   return std::filesystem::temp_directory_path() / ("fmcw_phase4_" + std::to_string(suffix));
@@ -1104,6 +1137,8 @@ int main() {
     testProcessingServiceBatch(config, frames);
     std::cout << "[Phase4] Processing overflow\n" << std::flush;
     testProcessingOverflow(config, frames);
+    std::cout << "[Phase7.5] Operator Stop latency\n" << std::flush;
+    testProcessingOperatorStopDiscardsBacklog(config, frames);
     std::cout << "[Phase4] Binary storage and replay\n" << std::flush;
     testBinaryStorageAndReplay(config, frames.front(), frames.at(1), processed);
     std::cout << "[Phase4] Storage overflow\n" << std::flush;

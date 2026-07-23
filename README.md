@@ -22,7 +22,7 @@ FMCW LiDAR 시스템을 Windows와 Jetson에서 함께 운용하기 위한 v1 �
 - `docs/data_contract.md`: full-period raw frame과 metadata 규칙
 - `docs/processing_storage.md`: FFT/peak/B-scan 처리와 binary 저장/replay 계약
 - `docs/qt_ui_mvp.md`: Phase 5 Qt 화면, runtime thread 구조, 실행 및 operator flow
-- `docs/configuration.md`: YAML profile schema v4, validation, field presentation 및 pending 정책
+- `docs/configuration.md`: YAML profile schema v5, validation, field presentation 및 pending 정책
 - `docs/device_protocols.md`: Alazar AutoDMA, MCU UART, EDFA binary protocol
 - `docs/hardware_acceptance.md`: Windows/Jetson 실제 장비 검증 절차
 - `docs/build_setup.md`: Windows/Jetson 빌드 준비와 외부 SDK 경로

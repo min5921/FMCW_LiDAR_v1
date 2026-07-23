@@ -607,6 +607,8 @@ class RuntimeWorker final : public QObject {
   }
 
   void stopRuntime(bool emergency, const QString& reason, bool error_state = false) {
+    QElapsedTimer total_stop_timer;
+    total_stop_timer.start();
     if (ui_timer_ != nullptr) {
       ui_timer_->stop();
     }
@@ -615,8 +617,11 @@ class RuntimeWorker final : public QObject {
       acquisition_worker_->requestStop();
     }
     state_ = OperationState::Stopping;
+    active_operation_ = "HARDWARE";
     publishStatus("Stopping MCU trigger, digitizer, processing, storage, and EDFA...");
     std::string error;
+    QElapsedTimer stage_timer;
+    stage_timer.start();
     if (session_ != nullptr) {
       if (emergency) {
         session_->emergencyStop(error);
@@ -624,17 +629,47 @@ class RuntimeWorker final : public QObject {
         session_->stop(error);
       }
     }
+    emitLog(error.empty() ? "INFO" : "ERROR", "Stop",
+            QString("Hardware stop completed in %1 ms").arg(stage_timer.elapsed()));
+    active_operation_ = "ACQUISITION WORKER";
+    publishStatus("Hardware stopped; releasing acquisition worker...");
+
+    stage_timer.restart();
     waitForAcquisitionWorker();
-    stopProcessing(reason);
+    emitLog("INFO", "Stop",
+            QString("Acquisition worker stopped in %1 ms").arg(stage_timer.elapsed()));
+    active_operation_ = "PROCESSING";
+    publishStatus("Discarding pending signal-processing batches...");
+
+    stage_timer.restart();
+    stopProcessing(reason, ProcessingStopMode::DiscardPending);
+    emitLog("INFO", "Stop",
+            QString("Processing stopped in %1 ms").arg(stage_timer.elapsed()));
+    active_operation_ = "UDP";
+    publishStatus("Stopping UDP sender...");
+
+    stage_timer.restart();
     stopUdp();
+    emitLog("INFO", "Stop",
+            QString("UDP sender stopped in %1 ms").arg(stage_timer.elapsed()));
+    active_operation_ = "STORAGE";
+    publishStatus("Finalizing queued storage data...");
+
+    stage_timer.restart();
     stopStorage(reason);
+    emitLog("INFO", "Stop",
+            QString("Storage finalized in %1 ms").arg(stage_timer.elapsed()));
     running_ = false;
     recording_ = false;
     state_ = error_state || !error.empty()
         ? OperationState::Error
         : connected_ ? OperationState::Ready : OperationState::Configured;
+    active_operation_.clear();
     emitLog(error.empty() ? "INFO" : "ERROR", "Acquisition",
-            error.empty() ? QString("Stopped: %1").arg(reason) : qString(error));
+            error.empty() ? QString("Stopped in %1 ms: %2").arg(total_stop_timer.elapsed()).arg(reason)
+                          : QString("Stopped in %1 ms with error: %2")
+                                .arg(total_stop_timer.elapsed())
+                                .arg(qString(error)));
     publishSnapshots();
     publishStatus(error.empty() ? reason : qString(error));
   }
@@ -652,13 +687,22 @@ class RuntimeWorker final : public QObject {
     acquisition_worker_.reset();
   }
 
-  void stopProcessing(const QString& reason) {
+  void stopProcessing(const QString& reason,
+                      ProcessingStopMode mode = ProcessingStopMode::DrainPending) {
     if (processing_ == nullptr) {
       return;
     }
-    processing_->requestStop(reason.toStdString());
+    const auto queued_before_stop = processing_->status().queue_size;
+    processing_->requestStop(reason.toStdString(), mode);
     std::string error;
     processing_->waitUntilStopped(error);
+    if (mode == ProcessingStopMode::DiscardPending) {
+      const auto discarded = processing_->status().batches_discarded_on_stop;
+      emitLog("INFO", "Stop",
+              QString("Discarded %1 of %2 queued processing batches")
+                  .arg(discarded)
+                  .arg(queued_before_stop));
+    }
   }
 
   void stopUdp() {
@@ -695,6 +739,7 @@ class RuntimeWorker final : public QObject {
     status.processing_revision = processing_revision_;
     status.detail = detail;
     status.source_name = qString(toString(active_source_));
+    status.active_operation = active_operation_;
     AcquisitionTelemetrySnapshot telemetry;
     if (session_ != nullptr) {
       telemetry = session_->telemetry();
@@ -816,6 +861,7 @@ class RuntimeWorker final : public QObject {
   bool connected_ = false;
   bool running_ = false;
   bool recording_ = false;
+  QString active_operation_;
   std::atomic_bool acquisition_accepting_{false};
   std::atomic_bool storage_failure_pending_{false};
 };
@@ -832,12 +878,23 @@ ApplicationController::ApplicationController(QString platform_name, QObject* par
   worker_->moveToThread(&runtime_thread_);
   connect(&runtime_thread_, &QThread::started, worker_, &RuntimeWorker::initialize);
   connect(&runtime_thread_, &QThread::finished, worker_, &QObject::deleteLater);
-  connect(worker_, &RuntimeWorker::statusChanged, this, &ApplicationController::statusChanged);
-  connect(worker_, &RuntimeWorker::waveformReady, this, &ApplicationController::waveformReady);
-  connect(worker_, &RuntimeWorker::fftReady, this, &ApplicationController::fftReady);
-  connect(worker_, &RuntimeWorker::scanLineReady, this, &ApplicationController::scanLineReady);
-  connect(worker_, &RuntimeWorker::bscanReady, this, &ApplicationController::bscanReady);
-  connect(worker_, &RuntimeWorker::pointCloudReady, this, &ApplicationController::pointCloudReady);
+  connect(worker_, &RuntimeWorker::statusChanged, this,
+          [this](RuntimeStatus status) { enqueueStatus(std::move(status)); }, Qt::DirectConnection);
+  connect(worker_, &RuntimeWorker::waveformReady, this,
+          [this](WaveformSnapshotPtr snapshot) { enqueueWaveform(std::move(snapshot)); },
+          Qt::DirectConnection);
+  connect(worker_, &RuntimeWorker::fftReady, this,
+          [this](FftSnapshotPtr snapshot) { enqueueFft(std::move(snapshot)); },
+          Qt::DirectConnection);
+  connect(worker_, &RuntimeWorker::scanLineReady, this,
+          [this](ScanLineSnapshotPtr snapshot) { enqueueScanLine(std::move(snapshot)); },
+          Qt::DirectConnection);
+  connect(worker_, &RuntimeWorker::bscanReady, this,
+          [this](BScanSnapshotPtr snapshot) { enqueueBScan(std::move(snapshot)); },
+          Qt::DirectConnection);
+  connect(worker_, &RuntimeWorker::pointCloudReady, this,
+          [this](PointCloudSnapshotPtr snapshot) { enqueuePointCloud(std::move(snapshot)); },
+          Qt::DirectConnection);
   connect(worker_, &RuntimeWorker::segmentationSnapshotReady, this,
           &ApplicationController::segmentationSnapshotReady);
   connect(worker_, &RuntimeWorker::logMessage, this, &ApplicationController::logMessage);
@@ -845,6 +902,103 @@ ApplicationController::ApplicationController(QString platform_name, QObject* par
   connect(worker_, &RuntimeWorker::commandCompleted, this, &ApplicationController::commandCompleted);
   runtime_thread_.setObjectName("FMCW runtime");
   runtime_thread_.start();
+}
+
+void ApplicationController::schedulePendingUiDispatchLocked() {
+  if (ui_dispatch_scheduled_) {
+    return;
+  }
+  ui_dispatch_scheduled_ = true;
+  QMetaObject::invokeMethod(this, [this] { drainPendingUiUpdates(); }, Qt::QueuedConnection);
+}
+
+void ApplicationController::enqueueStatus(RuntimeStatus status) {
+  std::lock_guard lock(pending_ui_mutex_);
+  pending_status_ = std::move(status);
+  schedulePendingUiDispatchLocked();
+}
+
+void ApplicationController::enqueueWaveform(WaveformSnapshotPtr snapshot) {
+  std::lock_guard lock(pending_ui_mutex_);
+  ++ui_dispatch_metrics_.waveform_published;
+  if (pending_waveform_ != nullptr) {
+    ++ui_dispatch_metrics_.waveform_coalesced;
+  }
+  pending_waveform_ = std::move(snapshot);
+  schedulePendingUiDispatchLocked();
+}
+
+void ApplicationController::enqueueFft(FftSnapshotPtr snapshot) {
+  std::lock_guard lock(pending_ui_mutex_);
+  ++ui_dispatch_metrics_.fft_published;
+  if (pending_fft_ != nullptr) {
+    ++ui_dispatch_metrics_.fft_coalesced;
+  }
+  pending_fft_ = std::move(snapshot);
+  schedulePendingUiDispatchLocked();
+}
+
+void ApplicationController::enqueueScanLine(ScanLineSnapshotPtr snapshot) {
+  std::lock_guard lock(pending_ui_mutex_);
+  pending_scan_line_ = std::move(snapshot);
+  schedulePendingUiDispatchLocked();
+}
+
+void ApplicationController::enqueueBScan(BScanSnapshotPtr snapshot) {
+  std::lock_guard lock(pending_ui_mutex_);
+  pending_bscan_ = std::move(snapshot);
+  schedulePendingUiDispatchLocked();
+}
+
+void ApplicationController::enqueuePointCloud(PointCloudSnapshotPtr snapshot) {
+  std::lock_guard lock(pending_ui_mutex_);
+  pending_point_cloud_ = std::move(snapshot);
+  schedulePendingUiDispatchLocked();
+}
+
+void ApplicationController::drainPendingUiUpdates() {
+  std::optional<RuntimeStatus> status;
+  WaveformSnapshotPtr waveform;
+  FftSnapshotPtr fft;
+  ScanLineSnapshotPtr scan_line;
+  BScanSnapshotPtr bscan;
+  PointCloudSnapshotPtr point_cloud;
+  {
+    std::lock_guard lock(pending_ui_mutex_);
+    status.swap(pending_status_);
+    waveform.swap(pending_waveform_);
+    fft.swap(pending_fft_);
+    scan_line.swap(pending_scan_line_);
+    bscan.swap(pending_bscan_);
+    point_cloud.swap(pending_point_cloud_);
+    ui_dispatch_scheduled_ = false;
+  }
+
+  if (status.has_value()) {
+    emit statusChanged(std::move(*status));
+  }
+  if (waveform != nullptr) {
+    emit waveformReady(std::move(waveform));
+  }
+  if (fft != nullptr) {
+    emit fftReady(std::move(fft));
+  }
+  if (scan_line != nullptr) {
+    emit scanLineReady(std::move(scan_line));
+  }
+  if (bscan != nullptr) {
+    emit bscanReady(std::move(bscan));
+  }
+  if (point_cloud != nullptr) {
+    emit pointCloudReady(std::move(point_cloud));
+  }
+}
+
+UiDispatchMetrics ApplicationController::takeUiDispatchMetrics() {
+  std::lock_guard lock(pending_ui_mutex_);
+  UiDispatchMetrics metrics;
+  std::swap(metrics, ui_dispatch_metrics_);
+  return metrics;
 }
 
 ApplicationController::~ApplicationController() {

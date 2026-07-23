@@ -210,7 +210,7 @@ struct ProcessingService::Impl {
   }
 
   void workerLoop() {
-    prioritizeCurrentRealtimeThread(RealtimeThreadPriority::Critical);
+    prioritizeCurrentRealtimeThread(RealtimeThreadPriority::High);
     if (processor.supportsAsyncBatchProcessing()) {
       workerLoopAsync();
       return;
@@ -450,6 +450,7 @@ struct ProcessingService::Impl {
   ProcessedFrameCallback callback;
   std::size_t queue_capacity = 0;
   std::size_t queue_high_water_mark = 0;
+  std::uint64_t batches_discarded_on_stop = 0;
   std::uint64_t batches_processed = 0;
   std::uint64_t frames_processed = 0;
   std::uint64_t last_processed_frame_id = 0;
@@ -504,6 +505,7 @@ bool ProcessingService::start(std::string& error) {
   }
   impl_->queue.clear();
   impl_->queue_high_water_mark = 0;
+  impl_->batches_discarded_on_stop = 0;
   impl_->batches_processed = 0;
   impl_->frames_processed = 0;
   impl_->last_processed_frame_id = 0;
@@ -596,14 +598,20 @@ void ProcessingService::setProcessedFrameCallback(ProcessedFrameCallback callbac
   impl_->callback = std::move(callback);
 }
 
-void ProcessingService::requestStop(std::string reason) {
+void ProcessingService::requestStop(std::string reason, ProcessingStopMode mode) {
   std::lock_guard<std::mutex> lock(impl_->mutex);
   if (!impl_->running && !impl_->worker.joinable()) {
     return;
   }
   impl_->accepting = false;
+  impl_->stop_requested = true;
   if (impl_->stop_reason.empty()) {
     impl_->stop_reason = std::move(reason);
+  }
+  if (mode == ProcessingStopMode::DiscardPending) {
+    impl_->batches_discarded_on_stop += impl_->queue.size();
+    impl_->queue.clear();
+    impl_->pending_runtime_config.reset();
   }
   impl_->condition.notify_all();
 }
@@ -656,6 +664,7 @@ ProcessingServiceStatus ProcessingService::status() const {
     status.queue_size = impl_->queue.size();
     status.queue_capacity = impl_->queue_capacity;
     status.queue_high_water_mark = impl_->queue_high_water_mark;
+    status.batches_discarded_on_stop = impl_->batches_discarded_on_stop;
     status.batches_processed = impl_->batches_processed;
     status.frames_processed = impl_->frames_processed;
     status.last_processed_frame_id = impl_->last_processed_frame_id;

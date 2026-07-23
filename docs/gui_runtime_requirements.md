@@ -37,6 +37,8 @@
 | Storage / UDP | raw/processed save, path, queue, UDP endpoint/format | acquisition Start/Stop |
 | System Log | log filtering, alarms, diagnostics export | duplicated setup controls |
 
+Overview의 `FRAMES` card는 누적 A-scan이나 DMA batch 수 대신 실제 처리 완료 raster frame 증가량으로 계산한 1초 구간 FPS와 생성 완료 frame 수만 표시한다. `QUEUES` card는 `Signal`, `Raw`, `Result` 대기 batch/block 수와 각 capacity를 구분해 표시한다.
+
 ## 3. Global Command Bar
 
 상단 command bar의 시스템 명령은 한 군데에서만 제공한다.
@@ -143,7 +145,7 @@ Processing 페이지의 chirp segmentation graph는 실시간 plot이 아니다.
 - `Capture Snapshot`은 Running 상태에서 최신 full-period raw frame을 복사해 화면에 고정한다.
 - Idle 상태에서는 마지막 cached frame 또는 replay frame을 사용한다.
 - 사용 가능한 frame이 없으면 숨은 acquisition을 시작하지 않고 `No frame available`을 표시한다.
-- 사용자는 full-period와 up/down 구간을 start/length로 입력하며, end는 `start + length`로 계산한다. 값을 바꾸면 고정된 frame 위 overlay와 validation 결과만 즉시 갱신한다.
+- Full-period length는 Digitizer의 `sample_point`에서 가져오며 중복 입력하지 않는다. 사용자는 period start와 UP/DOWN 구간의 start/length를 입력하고, segment end는 `start + length`로 계산한다. 값을 바꾸면 고정된 frame 위 overlay와 validation 결과만 즉시 갱신한다.
 - boundary가 record/period 밖으로 나가거나 겹치면 global START를 막는다.
 - Live View의 Time Domain plot만 연속 실시간 waveform을 표시한다.
 
@@ -158,6 +160,7 @@ Processing page의 필수 runtime 설정:
 - candidate는 threshold를 초과하며 global search range 안에 있어야 한다.
 - UP과 DOWN은 각 A-scan에서 독립적으로 최대 peak를 검출한다.
 - 현재 version은 peak interpolation이나 sub-bin estimation 없이 최대 정수 bin을 사용한다.
+- search end는 inclusive이며 Nyquist bin을 제외한다. FFT length 2048의 설정 및 Live FFT 표시 범위는 `0..1023`이다.
 - 이전 A-scan의 peak index를 추적, 유지, 재탐색하지 않는다.
 - threshold를 초과하는 candidate가 없으면 해당 chirp peak와 측정 결과를 invalid로 기록하고, 실수형 값은 `NaN`으로 표시·저장한다.
 
@@ -170,9 +173,10 @@ Peak Analysis 탭은 FFT spectrum을 다시 그리지 않는다. 다음 두 plot
 
 - Time Domain과 FFT는 최신 frame 우선이다.
 - 200 Hz acquisition과 모든 A-scan 신호처리는 계속 수행하되, Live View는 `ui.plot_update_hz`에 맞춰 최신 snapshot만 표시한다. 중간 UI frame을 합치는 것은 DMA/processing drop으로 집계하지 않는다.
-- Qt runtime은 현재 보이는 Live tab 한 개만 GUI thread로 전달한다. 숨은 Time Domain, FFT, Peak, Distance, B-scan, 3D tab은 GUI thread 전달, QVector 변환, repaint를 수행하지 않는다.
-- dense Time Domain/FFT trace는 화면 가로 픽셀 수에 맞춘 min/max envelope로 축약하여 narrow peak를 보존하면서 렌더링한다.
-- Windows 기본 plot 갱신은 최대 30 Hz, 숫자와 상태 telemetry 갱신은 10 Hz로 분리한다. 정지/오류 플래그는 plot cadence에서 가볍게 확인하되 percentile 등 상태 집계는 10 Hz에서만 수행하며, acquisition 및 signal-processing cadence와 독립적이어야 한다.
+- Qt runtime은 현재 보이는 Live tab 한 개만 GUI thread로 전달한다. 숨은 Time Domain, FFT, Peak, Distance, B-scan, 3D tab은 GUI thread 전달, snapshot binding, repaint를 수행하지 않는다. 표시 중인 line plot도 immutable snapshot vector를 공유하며 Qt container로 전체 복사하지 않는다.
+- dense Time Domain trace는 원본 snapshot을 변경하지 않고 화면 가로 픽셀별 min/max 수직선을 batch draw하여 narrow peak와 노이즈 범위를 보존한다. FFT trace는 표시 bin만 integer polyline으로 batch draw하며 live trace에는 antialiasing을 적용하지 않는다.
+- Live View는 1초 집계로 DMA 생성 Hz, GUI 전달 Hz, 실제 data paint Hz, 표시에서 생략된 DMA sequence, paint 전에 합쳐진 GUI update, set/paint p95와 paint max를 보여준다. 이 값은 display 진단이며 acquisition drop과 구분한다.
+- Windows 기본 plot 갱신은 최대 60 Hz, Jetson은 기본 30 Hz로 제한하고 숫자와 상태 telemetry 갱신은 10 Hz로 분리한다. 정지/오류 플래그는 plot cadence에서 가볍게 확인하되 percentile 등 상태 집계는 10 Hz에서만 수행하며, acquisition 및 signal-processing cadence와 독립적이어야 한다.
 - Peak Analysis, Distance/Velocity, B-scan은 scan line 또는 frame aggregation 완료 시 publish한다.
 - B-scan은 `X Pixel x B Scan` Z heatmap으로 표시한다.
 - 3D point cloud는 partial line을 표시하지 않고 모든 B-scan line이 완료된 raster frame만 교체한다. 다음 frame 수집 중에는 직전 complete frame을 유지한다.
@@ -180,6 +184,7 @@ Peak Analysis 탭은 FFT spectrum을 다시 그리지 않는다. 다음 두 plot
 - auto/manual range, cursor readout, plot save를 공통 plot toolbar로 제공한다.
 - 3D는 Qt/OpenGL-backed point renderer를 사용하고 acquisition과 독립 rate로 갱신한다.
 - 3D 기능은 Phase 6의 실제 동작 tab으로 제공하며 빈 tab이나 disabled placeholder를 노출하지 않는다.
+- Processing의 `Batch Diagnostics` 상세 숫자는 Processing page가 보일 때만 Qt label에 반영한다. 다른 page에서는 마지막 표시값을 유지하되 signal processing, latency 계측, queue 감시와 STOP 정책은 계속 동작한다.
 
 ## 10. Selected A-scan And Phase 6 Runtime
 

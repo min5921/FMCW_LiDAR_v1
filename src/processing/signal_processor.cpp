@@ -1,7 +1,6 @@
 #include "processing/signal_processor.h"
 
 #include "core/config_validation.h"
-#include "core/realtime_thread.h"
 #include "processing/cuda/cuda_signal_pipeline.h"
 
 #include <algorithm>
@@ -449,9 +448,6 @@ bool SignalProcessor::processBatch(const RawFrameBatch& raw_batch,
 #endif
     for (std::int64_t local_record = 0;
          local_record < static_cast<std::int64_t>(chunk_record_count); ++local_record) {
-#if FMCW_HAS_OPENMP
-      prioritizeCurrentRealtimeThread(RealtimeThreadPriority::High);
-#endif
       const auto local_index = static_cast<std::size_t>(local_record);
       const auto record_index = chunk_start + local_index;
       const auto& raw = raw_batch.records[record_index];
@@ -490,9 +486,6 @@ bool SignalProcessor::processBatch(const RawFrameBatch& raw_batch,
 #endif
     for (std::int64_t local_record = 0;
          local_record < static_cast<std::int64_t>(chunk_record_count); ++local_record) {
-#if FMCW_HAS_OPENMP
-      prioritizeCurrentRealtimeThread(RealtimeThreadPriority::High);
-#endif
       const auto local_index = static_cast<std::size_t>(local_record);
       const auto record_index = chunk_start + local_index;
       const auto& raw = raw_batch.records[record_index];

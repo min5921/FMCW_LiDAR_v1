@@ -37,6 +37,7 @@
 #include <QStyle>
 #include <QTabWidget>
 #include <QTextCursor>
+#include <QTimer>
 #include <QToolButton>
 #include <QVBoxLayout>
 
@@ -48,6 +49,12 @@
 
 namespace fmcw {
 namespace {
+
+constexpr int kOverviewPageIndex = 0;
+constexpr int kLivePageIndex = 1;
+constexpr int kScanMcuPageIndex = 4;
+constexpr int kProcessingPageIndex = 5;
+constexpr qint64 kFrameRateSampleIntervalMs = 1000;
 
 QGroupBox* groupBox(const QString& title, QWidget* parent = nullptr) {
   auto* group = new QGroupBox(title, parent);
@@ -79,14 +86,29 @@ QFrame* statusCard(const QString& title, QLabel*& value, QWidget* parent) {
   return frame;
 }
 
-QVector<float> qVector(const std::vector<float>& values) {
-  return QVector<float>(values.begin(), values.end());
+template <typename Snapshot>
+std::shared_ptr<const std::vector<float>> sharedPlotValues(
+    const std::shared_ptr<const Snapshot>& snapshot, const std::vector<float>& values) {
+  return std::shared_ptr<const std::vector<float>>(snapshot, &values);
+}
+
+std::shared_ptr<const std::vector<float>> ownedPlotValues(std::vector<float> values) {
+  return std::make_shared<const std::vector<float>>(std::move(values));
 }
 
 void repolish(QWidget* widget) {
   widget->style()->unpolish(widget);
   widget->style()->polish(widget);
   widget->update();
+}
+
+void setStyledProperty(QWidget* widget, const char* name, const char* value) {
+  const auto property_value = QString::fromLatin1(value);
+  if (widget->property(name).toString() == property_value) {
+    return;
+  }
+  widget->setProperty(name, property_value);
+  repolish(widget);
 }
 
 QWidget* wrapInScrollArea(QWidget* content) {
@@ -212,6 +234,7 @@ QString darkStyleSheet() {
     QPushButton#connectButton { background: #31545c; color: #ffffff; border-color: #426b74; }
     QPushButton#startButton[runState="start"] { background: #19734f; color: #ffffff; border-color: #249169; }
     QPushButton#startButton[runState="stop"] { background: #bd5f29; color: #ffffff; border-color: #df7d43; }
+    QPushButton#startButton[runState="stopping"] { background: #4a3d28; color: #cfc4ae; border-color: #6a593b; }
     QPushButton#emergencyButton { background: #a82f38; color: #ffffff; border-color: #ca4c55; }
     QToolButton { border-color: #3a494f; background: #202b30; color: #dce5e7; }
     QToolButton:hover, QToolButton:checked { background: #21403e; border-color: #4b9f96; }
@@ -250,6 +273,9 @@ QString darkStyleSheet() {
 MainWindow::MainWindow(QString platform_name, QWidget* parent)
     : QMainWindow(parent), platform_name_(std::move(platform_name)) {
   config_ = makeAts9371QualificationSimulatorConfig();
+  if (platform_name_.compare(QStringLiteral("Jetson"), Qt::CaseInsensitive) == 0) {
+    config_.ui.plot_update_hz = 30.0;
+  }
   setWindowTitle(QString("FMCW LiDAR v%1 - %2").arg(QString::fromStdString(versionString()), platform_name_));
   setMinimumSize(1180, 720);
   resize(1480, 900);
@@ -278,6 +304,7 @@ MainWindow::MainWindow(QString platform_name, QWidget* parent)
     QPushButton#connectButton { background: #354b54; color: #ffffff; border-color: #354b54; }
     QPushButton#startButton[runState="start"] { background: #16724c; color: #ffffff; border-color: #16724c; min-width: 76px; }
     QPushButton#startButton[runState="stop"] { background: #cf6b2d; color: #ffffff; border-color: #cf6b2d; min-width: 76px; }
+    QPushButton#startButton[runState="stopping"] { background: #d8d0c2; color: #6f6250; border-color: #b8aa93; min-width: 76px; }
     QPushButton#emergencyButton { background: #b52e35; color: #ffffff; border-color: #b52e35; }
     QToolButton { min-width: 30px; min-height: 30px; border: 1px solid #cbd5d8; border-radius: 4px; background: #ffffff; }
     QToolButton:hover, QToolButton:checked { background: #e6f3f1; border-color: #67afa7; }
@@ -376,6 +403,7 @@ MainWindow::MainWindow(QString platform_name, QWidget* parent)
   start_stop_button_ = new QPushButton("START", command_bar);
   start_stop_button_->setObjectName("startButton");
   start_stop_button_->setProperty("runState", "start");
+  start_stop_button_->setFixedWidth(104);
   emergency_button_ = new QPushButton("E-STOP", command_bar);
   emergency_button_->setObjectName("emergencyButton");
   emergency_button_->setToolTip("Emergency stop all scan, acquisition, and optical output");
@@ -414,14 +442,24 @@ MainWindow::MainWindow(QString platform_name, QWidget* parent)
   }
 
   runtime_state_label_ = new QLabel("DISCONNECTED", this);
+  runtime_state_label_->setMinimumWidth(210);
   runtime_state_label_->setProperty("statusKind", "neutral");
   statusBar()->addWidget(runtime_state_label_);
   statusBar()->showMessage("Simulator | Up-chirp trigger | Full-period DMA batch", 0);
 
+  stop_stage_timer_ = new QTimer(this);
+  stop_stage_timer_->setInterval(100);
+  connect(stop_stage_timer_, &QTimer::timeout, this, &MainWindow::updateStopStageDisplay);
+
   controller_ = new ApplicationController(platform_name_, this);
   loadConfigToControls(config_);
   connectUi();
-  navigation_->setCurrentRow(0);
+  live_display_timer_ = new QTimer(this);
+  live_display_timer_->setTimerType(Qt::PreciseTimer);
+  live_display_timer_->setInterval(1000);
+  connect(live_display_timer_, &QTimer::timeout, this, &MainWindow::updateLiveDisplayDiagnostics);
+  live_display_timer_->start();
+  navigation_->setCurrentRow(kOverviewPageIndex);
   validateControls();
   controller_->applyConfig(config_);
 }
@@ -480,7 +518,7 @@ QWidget* MainWindow::buildOverviewPage() {
   grid->addWidget(statusCard("PROCESSING", overview_processing_, content), 0, 3);
   grid->addWidget(statusCard("FRAMES", overview_frames_, content), 1, 0);
   grid->addWidget(statusCard("QUEUES", overview_queues_, content), 1, 1);
-  grid->addWidget(statusCard("FFT LATENCY", overview_latency_, content), 1, 2);
+  grid->addWidget(statusCard("BATCH LATENCY", overview_latency_, content), 1, 2);
   grid->addWidget(statusCard("RECORDING", overview_recording_, content), 1, 3);
   for (int column = 0; column < 4; ++column) {
     grid->setColumnStretch(column, 1);
@@ -555,6 +593,15 @@ QWidget* MainWindow::buildLivePage() {
   tools->addWidget(freeze_button_);
   tools->addWidget(save_view);
   layout->addLayout(tools);
+  live_display_diagnostics_ = new QLabel(
+      "Display | DMA -- Hz | delivered -- Hz | painted -- Hz | waiting for live data", content);
+  live_display_diagnostics_->setProperty("caption", true);
+  live_display_diagnostics_->setWordWrap(true);
+  live_display_diagnostics_->setMinimumHeight(36);
+  live_display_diagnostics_->setToolTip(
+      "DMA is the acquisition rate. Delivered is selected plot snapshots reaching the GUI. "
+      "Painted is completed plot redraws. Omitted and merged counts are display-only and do not mean acquisition loss.");
+  layout->addWidget(live_display_diagnostics_);
 
   live_tabs_ = new QTabWidget(content);
   time_plot_ = new LinePlotWidget(live_tabs_);
@@ -977,7 +1024,7 @@ QWidget* MainWindow::buildProcessingPage() {
   peak_form->addRow("Method", detection_mode);
   peak_form->addRow("Runtime update", update_runtime);
 
-  auto* realtime = groupBox("Real-Time Batch", content);
+  auto* realtime = groupBox("Batch Diagnostics", content);
   auto* realtime_form = new QFormLayout(realtime);
   tuneForm(realtime_form);
   batch_workload_ = new QLabel("4992 samples x 998 records", realtime);
@@ -1007,7 +1054,6 @@ QWidget* MainWindow::buildProcessingPage() {
     return spin;
   };
   period_start_ = segmentSpin();
-  period_length_ = segmentSpin();
   up_start_ = segmentSpin();
   up_length_ = segmentSpin();
   down_start_ = segmentSpin();
@@ -1024,7 +1070,6 @@ QWidget* MainWindow::buildProcessingPage() {
     ++control_column;
   };
   addControl("Period start", period_start_);
-  addControl("Period length", period_length_);
   addControl("UP start", up_start_);
   addControl("UP length", up_length_);
   addControl("DOWN start", down_start_);
@@ -1169,7 +1214,15 @@ QWidget* MainWindow::buildLogPage() {
 void MainWindow::connectUi() {
   connect(navigation_, &QListWidget::currentRowChanged, pages_, &QStackedWidget::setCurrentIndex);
   connect(navigation_, &QListWidget::currentRowChanged, this,
-          [this] { updateLivePlotSubscription(); });
+          [this](int page_index) {
+            updateLivePlotSubscription();
+            if (page_index == kScanMcuPageIndex) {
+              updateDerivedAcquisitionLabels();
+            }
+            if (page_index == kProcessingPageIndex) {
+              updateProcessingTelemetryLabels();
+            }
+          });
   connect(live_tabs_, &QTabWidget::currentChanged, this,
           [this] { updateLivePlotSubscription(); });
   connect(load_button_, &QToolButton::clicked, this, &MainWindow::loadProfile);
@@ -1241,7 +1294,8 @@ void MainWindow::connectUi() {
     if (!isLivePlotActive(0) || snapshot == nullptr) {
       return;
     }
-    time_plot_->setSeries({{"Full period", qVector(snapshot->full_scale_samples), QColor("#167a86")}});
+    time_plot_->setSeries({{"Full period", sharedPlotValues(snapshot, snapshot->full_scale_samples),
+                            QColor("#167a86")}}, snapshot->dma_buffer_sequence);
     updateSelectedAScanStatus(snapshot->record_index_in_buffer,
                               snapshot->records_in_buffer,
                               snapshot->dma_buffer_sequence);
@@ -1250,8 +1304,15 @@ void MainWindow::connectUi() {
     if (!isLivePlotActive(1) || snapshot == nullptr) {
       return;
     }
-    fft_plot_->setSeries({{"UP", qVector(snapshot->up_magnitude_db), QColor("#188266")},
-                          {"DOWN", qVector(snapshot->down_magnitude_db), QColor("#d06432")}});
+    const auto up_display_count = snapshot->up_magnitude_db.size() > 1U
+        ? snapshot->up_magnitude_db.size() - 1U : 0U;
+    const auto down_display_count = snapshot->down_magnitude_db.size() > 1U
+        ? snapshot->down_magnitude_db.size() - 1U : 0U;
+    fft_plot_->setSeries({{"UP", sharedPlotValues(snapshot, snapshot->up_magnitude_db),
+                           QColor("#188266"), up_display_count},
+                          {"DOWN", sharedPlotValues(snapshot, snapshot->down_magnitude_db),
+                           QColor("#d06432"), down_display_count}},
+                         snapshot->dma_buffer_sequence);
     updateSelectedAScanStatus(snapshot->record_index_in_buffer,
                               snapshot->records_in_buffer,
                               snapshot->dma_buffer_sequence);
@@ -1261,25 +1322,25 @@ void MainWindow::connectUi() {
       return;
     }
     if (isLivePlotActive(2)) {
-      peak_index_plot_->setSeries({{"UP", qVector(snapshot->up_peak_index), QColor("#188266")},
-                                   {"DOWN", qVector(snapshot->down_peak_index), QColor("#d06432")}});
-      peak_value_plot_->setSeries({{"UP", qVector(snapshot->up_peak_value_db), QColor("#188266")},
-                                   {"DOWN", qVector(snapshot->down_peak_value_db), QColor("#d06432")}});
+      peak_index_plot_->setSeries({{"UP", sharedPlotValues(snapshot, snapshot->up_peak_index), QColor("#188266")},
+                                   {"DOWN", sharedPlotValues(snapshot, snapshot->down_peak_index), QColor("#d06432")}});
+      peak_value_plot_->setSeries({{"UP", sharedPlotValues(snapshot, snapshot->up_peak_value_db), QColor("#188266")},
+                                   {"DOWN", sharedPlotValues(snapshot, snapshot->down_peak_value_db), QColor("#d06432")}});
       return;
     }
     if (!isLivePlotActive(3)) {
       return;
     }
-    auto distance = qVector(snapshot->distance_m);
-    auto velocity = qVector(snapshot->velocity_mps);
-    for (int index = 0; index < distance.size() && index < static_cast<int>(snapshot->valid.size()); ++index) {
-      if (snapshot->valid[static_cast<std::size_t>(index)] == 0U) {
+    auto distance = snapshot->distance_m;
+    auto velocity = snapshot->velocity_mps;
+    for (std::size_t index = 0; index < distance.size() && index < snapshot->valid.size(); ++index) {
+      if (snapshot->valid[index] == 0U) {
         distance[index] = std::numeric_limits<float>::quiet_NaN();
         velocity[index] = std::numeric_limits<float>::quiet_NaN();
       }
     }
-    distance_plot_->setSeries({{"Distance (m)", std::move(distance), QColor("#13737f")},
-                                {"Velocity (m/s)", std::move(velocity), QColor("#ad4e61")}});
+    distance_plot_->setSeries({{"Distance (m)", ownedPlotValues(std::move(distance)), QColor("#13737f")},
+                                {"Velocity (m/s)", ownedPlotValues(std::move(velocity)), QColor("#ad4e61")}});
   });
   connect(controller_, &ApplicationController::bscanReady, this, [this](BScanSnapshotPtr snapshot) {
     if (isLivePlotActive(4) && snapshot != nullptr) {
@@ -1332,7 +1393,7 @@ void MainWindow::connectUi() {
       edfa_control_mode_, edfa_setpoint_, edfa_warmup_, x_start_, x_end_, y_start_, y_end_, y_lines_,
       bidirectional_, mcu_enabled_, mcu_port_, fft_backend_, window_function_, dc_removal_,
       peak_threshold_, peak_start_, peak_end_,
-      period_start_, period_length_, up_start_, up_length_, down_start_, down_length_, guard_samples_, fft_length_,
+      period_start_, up_start_, up_length_, down_start_, down_length_, guard_samples_, fft_length_,
       raw_enabled_, processed_enabled_,
       output_directory_, storage_queue_, split_size_, udp_enabled_, udp_ip_, udp_port_, udp_points_, udp_version_,
       udp_queue_, udp_policy_};
@@ -1355,6 +1416,7 @@ void MainWindow::connectUi() {
   connect(sample_point_, &QSpinBox::valueChanged, this, [this] { updateDerivedAcquisitionLabels(); });
   connect(sample_rate_, &QComboBox::currentIndexChanged, this, [this] { updateDerivedAcquisitionLabels(); });
   connect(pre_trigger_, &QSpinBox::valueChanged, this, [this] { updateDerivedAcquisitionLabels(); });
+  connect(fft_length_, &QSpinBox::valueChanged, this, [this] { updatePeakBinLimits(); });
   for (auto* control : config_controls) {
     const auto changed = [this, restart_required = !runtime_controls.contains(control)] {
       if (restart_required) {
@@ -1400,6 +1462,9 @@ void MainWindow::markDirty() {
                                        static_cast<std::uint32_t>(down_start_->value()),
                                        static_cast<std::uint32_t>(down_length_->value())),
                                    static_cast<std::uint32_t>(guard_samples_->value()));
+  if (navigation_ != nullptr && navigation_->currentRow() == kProcessingPageIndex) {
+    updateProcessingTelemetryLabels();
+  }
   validateControls();
 }
 
@@ -1446,7 +1511,8 @@ bool MainWindow::validateControls(bool show_dialog) {
       ? "Configuration is valid. Click to view validation details."
       : QString("Click to view validation details.\n\n%1").arg(tooltip));
   repolish(validation_button_);
-  start_stop_button_->setEnabled(runtime_status_.running || (errors == 0 && !config_dirty_));
+  start_stop_button_->setEnabled(runtime_status_.state != OperationState::Stopping &&
+                                 (runtime_status_.running || (errors == 0 && !config_dirty_)));
   apply_button_->setEnabled(!runtime_status_.running && errors == 0);
   if (show_dialog && errors > 0) {
     QMessageBox::warning(this, "Configuration validation", tooltip);
@@ -1550,7 +1616,6 @@ SystemConfig MainWindow::configFromControls() const {
   config.processing.peak_search_start_bin = static_cast<std::uint32_t>(peak_start_->value());
   config.processing.peak_search_end_bin = static_cast<std::uint32_t>(peak_end_->value());
   config.chirp_segmentation.trigger_to_period_offset = period_start_->value();
-  config.chirp_segmentation.chirp_period_samples = static_cast<std::uint32_t>(period_length_->value());
   config.chirp_segmentation.up_segment = segmentRangeFromStartAndLength(
       static_cast<std::uint32_t>(up_start_->value()),
       static_cast<std::uint32_t>(up_length_->value()));
@@ -1656,29 +1721,18 @@ void MainWindow::updateDerivedAcquisitionLabels() {
   const double record_duration_us = sample_rate_hz > 0.0
       ? static_cast<double>(sample_points) * 1.0e6 / sample_rate_hz
       : 0.0;
-  const auto chirp_period_samples = config_.chirp_segmentation.chirp_period_samples;
-  const double period_duration_us = sample_rate_hz > 0.0
-      ? static_cast<double>(chirp_period_samples) * 1.0e6 / sample_rate_hz
-      : 0.0;
   if (!record_valid) {
     record_length_state_->setText(capabilities == nullptr
         ? "ATS ERROR | unknown board profile"
         : QString("ATS ERROR | min %1 | multiple of %2")
               .arg(capabilities->minimum_record_samples)
               .arg(capabilities->record_resolution_samples));
-    record_length_state_->setProperty("statusKind", "error");
-  } else if (sample_points > chirp_period_samples) {
-    record_length_state_->setText(
-        QString("ATS VALID | %1 us | +%2 us beyond one chirp period")
-            .arg(record_duration_us, 0, 'f', 3)
-            .arg(record_duration_us - period_duration_us, 0, 'f', 3));
-    record_length_state_->setProperty("statusKind", "warn");
+    setStyledProperty(record_length_state_, "statusKind", "error");
   } else {
     record_length_state_->setText(
         QString("ATS VALID | %1 us record").arg(record_duration_us, 0, 'f', 3));
-    record_length_state_->setProperty("statusKind", "ready");
+    setStyledProperty(record_length_state_, "statusKind", "ready");
   }
-  repolish(record_length_state_);
   const auto a_scans = records_per_buffer_->value();
   if (selected_a_scan_ != nullptr) {
     selected_a_scan_->setMaximum(std::max(0, a_scans - 1));
@@ -1722,12 +1776,11 @@ void MainWindow::updateDerivedAcquisitionLabels() {
         : QString("MISMATCH | DMA %1 ms vs MCU %2 ms")
               .arg(dma_frame_time_ms, 0, 'f', 3)
               .arg(mcu_frame_time_ms, 0, 'f', 3));
-    frame_sync_state_->setProperty("statusKind", synchronized ? "ready" : "warn");
+    setStyledProperty(frame_sync_state_, "statusKind", synchronized ? "ready" : "warn");
   } else {
     frame_sync_state_->setText("Waiting for DMA timing");
-    frame_sync_state_->setProperty("statusKind", "neutral");
+    setStyledProperty(frame_sync_state_, "statusKind", "neutral");
   }
-  repolish(frame_sync_state_);
 }
 
 void MainWindow::loadConfigToControls(const SystemConfig& config, bool mark_pending) {
@@ -1772,12 +1825,12 @@ void MainWindow::loadConfigToControls(const SystemConfig& config, bool mark_pend
   fft_backend_->setCurrentIndex(config.processing.fft_backend == FftBackendKind::Fftw ? 0 : 1);
   window_function_->setCurrentIndex(static_cast<int>(config.chirp_segmentation.window));
   fft_length_->setValue(static_cast<int>(config.chirp_segmentation.segment_fft_length));
+  updatePeakBinLimits();
   dc_removal_->setChecked(config.processing.dc_removal);
   peak_threshold_->setValue(config.processing.peak_threshold_db);
   peak_start_->setValue(static_cast<int>(config.processing.peak_search_start_bin));
   peak_end_->setValue(static_cast<int>(config.processing.peak_search_end_bin));
   period_start_->setValue(config.chirp_segmentation.trigger_to_period_offset);
-  period_length_->setValue(static_cast<int>(config.chirp_segmentation.chirp_period_samples));
   up_start_->setValue(static_cast<int>(config.chirp_segmentation.up_segment.start_sample));
   up_length_->setValue(static_cast<int>(config.chirp_segmentation.up_segment.length()));
   down_start_->setValue(static_cast<int>(config.chirp_segmentation.down_segment.start_sample));
@@ -1831,18 +1884,99 @@ void MainWindow::updateRuntimeSourceControls() {
       : source == AcquisitionSource::Replay ? "Recorded DMA stream" : "Generated signal batches");
 }
 
+void MainWindow::updatePeakBinLimits() {
+  if (fft_length_ == nullptr || peak_start_ == nullptr || peak_end_ == nullptr) {
+    return;
+  }
+  const int last_usable_bin = std::max(1, fft_length_->value() / 2 - 1);
+  peak_end_->setMaximum(last_usable_bin);
+  peak_start_->setMaximum(std::max(0, last_usable_bin - 1));
+}
+
 void MainWindow::updateLivePlotSubscription() {
   if (controller_ == nullptr || navigation_ == nullptr || live_tabs_ == nullptr) {
     return;
   }
-  const int plot_index = !freeze_live_ && navigation_->currentRow() == 1
+  const int plot_index = !freeze_live_ && navigation_->currentRow() == kLivePageIndex
       ? live_tabs_->currentIndex()
       : -1;
+  time_plot_->resetDisplayMetrics();
+  fft_plot_->resetDisplayMetrics();
+  static_cast<void>(controller_->takeUiDispatchMetrics());
+  if (live_display_diagnostics_ != nullptr) {
+    live_display_diagnostics_->setText(
+        plot_index == 0 || plot_index == 1
+            ? "Display | collecting 1 second diagnostic window"
+            : "Display | diagnostics active for Time Domain and FFT");
+  }
   controller_->setLivePlotIndex(plot_index);
 }
 
+void MainWindow::updateLiveDisplayDiagnostics() {
+  if (live_display_diagnostics_ == nullptr || time_plot_ == nullptr || fft_plot_ == nullptr ||
+      live_tabs_ == nullptr) {
+    return;
+  }
+
+  const auto time_metrics = time_plot_->takeDisplayMetrics();
+  const auto fft_metrics = fft_plot_->takeDisplayMetrics();
+  const auto dispatch_metrics = controller_->takeUiDispatchMetrics();
+  const int plot_index = navigation_ != nullptr && navigation_->currentRow() == kLivePageIndex &&
+          !freeze_live_
+      ? live_tabs_->currentIndex()
+      : -1;
+  if (!runtime_status_.running || (plot_index != 0 && plot_index != 1)) {
+    live_display_diagnostics_->setText(
+        freeze_live_ ? "Display | frozen" : "Display | waiting for active Time Domain or FFT data");
+    return;
+  }
+
+  const auto& metrics = plot_index == 0 ? time_metrics : fft_metrics;
+  if (metrics.delivery_count == 0U) {
+    live_display_diagnostics_->setText("Display | no selected plot snapshot delivered in the last second");
+    return;
+  }
+
+  const double dma_rate_hz = runtime_status_.dma_bscan_rate_hz > 0.0
+      ? runtime_status_.dma_bscan_rate_hz
+      : metrics.observed_source_hz;
+  const double omitted_per_second = metrics.interval_seconds > 0.0
+      ? static_cast<double>(metrics.dma_sequences_not_delivered) / metrics.interval_seconds
+      : 0.0;
+  const double merged_per_second = metrics.interval_seconds > 0.0
+      ? static_cast<double>(metrics.gui_updates_merged) / metrics.interval_seconds
+      : 0.0;
+  const auto snapshot_published = plot_index == 0
+      ? dispatch_metrics.waveform_published
+      : dispatch_metrics.fft_published;
+  const auto controller_coalesced = plot_index == 0
+      ? dispatch_metrics.waveform_coalesced
+      : dispatch_metrics.fft_coalesced;
+  const double snapshot_hz = metrics.interval_seconds > 0.0
+      ? static_cast<double>(snapshot_published) / metrics.interval_seconds
+      : 0.0;
+  const double controller_merged_per_second = metrics.interval_seconds > 0.0
+      ? static_cast<double>(controller_coalesced) / metrics.interval_seconds
+      : 0.0;
+  live_display_diagnostics_->setText(
+      QString("Display Hz | DMA %1 | snapshot %2 | GUI %3 | paint %4\n"
+              "Coalesced/s | before GUI %5 | before paint %6 | not shown %7 | "
+              "step max %8 | set p95 %9 ms | paint p95/max %10/%11 ms")
+          .arg(dma_rate_hz, 0, 'f', 1)
+          .arg(snapshot_hz, 0, 'f', 1)
+          .arg(metrics.delivery_hz, 0, 'f', 1)
+          .arg(metrics.paint_hz, 0, 'f', 1)
+          .arg(controller_merged_per_second, 0, 'f', 1)
+          .arg(merged_per_second, 0, 'f', 1)
+          .arg(omitted_per_second, 0, 'f', 1)
+          .arg(metrics.maximum_dma_step)
+          .arg(metrics.set_series_p95_ms, 0, 'f', 2)
+          .arg(metrics.paint_p95_ms, 0, 'f', 2)
+          .arg(metrics.paint_max_ms, 0, 'f', 2));
+}
+
 bool MainWindow::isLivePlotActive(int plot_index) const {
-  return !freeze_live_ && navigation_ != nullptr && navigation_->currentRow() == 1 &&
+  return !freeze_live_ && navigation_ != nullptr && navigation_->currentRow() == kLivePageIndex &&
       live_tabs_ != nullptr && live_tabs_->currentIndex() == plot_index;
 }
 
@@ -1857,6 +1991,35 @@ void MainWindow::updateSelectedAScanStatus(std::uint32_t record_index,
     selected_a_scan_status_->setProperty("statusKind", "ready");
     repolish(selected_a_scan_status_);
   }
+}
+
+void MainWindow::updateProcessingTelemetryLabels() {
+  if (batch_workload_ == nullptr || batch_latency_ == nullptr ||
+      batch_percentiles_ == nullptr || batch_deadline_ == nullptr) {
+    return;
+  }
+  batch_workload_->setText(QString("%1 samples x %2 records\n%3 FFTs x %4")
+                               .arg(sample_point_->value())
+                               .arg(records_per_buffer_->value())
+                               .arg(records_per_buffer_->value() * 2)
+                               .arg(fft_length_->value()));
+  batch_latency_->setText(QString("%1 ms last | %2 ms mean\n%3 ms ownership | %4 ms signal")
+                              .arg(runtime_status_.processing_batch_latency_ms, 0, 'f', 3)
+                              .arg(runtime_status_.processing_batch_average_ms, 0, 'f', 3)
+                              .arg(runtime_status_.processing_copy_latency_ms, 0, 'f', 3)
+                              .arg(runtime_status_.processing_signal_latency_ms, 0, 'f', 3));
+  batch_percentiles_->setText(QString("p50 %1 | p95 %2\np99 %3 | max %4 ms")
+                                  .arg(runtime_status_.processing_batch_p50_ms, 0, 'f', 3)
+                                  .arg(runtime_status_.processing_batch_p95_ms, 0, 'f', 3)
+                                  .arg(runtime_status_.processing_batch_p99_ms, 0, 'f', 3)
+                                  .arg(runtime_status_.processing_batch_max_ms, 0, 'f', 3));
+  const auto deadline_margin_ms = runtime_status_.processing_deadline_ms -
+      runtime_status_.processing_batch_latency_ms;
+  batch_deadline_->setText(QString("%1 ms margin | %2 misses")
+                               .arg(deadline_margin_ms, 0, 'f', 3)
+                               .arg(runtime_status_.processing_deadline_misses));
+  setStyledProperty(batch_deadline_, "statusKind",
+                    runtime_status_.processing_deadline_misses == 0U ? "ready" : "error");
 }
 
 void MainWindow::applyProfile() {
@@ -1912,39 +2075,56 @@ void MainWindow::updateStatus(RuntimeStatus status) {
       runtime_status_.processing_revision != status.processing_revision ||
       runtime_status_.source_name != status.source_name;
   runtime_status_ = std::move(status);
+  const bool stopping = runtime_status_.state == OperationState::Stopping;
   const auto state = QString::fromStdString(toString(runtime_status_.state)).toUpper();
-  runtime_state_label_->setText(state);
-  runtime_state_label_->setProperty("statusKind", runtime_status_.state == OperationState::Error ? "error"
-      : runtime_status_.running ? "ready" : runtime_status_.connected ? "ready" : "neutral");
-  repolish(runtime_state_label_);
   const auto source_name = runtime_status_.source_name.isEmpty()
       ? QString::fromStdString(toString(config_.runtime.acquisition_source)).toUpper()
       : runtime_status_.source_name.toUpper();
   runtime_source_badge_->setText(QString("%1  |  %2").arg(platform_name_.toUpper(), source_name));
-  statusBar()->showMessage(QString("%1 | Up-chirp trigger | Full-period DMA batch").arg(source_name), 0);
-  connect_button_->setText(runtime_status_.connected ? "Disconnect" : "Connect");
-  start_stop_button_->setText(runtime_status_.running ? "STOP" : "START");
-  start_stop_button_->setProperty("runState", runtime_status_.running ? "stop" : "start");
-  repolish(start_stop_button_);
-  connect_button_->setEnabled(!runtime_status_.running);
-  apply_button_->setEnabled(!runtime_status_.running);
-  load_button_->setEnabled(!runtime_status_.running);
-  save_button_->setEnabled(!runtime_status_.running);
-  for (auto* control : restart_required_controls_) {
-    control->setEnabled(!runtime_status_.running);
+  if (stopping) {
+    if (!stop_stage_elapsed_timer_.isValid() ||
+        displayed_stop_stage_ != runtime_status_.active_operation) {
+      displayed_stop_stage_ = runtime_status_.active_operation;
+      stop_stage_elapsed_timer_.restart();
+    }
+    if (!stop_stage_timer_->isActive()) {
+      stop_stage_timer_->start();
+    }
+    updateStopStageDisplay();
+  } else {
+    stop_stage_timer_->stop();
+    stop_stage_elapsed_timer_.invalidate();
+    displayed_stop_stage_.clear();
+    runtime_state_label_->setText(state);
+    setStyledProperty(runtime_state_label_, "statusKind",
+                      runtime_status_.state == OperationState::Error ? "error"
+                          : runtime_status_.running || runtime_status_.connected ? "ready" : "neutral");
+    statusBar()->showMessage(QString("%1 | Up-chirp trigger | Full-period DMA batch").arg(source_name), 0);
   }
-  updateRuntimeSourceControls();
+  connect_button_->setText(runtime_status_.connected ? "Disconnect" : "Connect");
+  start_stop_button_->setText(stopping ? "STOPPING..." : runtime_status_.running ? "STOP" : "START");
+  setStyledProperty(start_stop_button_, "runState",
+                    stopping ? "stopping" : runtime_status_.running ? "stop" : "start");
+  if (control_state_changed) {
+    connect_button_->setEnabled(!runtime_status_.running);
+    apply_button_->setEnabled(!runtime_status_.running);
+    load_button_->setEnabled(!runtime_status_.running);
+    save_button_->setEnabled(!runtime_status_.running);
+    for (auto* control : restart_required_controls_) {
+      control->setEnabled(!runtime_status_.running);
+    }
+    updateRuntimeSourceControls();
+  }
   if (runtime_status_.running) {
     digitizer_lock_state_->setText("LOCKED | press STOP before setup changes");
-    digitizer_lock_state_->setProperty("statusKind", "warn");
+    setStyledProperty(digitizer_lock_state_, "statusKind", "warn");
   } else if (restart_dirty_) {
     digitizer_lock_state_->setText("APPLY REQUIRED | reconnect before START");
-    digitizer_lock_state_->setProperty("statusKind", "warn");
+    setStyledProperty(digitizer_lock_state_, "statusKind", "warn");
   } else {
     digitizer_lock_state_->setText("READY | board settings applied");
-    digitizer_lock_state_->setProperty("statusKind", "ready");
+    setStyledProperty(digitizer_lock_state_, "statusKind", "ready");
   }
-  repolish(digitizer_lock_state_);
 
   overview_digitizer_->setText(runtime_status_.digitizer_ready
       ? QString("READY\n%1").arg(source_name)
@@ -1956,15 +2136,37 @@ void MainWindow::updateStatus(RuntimeStatus status) {
                              ? QString("READY\n%1 points").arg(runtime_status_.mcu_waveform_points)
                              : "WAITING\nNo waveform");
   overview_processing_->setText(runtime_status_.backend_name.isEmpty() ? "NOT CONFIGURED" : runtime_status_.backend_name);
-  overview_frames_->setText(QString("%1 received\n%2 DMA batches")
-                                .arg(runtime_status_.frames_received)
-                                .arg(runtime_status_.acquisition_batches_delivered));
-  overview_queues_->setText(QString("FFT %1 / %2\nRaw %3 | Result %4 / %5")
+  const auto frame_point_count = derivedFramePointCount(config_);
+  const auto generated_frames = frame_point_count == 0U
+      ? 0U
+      : runtime_status_.frames_processed / frame_point_count;
+  if (!runtime_status_.running) {
+    generated_frame_rate_timer_.invalidate();
+    generated_frame_rate_count_ = generated_frames;
+    generated_frame_rate_hz_ = 0.0;
+  } else if (!generated_frame_rate_timer_.isValid() ||
+             generated_frames < generated_frame_rate_count_) {
+    generated_frame_rate_timer_.start();
+    generated_frame_rate_count_ = generated_frames;
+    generated_frame_rate_hz_ = 0.0;
+  } else if (generated_frame_rate_timer_.elapsed() >= kFrameRateSampleIntervalMs) {
+    const auto elapsed_ms = generated_frame_rate_timer_.elapsed();
+    generated_frame_rate_hz_ = static_cast<double>(
+        generated_frames - generated_frame_rate_count_) * 1000.0 /
+        static_cast<double>(elapsed_ms);
+    generated_frame_rate_count_ = generated_frames;
+    generated_frame_rate_timer_.restart();
+  }
+  overview_frames_->setText(QString("%1 FPS\n%2 generated")
+                                .arg(generated_frame_rate_hz_, 0, 'f', 2)
+                                .arg(generated_frames));
+  overview_queues_->setText(QString("Signal %1/%2\nRaw %3/%4 | Result %5/%6")
                                 .arg(runtime_status_.processing_queue_size)
                                 .arg(runtime_status_.processing_queue_capacity)
                                 .arg(runtime_status_.raw_storage_queue_size)
+                                .arg(runtime_status_.raw_storage_queue_capacity)
                                 .arg(runtime_status_.processed_storage_queue_size)
-                                .arg(runtime_status_.storage_queue_capacity));
+                                .arg(runtime_status_.processed_storage_queue_capacity));
   const auto raw_megabytes = static_cast<double>(runtime_status_.raw_bytes_written) / 1.0e6;
   storage_status_->setText(runtime_status_.storage_stop_reason.isEmpty()
       ? QString("Raw %1/%2 (peak %3) | Result %4/%5 (peak %6)\n"
@@ -1980,62 +2182,40 @@ void MainWindow::updateStatus(RuntimeStatus status) {
             .arg(runtime_status_.raw_storage_throughput_mbps, 0, 'f', 1)
             .arg(runtime_status_.processed_storage_throughput_mbps, 0, 'f', 1)
       : runtime_status_.storage_stop_reason);
-  storage_status_->setProperty("statusKind", runtime_status_.storage_stop_reason.isEmpty()
+  setStyledProperty(storage_status_, "statusKind", runtime_status_.storage_stop_reason.isEmpty()
       ? (runtime_status_.raw_storage_queue_size > 0U ||
          runtime_status_.processed_storage_queue_size > 0U ? "warning" : "ready")
       : "error");
-  repolish(storage_status_);
-  overview_latency_->setText(QString("%1 ms\nRevision %2")
-                                 .arg(runtime_status_.processing_latency_ms, 0, 'f', 3)
-                                 .arg(runtime_status_.processing_revision));
-  batch_workload_->setText(QString("%1 samples x %2 records\n%3 FFTs x %4")
-                               .arg(sample_point_->value())
-                               .arg(records_per_buffer_->value())
-                               .arg(records_per_buffer_->value() * 2)
-                               .arg(fft_length_->value()));
-  batch_latency_->setText(QString("%1 ms last | %2 ms mean\n%3 ms ownership | %4 ms signal")
-                              .arg(runtime_status_.processing_batch_latency_ms, 0, 'f', 3)
-                              .arg(runtime_status_.processing_batch_average_ms, 0, 'f', 3)
-                              .arg(runtime_status_.processing_copy_latency_ms, 0, 'f', 3)
-                              .arg(runtime_status_.processing_signal_latency_ms, 0, 'f', 3));
-  batch_percentiles_->setText(QString("p50 %1 | p95 %2\np99 %3 | max %4 ms")
-                                  .arg(runtime_status_.processing_batch_p50_ms, 0, 'f', 3)
-                                  .arg(runtime_status_.processing_batch_p95_ms, 0, 'f', 3)
-                                  .arg(runtime_status_.processing_batch_p99_ms, 0, 'f', 3)
-                                  .arg(runtime_status_.processing_batch_max_ms, 0, 'f', 3));
-  const auto deadline_margin_ms = runtime_status_.processing_deadline_ms -
-      runtime_status_.processing_batch_latency_ms;
-  batch_deadline_->setText(QString("%1 ms margin | %2 misses")
-                               .arg(deadline_margin_ms, 0, 'f', 3)
-                               .arg(runtime_status_.processing_deadline_misses));
-  batch_deadline_->setProperty("statusKind",
-      runtime_status_.processing_deadline_misses == 0U ? "ready" : "error");
-  repolish(batch_deadline_);
+  overview_latency_->setText(QString("%1 ms last\n%2 misses")
+                                 .arg(runtime_status_.processing_batch_latency_ms, 0, 'f', 3)
+                                 .arg(runtime_status_.processing_deadline_misses));
+  if (navigation_ != nullptr && navigation_->currentRow() == kProcessingPageIndex) {
+    updateProcessingTelemetryLabels();
+  }
   overview_recording_->setText(runtime_status_.recording
       ? QString("ACTIVE\n%1 frames").arg(runtime_status_.frames_written) : "OFF");
   if (runtime_status_.udp_running) {
     udp_indicator_->setText("UDP TX");
-    udp_indicator_->setProperty("statusKind", "ready");
+    setStyledProperty(udp_indicator_, "statusKind", "ready");
     udp_status_->setText(QString("Sending | %1 fps | %2 packets | queue %3 / %4 | %5 dropped")
                              .arg(runtime_status_.udp_send_fps, 0, 'f', 1)
                              .arg(runtime_status_.udp_packets_sent)
                              .arg(runtime_status_.udp_queue_size)
                              .arg(runtime_status_.udp_queue_capacity)
                              .arg(runtime_status_.udp_dropped_frames));
-    udp_status_->setProperty("statusKind", runtime_status_.udp_dropped_frames == 0U ? "ready" : "warn");
+    setStyledProperty(udp_status_, "statusKind",
+                      runtime_status_.udp_dropped_frames == 0U ? "ready" : "warn");
   } else if (udp_enabled_->isChecked()) {
     udp_indicator_->setText("UDP READY");
-    udp_indicator_->setProperty("statusKind", "neutral");
+    setStyledProperty(udp_indicator_, "statusKind", "neutral");
     udp_status_->setText(runtime_status_.running ? "Sender stopped" : "Configured | starts with global START");
-    udp_status_->setProperty("statusKind", runtime_status_.running ? "warn" : "neutral");
+    setStyledProperty(udp_status_, "statusKind", runtime_status_.running ? "warn" : "neutral");
   } else {
     udp_indicator_->setText("UDP OFF");
-    udp_indicator_->setProperty("statusKind", "neutral");
+    setStyledProperty(udp_indicator_, "statusKind", "neutral");
     udp_status_->setText("UDP off");
-    udp_status_->setProperty("statusKind", "neutral");
+    setStyledProperty(udp_status_, "statusKind", "neutral");
   }
-  repolish(udp_indicator_);
-  repolish(udp_status_);
   overview_detail_->setText(QString("%1 | Config revision %2 | DMA drop %3 | Trigger miss %4 | %5")
                                 .arg(state)
                                 .arg(runtime_status_.config_revision)
@@ -2049,19 +2229,40 @@ void MainWindow::updateStatus(RuntimeStatus status) {
                           .arg(runtime_status_.mcu_frame_time_ms, 0, 'f', 3)
                     : "Upload required",
                 runtime_status_.mcu_ready, runtime_status_.mcu_bypassed);
-  updateDerivedAcquisitionLabels();
+  if (navigation_ != nullptr && navigation_->currentRow() == kScanMcuPageIndex) {
+    updateDerivedAcquisitionLabels();
+  }
   edfa_output_button_->setText(runtime_status_.edfa_output_enabled ? "Disable Output" : "Enable Output");
-  edfa_output_button_->setEnabled(runtime_status_.connected && edfa_mode_->currentIndex() == 2 &&
-                                  !runtime_status_.edfa_bypassed && !runtime_status_.running);
+  const bool edfa_output_available = runtime_status_.connected && edfa_mode_->currentIndex() == 2 &&
+      !runtime_status_.edfa_bypassed && !runtime_status_.running;
+  if (edfa_output_button_->isEnabled() != edfa_output_available) {
+    edfa_output_button_->setEnabled(edfa_output_available);
+  }
   if (control_state_changed) {
     validateControls();
   }
 }
 
+void MainWindow::updateStopStageDisplay() {
+  if (runtime_status_.state != OperationState::Stopping || runtime_state_label_ == nullptr) {
+    return;
+  }
+  const auto stage = displayed_stop_stage_.isEmpty() ? QString("STOP") : displayed_stop_stage_;
+  const auto elapsed_seconds = stop_stage_elapsed_timer_.isValid()
+      ? static_cast<double>(stop_stage_elapsed_timer_.elapsed()) / 1000.0
+      : 0.0;
+  runtime_state_label_->setText(QString("STOPPING | %1").arg(stage));
+  setStyledProperty(runtime_state_label_, "statusKind", "warn");
+  statusBar()->showMessage(QString("%1 active | %2 s | %3")
+                               .arg(stage)
+                               .arg(elapsed_seconds, 0, 'f', 1)
+                               .arg(runtime_status_.detail),
+                           0);
+}
+
 void MainWindow::setStatusText(QLabel* label, QString text, bool ready, bool bypassed) {
   label->setText(std::move(text));
-  label->setProperty("statusKind", bypassed ? "neutral" : ready ? "ready" : "warn");
-  repolish(label);
+  setStyledProperty(label, "statusKind", bypassed ? "neutral" : ready ? "ready" : "warn");
 }
 
 void MainWindow::appendLog(QString level, QString source, QString message) {
@@ -2098,7 +2299,7 @@ void MainWindow::saveCurrentView() {
 
 void MainWindow::startDemo() {
   if (validateControls()) {
-    navigation_->setCurrentRow(1);
+    navigation_->setCurrentRow(kLivePageIndex);
     controller_->startSystem(configFromControls());
   }
 }
@@ -2112,7 +2313,7 @@ void MainWindow::showPage(int index) {
 }
 
 void MainWindow::showLiveTab(int index) {
-  navigation_->setCurrentRow(1);
+  navigation_->setCurrentRow(kLivePageIndex);
   live_tabs_->setCurrentIndex(std::clamp(index, 0, live_tabs_->count() - 1));
 }
 

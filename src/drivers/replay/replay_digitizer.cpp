@@ -257,7 +257,7 @@ FrameWaitResult ReplayDigitizer::waitForBatch(MutableRawFrameBatchPtr& batch,
   telemetry_.frames_received += record_count;
   ++telemetry_.dma_buffers_received;
   const auto physical_period = std::chrono::duration<double>(
-      static_cast<double>(record_count) * derivedChirpPeriodSeconds(config_));
+      static_cast<double>(record_count) * derivedRecordPeriodSeconds(config_));
   const auto replay_period = std::chrono::duration<double>(1.0 / kMaximumReplayBatchRateHz);
   const auto paced_period = std::max(physical_period, replay_period);
   telemetry_.dma_buffer_period_ms =

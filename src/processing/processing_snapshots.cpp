@@ -25,11 +25,16 @@ void ProcessingSnapshotStore::configure(std::uint32_t x_pixel_count, std::uint32
   point_cloud_work_.width = width_;
   point_cloud_work_.height = height_;
   point_cloud_work_.points.assign(static_cast<std::size_t>(width_) * height_, {});
-  waveform_.reset();
-  fft_.reset();
-  scan_line_.reset();
-  bscan_.reset();
-  point_cloud_.reset();
+  std::atomic_store_explicit(&waveform_, std::shared_ptr<const WaveformSnapshot>{},
+                             std::memory_order_release);
+  std::atomic_store_explicit(&fft_, std::shared_ptr<const FftSnapshot>{},
+                             std::memory_order_release);
+  std::atomic_store_explicit(&scan_line_, std::shared_ptr<const ScanLineSnapshot>{},
+                             std::memory_order_release);
+  std::atomic_store_explicit(&bscan_, std::shared_ptr<const BScanSnapshot>{},
+                             std::memory_order_release);
+  std::atomic_store_explicit(&point_cloud_, std::shared_ptr<const PointCloudSnapshot>{},
+                             std::memory_order_release);
 }
 
 void ProcessingSnapshotStore::resetLine(std::uint32_t y_index) {
@@ -55,8 +60,10 @@ void ProcessingSnapshotStore::resetLine(std::uint32_t y_index) {
 void ProcessingSnapshotStore::setSelectedRecordIndex(std::uint32_t record_index) {
   std::lock_guard<std::mutex> lock(mutex_);
   selected_record_index_ = width_ == 0U ? 0U : std::min(record_index, width_ - 1U);
-  waveform_.reset();
-  fft_.reset();
+  std::atomic_store_explicit(&waveform_, std::shared_ptr<const WaveformSnapshot>{},
+                             std::memory_order_release);
+  std::atomic_store_explicit(&fft_, std::shared_ptr<const FftSnapshot>{},
+                             std::memory_order_release);
 }
 
 std::uint32_t ProcessingSnapshotStore::selectedRecordIndex() const {
@@ -111,8 +118,12 @@ void ProcessingSnapshotStore::publishUnlocked(const RawFrame& raw,
     fft->down_magnitude_db = processed.down_fft_magnitude_db;
     fft->up_peak = processed.up_peak;
     fft->down_peak = processed.down_peak;
-    waveform_ = std::move(waveform);
-    fft_ = std::move(fft);
+    std::atomic_store_explicit(
+        &waveform_, std::shared_ptr<const WaveformSnapshot>(std::move(waveform)),
+        std::memory_order_release);
+    std::atomic_store_explicit(
+        &fft_, std::shared_ptr<const FftSnapshot>(std::move(fft)),
+        std::memory_order_release);
   }
   if (!processed.scan_position.valid || processed.scan_position.x_index >= width_ ||
       processed.scan_position.y_index >= height_ || width_ == 0U || height_ == 0U) {
@@ -158,7 +169,9 @@ void ProcessingSnapshotStore::publishUnlocked(const RawFrame& raw,
   if (line_fill_count_ != width_) {
     return;
   }
-  scan_line_ = std::make_shared<ScanLineSnapshot>(line_work_);
+  std::atomic_store_explicit(
+      &scan_line_, std::make_shared<const ScanLineSnapshot>(line_work_),
+      std::memory_order_release);
   const auto row_offset = static_cast<std::size_t>(active_y_) * width_;
   for (std::uint32_t index = 0; index < width_; ++index) {
     bscan_work_.depth_m[row_offset + index] = line_work_.depth_m[index];
@@ -167,40 +180,39 @@ void ProcessingSnapshotStore::publishUnlocked(const RawFrame& raw,
   bscan_work_.last_frame_id = processed.frame_id;
   bscan_work_.processing_config_revision = processed.processing_config_revision;
   bscan_work_.completed_lines = std::min(height_, bscan_work_.completed_lines + 1U);
-  bscan_ = std::make_shared<BScanSnapshot>(bscan_work_);
+  std::atomic_store_explicit(
+      &bscan_, std::make_shared<const BScanSnapshot>(bscan_work_),
+      std::memory_order_release);
   point_cloud_work_.last_frame_id = processed.frame_id;
   point_cloud_work_.processing_config_revision = processed.processing_config_revision;
   point_cloud_work_.completed_lines = bscan_work_.completed_lines;
   point_cloud_work_.complete = point_cloud_work_.completed_lines == height_;
   if (point_cloud_work_.complete) {
-    point_cloud_ = std::make_shared<PointCloudSnapshot>(point_cloud_work_);
+    std::atomic_store_explicit(
+        &point_cloud_, std::make_shared<const PointCloudSnapshot>(point_cloud_work_),
+        std::memory_order_release);
   }
   has_active_line_ = false;
 }
 
 std::shared_ptr<const WaveformSnapshot> ProcessingSnapshotStore::latestWaveform() const {
-  std::lock_guard<std::mutex> lock(mutex_);
-  return waveform_;
+  return std::atomic_load_explicit(&waveform_, std::memory_order_acquire);
 }
 
 std::shared_ptr<const FftSnapshot> ProcessingSnapshotStore::latestFft() const {
-  std::lock_guard<std::mutex> lock(mutex_);
-  return fft_;
+  return std::atomic_load_explicit(&fft_, std::memory_order_acquire);
 }
 
 std::shared_ptr<const ScanLineSnapshot> ProcessingSnapshotStore::latestScanLine() const {
-  std::lock_guard<std::mutex> lock(mutex_);
-  return scan_line_;
+  return std::atomic_load_explicit(&scan_line_, std::memory_order_acquire);
 }
 
 std::shared_ptr<const BScanSnapshot> ProcessingSnapshotStore::latestBScan() const {
-  std::lock_guard<std::mutex> lock(mutex_);
-  return bscan_;
+  return std::atomic_load_explicit(&bscan_, std::memory_order_acquire);
 }
 
 std::shared_ptr<const PointCloudSnapshot> ProcessingSnapshotStore::latestPointCloud() const {
-  std::lock_guard<std::mutex> lock(mutex_);
-  return point_cloud_;
+  return std::atomic_load_explicit(&point_cloud_, std::memory_order_acquire);
 }
 
 }  // namespace fmcw

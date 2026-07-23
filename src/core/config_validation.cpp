@@ -182,17 +182,17 @@ ValidationResult ConfigValidator::validate(const SystemConfig& config) {
         "Use up_chirp_only and acquire the complete up/down period");
   }
   if (chirp.trigger_to_period_offset < 0 ||
-      static_cast<std::uint64_t>(chirp.trigger_to_period_offset) + chirp.chirp_period_samples > digitizer.sample_point) {
-    add(result, ValidationSeverity::Error, "chirp_segmentation.chirp_period_samples",
-        "The full chirp period falls outside the digitizer record",
-        "Adjust trigger_to_period_offset, chirp_period_samples, or sample_point");
+      static_cast<std::uint64_t>(chirp.trigger_to_period_offset) >= digitizer.sample_point) {
+    add(result, ValidationSeverity::Error, "chirp_segmentation.trigger_to_period_offset",
+        "The chirp period start falls outside the digitizer record",
+        "Keep the period start inside the captured record");
   }
   if (!chirp.up_segment.validFor(digitizer.sample_point) || !chirp.down_segment.validFor(digitizer.sample_point)) {
     add(result, ValidationSeverity::Error, "chirp_segmentation", "Up and down segments must be valid half-open record ranges",
         "Keep each segment inside [0, sample_point)");
   } else {
     const auto period_start = static_cast<std::uint32_t>(std::max(chirp.trigger_to_period_offset, 0));
-    const auto period_end = period_start + chirp.chirp_period_samples;
+    const auto period_end = digitizer.sample_point;
     if (chirp.up_segment.start_sample < period_start || chirp.up_segment.end_sample_exclusive > period_end ||
         chirp.down_segment.start_sample < period_start || chirp.down_segment.end_sample_exclusive > period_end) {
       add(result, ValidationSeverity::Error, "chirp_segmentation", "Segments must stay inside the captured chirp period",
@@ -231,20 +231,6 @@ ValidationResult ConfigValidator::validate(const SystemConfig& config) {
         "Laser bandwidth and sweep rate must be positive",
         "Enter the measured bandwidth and full-period sweep rate used for distance conversion");
   }
-  if (digitizer.sample_rate_hz > 0.0 && digitizer.sample_point > chirp.chirp_period_samples) {
-    const double record_duration_us =
-        static_cast<double>(digitizer.sample_point) * 1.0e6 / digitizer.sample_rate_hz;
-    const double period_duration_us =
-        static_cast<double>(chirp.chirp_period_samples) * 1.0e6 / digitizer.sample_rate_hz;
-    std::ostringstream message;
-    message << "Record length captures " << digitizer.sample_point << " samples ("
-            << record_duration_us << " us), longer than the configured "
-            << chirp.chirp_period_samples << "-sample chirp period ("
-            << period_duration_us << " us)";
-    add(result, ValidationSeverity::Warning, "digitizer.sample_point", message.str(),
-        "The ATS record length is valid; keep the extra capture margin only if intentional");
-  }
-
   if (!std::isfinite(config.scan.x_start_deg) || !std::isfinite(config.scan.x_end_deg) ||
       !std::isfinite(config.scan.y_start_deg) || !std::isfinite(config.scan.y_end_deg) ||
       config.scan.x_start_deg >= config.scan.x_end_deg || config.scan.y_start_deg >= config.scan.y_end_deg ||
@@ -323,7 +309,7 @@ ValidationResult ConfigValidator::validate(const SystemConfig& config) {
         "Set port, baud rate, timeout, and one or two stop bits");
   }
 
-  const double chirp_period_seconds = derivedChirpPeriodSeconds(config);
+  const double chirp_period_seconds = derivedRecordPeriodSeconds(config);
   if (config.storage.raw_enabled && chirp_period_seconds > 0.0) {
     const double raw_megabytes_per_second =
         static_cast<double>(digitizer.sample_point) * sizeof(std::int16_t) /

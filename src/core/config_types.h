@@ -128,7 +128,7 @@ struct DigitizerConfig {
   std::uint32_t impedance_ohms = 50;
   TriggerSource trigger_source = TriggerSource::External;
   TriggerSlope trigger_slope = TriggerSlope::Rising;
-  std::uint32_t trigger_delay_samples = 400;
+  std::uint32_t trigger_delay_samples = 0;
   std::uint32_t pre_trigger_samples = 0;
   std::uint32_t post_trigger_samples = 4096;
   std::uint32_t timeout_ms = 1000;
@@ -174,7 +174,6 @@ struct ScanConfig {
 struct ChirpSegmentationConfig {
   ChirpTriggerMode mode = ChirpTriggerMode::UpChirpOnly;
   std::int32_t trigger_to_period_offset = 128;
-  std::uint32_t chirp_period_samples = 3840;
   SegmentRange up_segment{192, 1920};
   SegmentRange down_segment{2112, 3840};
   std::uint32_t guard_samples = 64;
@@ -214,7 +213,7 @@ struct StorageConfig {
 };
 
 struct UiConfig {
-  double plot_update_hz = 30.0;
+  double plot_update_hz = 60.0;
   double point_cloud_update_hz = 10.0;
   bool segment_overlay = true;
   std::string color_map = "viridis";
@@ -264,7 +263,7 @@ SystemConfig makeAts9371QualificationSimulatorConfig();
 std::uint32_t derivedAScanCount(const SystemConfig& config);
 std::uint64_t derivedFramePointCount(const SystemConfig& config);
 double derivedMcuFrameTimeMs(const SystemConfig& config);
-double derivedChirpPeriodSeconds(const SystemConfig& config);
+double derivedRecordPeriodSeconds(const SystemConfig& config);
 
 std::string toString(DigitizerChannel value);
 std::string toString(Coupling value);

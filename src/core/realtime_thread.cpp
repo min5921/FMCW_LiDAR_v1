@@ -12,9 +12,10 @@ namespace fmcw {
 void prioritizeCurrentRealtimeThread(RealtimeThreadPriority priority) {
 #if defined(_WIN32)
   thread_local int configured_priority = THREAD_PRIORITY_NORMAL;
+  // Keep acquisition ahead of ordinary work without starving Qt and DWM threads.
   const auto requested_priority = priority == RealtimeThreadPriority::Critical
-      ? THREAD_PRIORITY_TIME_CRITICAL
-      : THREAD_PRIORITY_HIGHEST;
+      ? THREAD_PRIORITY_HIGHEST
+      : THREAD_PRIORITY_ABOVE_NORMAL;
   if (configured_priority >= requested_priority) {
     return;
   }

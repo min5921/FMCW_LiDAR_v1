@@ -2,11 +2,13 @@
 
 #include <QImage>
 #include <QLinearGradient>
+#include <QLine>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
 #include <QPaintEvent>
 #include <QPalette>
+#include <QPoint>
 #include <QToolTip>
 
 #include <algorithm>
@@ -76,6 +78,16 @@ QString axisValue(double value, bool integer) {
   return QString::number(value, 'g', 4);
 }
 
+double percentile(std::vector<double> values, double quantile) {
+  if (values.empty()) {
+    return 0.0;
+  }
+  std::sort(values.begin(), values.end());
+  const auto rank = static_cast<std::size_t>(std::ceil(
+      std::clamp(quantile, 0.0, 1.0) * static_cast<double>(values.size())));
+  return values[std::min(values.size() - 1U, rank == 0U ? 0U : rank - 1U)];
+}
+
 void drawAxisTicks(QPainter& painter, const QWidget& widget, double x_minimum, double x_maximum,
                    double y_minimum, double y_maximum, bool integer_x, bool integer_y = false) {
   const auto area = plotRect(widget);
@@ -127,81 +139,84 @@ QColor heatColor(float value) {
   return QColor::fromRgbF(0.95F, 0.68F - t * 0.55F, 0.12F - t * 0.08F);
 }
 
-QPainterPath plotPath(const QVector<float>& values, const QRectF& area,
-                      float minimum, float maximum) {
-  QPainterPath path;
-  if (values.size() < 2 || !(maximum > minimum)) {
-    return path;
+std::size_t displayedValueCount(const PlotSeries& series) {
+  if (series.values == nullptr) {
+    return 0U;
   }
-  bool drawing = false;
-  auto append_index = [&](int index) {
-    const float value = values[index];
-    if (!std::isfinite(value)) {
-      drawing = false;
-      return;
-    }
-    const auto x = area.left() + area.width() * static_cast<double>(index) /
-                                    static_cast<double>(values.size() - 1);
-    const auto y = area.bottom() - area.height() * static_cast<double>(value - minimum) /
-                                      static_cast<double>(maximum - minimum);
-    if (drawing) {
-      path.lineTo(x, y);
-    } else {
-      path.moveTo(x, y);
-      drawing = true;
-    }
-  };
+  return series.display_count == 0U
+      ? series.values->size()
+      : std::min(series.display_count, series.values->size());
+}
 
-  const int output_limit = std::max(2, static_cast<int>(std::floor(area.width())));
-  const bool contains_gap = std::any_of(values.cbegin(), values.cend(), [](float value) {
-    return !std::isfinite(value);
-  });
-  if (values.size() <= output_limit || contains_gap) {
-    for (int index = 0; index < values.size(); ++index) {
-      append_index(index);
-    }
-    return path;
-  }
+int mappedY(float value, const QRectF& area, float minimum, float maximum) {
+  const auto normalized = static_cast<double>(value - minimum) /
+      static_cast<double>(maximum - minimum);
+  return qRound(area.bottom() - area.height() * normalized);
+}
 
-  const int bucket_count = std::max(1, output_limit / 2);
-  for (int bucket = 0; bucket < bucket_count; ++bucket) {
-    const int begin = static_cast<int>(
-        static_cast<qint64>(bucket) * values.size() / bucket_count);
-    const int end = std::max(begin + 1, static_cast<int>(
-        static_cast<qint64>(bucket + 1) * values.size() / bucket_count));
-    int minimum_index = -1;
-    int maximum_index = -1;
+void drawDenseEnvelope(QPainter& painter, const std::vector<float>& values,
+                       std::size_t value_count, const QRectF& area,
+                       float minimum, float maximum) {
+  const int column_count = std::max(1, std::min(
+      static_cast<int>(value_count), static_cast<int>(std::floor(area.width()))));
+  std::vector<QLine> lines;
+  lines.reserve(static_cast<std::size_t>(column_count));
+  for (int column = 0; column < column_count; ++column) {
+    const auto begin = static_cast<std::size_t>(column) * value_count /
+        static_cast<std::size_t>(column_count);
+    const auto end = std::max(begin + 1U,
+        static_cast<std::size_t>(column + 1) * value_count /
+            static_cast<std::size_t>(column_count));
     float bucket_minimum = std::numeric_limits<float>::max();
     float bucket_maximum = std::numeric_limits<float>::lowest();
-    for (int index = begin; index < std::min(end, static_cast<int>(values.size())); ++index) {
+    bool valid = false;
+    for (std::size_t index = begin; index < std::min(end, value_count); ++index) {
       const float value = values[index];
       if (!std::isfinite(value)) {
         continue;
       }
-      if (value < bucket_minimum) {
-        bucket_minimum = value;
-        minimum_index = index;
-      }
-      if (value > bucket_maximum) {
-        bucket_maximum = value;
-        maximum_index = index;
-      }
+      bucket_minimum = std::min(bucket_minimum, value);
+      bucket_maximum = std::max(bucket_maximum, value);
+      valid = true;
     }
-    if (minimum_index < 0 || maximum_index < 0) {
-      drawing = false;
+    if (!valid) {
       continue;
     }
-    if (minimum_index <= maximum_index) {
-      append_index(minimum_index);
-      if (maximum_index != minimum_index) {
-        append_index(maximum_index);
-      }
-    } else {
-      append_index(maximum_index);
-      append_index(minimum_index);
-    }
+    const int x = qRound(area.left() +
+        (static_cast<double>(column) + 0.5) * area.width() /
+            static_cast<double>(column_count));
+    lines.emplace_back(x, mappedY(bucket_maximum, area, minimum, maximum),
+                       x, mappedY(bucket_minimum, area, minimum, maximum));
   }
-  return path;
+  if (!lines.empty()) {
+    painter.drawLines(lines.data(), static_cast<int>(lines.size()));
+  }
+}
+
+void drawSparsePolyline(QPainter& painter, const std::vector<float>& values,
+                        std::size_t value_count, const QRectF& area,
+                        float minimum, float maximum) {
+  std::vector<QPoint> points;
+  points.reserve(value_count);
+  const auto flush = [&painter, &points] {
+    if (points.size() >= 2U) {
+      painter.drawPolyline(points.data(), static_cast<int>(points.size()));
+    } else if (points.size() == 1U) {
+      painter.drawPoint(points.front());
+    }
+    points.clear();
+  };
+  for (std::size_t index = 0; index < value_count; ++index) {
+    const float value = values[index];
+    if (!std::isfinite(value)) {
+      flush();
+      continue;
+    }
+    const int x = qRound(area.left() + area.width() * static_cast<double>(index) /
+        static_cast<double>(value_count - 1U));
+    points.emplace_back(x, mappedY(value, area, minimum, maximum));
+  }
+  flush();
 }
 
 }  // namespace
@@ -210,6 +225,8 @@ LinePlotWidget::LinePlotWidget(QWidget* parent) : QWidget(parent) {
   setMinimumSize(360, 220);
   setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
   setMouseTracking(true);
+  setAttribute(Qt::WA_OpaquePaintEvent);
+  display_metrics_timer_.start();
 }
 
 void LinePlotWidget::setTitle(QString title) {
@@ -223,8 +240,48 @@ void LinePlotWidget::setAxisLabels(QString x_label, QString y_label) {
   update();
 }
 
-void LinePlotWidget::setSeries(QVector<PlotSeries> series) {
+void LinePlotWidget::setSeries(QVector<PlotSeries> series,
+                               std::optional<std::uint64_t> source_sequence) {
+  QElapsedTimer elapsed;
+  elapsed.start();
   series_ = std::move(series);
+  longest_series_ = 0U;
+  has_finite_value_ = false;
+  data_minimum_ = std::numeric_limits<float>::max();
+  data_maximum_ = std::numeric_limits<float>::lowest();
+  for (auto& series_item : series_) {
+    series_item.contains_gap = false;
+    if (series_item.values == nullptr) {
+      continue;
+    }
+    const auto value_count = displayedValueCount(series_item);
+    longest_series_ = std::max(longest_series_, value_count);
+    for (std::size_t index = 0; index < value_count; ++index) {
+      const float value = (*series_item.values)[index];
+      if (!std::isfinite(value)) {
+        series_item.contains_gap = true;
+        continue;
+      }
+      has_finite_value_ = true;
+      data_minimum_ = std::min(data_minimum_, value);
+      data_maximum_ = std::max(data_maximum_, value);
+    }
+  }
+  ++display_delivery_count_;
+  ++pending_series_updates_;
+  if (source_sequence.has_value()) {
+    if (has_source_sequence_ && *source_sequence > last_source_sequence_) {
+      const auto step = *source_sequence - last_source_sequence_;
+      display_source_sequence_advance_ += step;
+      display_maximum_dma_step_ = std::max(display_maximum_dma_step_, step);
+      if (step > 1U) {
+        display_dma_sequences_not_delivered_ += step - 1U;
+      }
+    }
+    last_source_sequence_ = *source_sequence;
+    has_source_sequence_ = true;
+  }
+  set_series_durations_ms_.push_back(static_cast<double>(elapsed.nsecsElapsed()) / 1.0e6);
   update();
 }
 
@@ -246,36 +303,87 @@ QPair<float, float> LinePlotWidget::currentRange() const {
   return {range_minimum_, range_maximum_};
 }
 
+PlotDisplayMetrics LinePlotWidget::takeDisplayMetrics() {
+  PlotDisplayMetrics metrics;
+  const auto elapsed_ms = std::max<qint64>(1, display_metrics_timer_.elapsed());
+  metrics.interval_seconds = static_cast<double>(elapsed_ms) / 1000.0;
+  metrics.observed_source_hz = static_cast<double>(display_source_sequence_advance_) /
+      metrics.interval_seconds;
+  metrics.delivery_hz = static_cast<double>(display_delivery_count_) / metrics.interval_seconds;
+  metrics.paint_hz = static_cast<double>(display_paint_count_) / metrics.interval_seconds;
+  metrics.set_series_p95_ms = percentile(set_series_durations_ms_, 0.95);
+  metrics.paint_p95_ms = percentile(paint_durations_ms_, 0.95);
+  metrics.paint_max_ms = paint_durations_ms_.empty()
+      ? 0.0
+      : *std::max_element(paint_durations_ms_.begin(), paint_durations_ms_.end());
+  metrics.dma_sequences_not_delivered = display_dma_sequences_not_delivered_;
+  metrics.gui_updates_merged = display_gui_updates_merged_;
+  metrics.maximum_dma_step = display_maximum_dma_step_;
+  metrics.delivery_count = display_delivery_count_;
+  metrics.paint_count = display_paint_count_;
+
+  display_delivery_count_ = 0;
+  display_paint_count_ = 0;
+  display_source_sequence_advance_ = 0;
+  display_dma_sequences_not_delivered_ = 0;
+  display_gui_updates_merged_ = 0;
+  display_maximum_dma_step_ = 0;
+  set_series_durations_ms_.clear();
+  paint_durations_ms_.clear();
+  display_metrics_timer_.restart();
+  return metrics;
+}
+
+void LinePlotWidget::resetDisplayMetrics() {
+  display_delivery_count_ = 0;
+  display_paint_count_ = 0;
+  display_source_sequence_advance_ = 0;
+  display_dma_sequences_not_delivered_ = 0;
+  display_gui_updates_merged_ = 0;
+  display_maximum_dma_step_ = 0;
+  pending_series_updates_ = 0;
+  last_source_sequence_ = 0;
+  has_source_sequence_ = false;
+  set_series_durations_ms_.clear();
+  paint_durations_ms_.clear();
+  display_metrics_timer_.restart();
+}
+
 void LinePlotWidget::clear() {
   series_.clear();
+  longest_series_ = 0U;
+  has_finite_value_ = false;
   update();
 }
 
 void LinePlotWidget::paintEvent(QPaintEvent* event) {
+  QElapsedTimer elapsed;
+  elapsed.start();
+  const auto finish_measurement = [this, &elapsed] {
+    if (pending_series_updates_ == 0U) {
+      return;
+    }
+    ++display_paint_count_;
+    if (pending_series_updates_ > 1U) {
+      display_gui_updates_merged_ += pending_series_updates_ - 1U;
+    }
+    pending_series_updates_ = 0U;
+    paint_durations_ms_.push_back(static_cast<double>(elapsed.nsecsElapsed()) / 1.0e6);
+  };
   static_cast<void>(event);
   QPainter painter(this);
   drawFrame(painter, *this, title_, x_label_, y_label_);
   const auto area = plotRect(*this);
 
-  std::size_t longest = 0;
-  float minimum = std::numeric_limits<float>::max();
-  float maximum = std::numeric_limits<float>::lowest();
-  for (const auto& series : series_) {
-    longest = std::max(longest, static_cast<std::size_t>(series.values.size()));
-    for (const float value : series.values) {
-      if (std::isfinite(value)) {
-        minimum = std::min(minimum, value);
-        maximum = std::max(maximum, value);
-      }
-    }
-  }
-
-  if (longest < 2U || minimum == std::numeric_limits<float>::max()) {
+  if (longest_series_ < 2U || !has_finite_value_) {
     drawAxisTicks(painter, *this, 0.0, 1.0, 0.0, 1.0, false);
     painter.setPen(palette().color(QPalette::PlaceholderText));
     painter.drawText(area, Qt::AlignCenter, "Waiting for data");
+    finish_measurement();
     return;
   }
+  float minimum = data_minimum_;
+  float maximum = data_maximum_;
   if (std::abs(maximum - minimum) < 1.0e-6F) {
     minimum -= 1.0F;
     maximum += 1.0F;
@@ -291,19 +399,27 @@ void LinePlotWidget::paintEvent(QPaintEvent* event) {
     maximum = range_maximum_;
   }
 
-  drawAxisTicks(painter, *this, 0.0, static_cast<double>(longest - 1U), minimum, maximum, true);
+  drawAxisTicks(painter, *this, 0.0, static_cast<double>(longest_series_ - 1U), minimum, maximum, true);
 
   painter.setClipRect(area.adjusted(1, 1, -1, -1));
+  painter.setRenderHint(QPainter::Antialiasing, false);
   for (const auto& series : series_) {
-    if (series.values.size() < 2) {
+    const auto value_count = displayedValueCount(series);
+    if (value_count < 2U) {
       continue;
     }
-    const bool dense = series.values.size() > static_cast<int>(area.width());
-    painter.setRenderHint(QPainter::Antialiasing, !dense);
-    painter.setPen(QPen(series.color, 1.6));
-    painter.drawPath(plotPath(series.values, area, minimum, maximum));
+    QPen pen(series.color);
+    pen.setWidth(1);
+    pen.setCosmetic(true);
+    pen.setCapStyle(Qt::FlatCap);
+    pen.setJoinStyle(Qt::MiterJoin);
+    painter.setPen(pen);
+    if (value_count > static_cast<std::size_t>(std::floor(area.width()))) {
+      drawDenseEnvelope(painter, *series.values, value_count, area, minimum, maximum);
+    } else {
+      drawSparsePolyline(painter, *series.values, value_count, area, minimum, maximum);
+    }
   }
-  painter.setRenderHint(QPainter::Antialiasing, true);
   painter.setClipping(false);
 
   painter.setFont(QFont(painter.font().family(), 8));
@@ -316,6 +432,7 @@ void LinePlotWidget::paintEvent(QPaintEvent* event) {
     painter.setPen(palette().color(QPalette::Text));
     painter.drawText(legend_x + 18, 28, series_[index].name);
   }
+  finish_measurement();
 }
 
 void LinePlotWidget::mouseMoveEvent(QMouseEvent* event) {
@@ -326,7 +443,7 @@ void LinePlotWidget::mouseMoveEvent(QMouseEvent* event) {
   }
   qsizetype longest = 0;
   for (const auto& series : series_) {
-    longest = std::max(longest, series.values.size());
+    longest = std::max(longest, static_cast<qsizetype>(displayedValueCount(series)));
   }
   if (longest < 2) {
     return;
@@ -335,8 +452,10 @@ void LinePlotWidget::mouseMoveEvent(QMouseEvent* event) {
   const auto index = static_cast<qsizetype>(std::round(normalized * static_cast<double>(longest - 1)));
   QStringList lines{QString("Index %1").arg(index)};
   for (const auto& series : series_) {
-    if (index < series.values.size() && std::isfinite(series.values[index])) {
-      lines.append(QString("%1: %2").arg(series.name).arg(series.values[index], 0, 'g', 6));
+    if (series.values != nullptr && index < static_cast<qsizetype>(displayedValueCount(series)) &&
+        std::isfinite((*series.values)[static_cast<std::size_t>(index)])) {
+      lines.append(QString("%1: %2").arg(series.name)
+                       .arg((*series.values)[static_cast<std::size_t>(index)], 0, 'g', 6));
     }
   }
   QToolTip::showText(event->globalPosition().toPoint(), lines.join('\n'), this);

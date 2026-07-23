@@ -22,6 +22,7 @@ class QSlider;
 class QSpinBox;
 class QStackedWidget;
 class QTabWidget;
+class QTimer;
 class QToolButton;
 class QWidget;
 
@@ -60,11 +61,15 @@ class MainWindow final : public QMainWindow {
                                      double preferred_range_volts, std::uint32_t preferred_impedance);
   void updateRuntimeSourceControls();
   void updateDerivedAcquisitionLabels();
+  void updatePeakBinLimits();
   void updateLivePlotSubscription();
+  void updateLiveDisplayDiagnostics();
   bool isLivePlotActive(int plot_index) const;
   void updateSelectedAScanStatus(std::uint32_t record_index,
                                  std::uint32_t records_in_buffer,
                                  std::uint64_t dma_sequence);
+  void updateProcessingTelemetryLabels();
+  void updateStopStageDisplay();
   void applyProfile();
   void loadProfile();
   void saveProfile();
@@ -82,13 +87,20 @@ class MainWindow final : public QMainWindow {
   bool restart_dirty_ = false;
   bool loading_controls_ = false;
   bool freeze_live_ = false;
+  QElapsedTimer generated_frame_rate_timer_;
+  QElapsedTimer stop_stage_elapsed_timer_;
+  std::uint64_t generated_frame_rate_count_ = 0;
+  double generated_frame_rate_hz_ = 0.0;
   QStringList log_entries_;
+  QString displayed_stop_stage_;
 
   QListWidget* navigation_ = nullptr;
   QStackedWidget* pages_ = nullptr;
   QComboBox* profile_combo_ = nullptr;
   QPushButton* validation_button_ = nullptr;
   QLabel* runtime_state_label_ = nullptr;
+  QTimer* stop_stage_timer_ = nullptr;
+  QTimer* live_display_timer_ = nullptr;
   QLabel* runtime_source_badge_ = nullptr;
   QLabel* raw_indicator_ = nullptr;
   QLabel* udp_indicator_ = nullptr;
@@ -114,6 +126,7 @@ class MainWindow final : public QMainWindow {
   QSpinBox* selected_a_scan_ = nullptr;
   QSlider* selected_a_scan_slider_ = nullptr;
   QLabel* selected_a_scan_status_ = nullptr;
+  QLabel* live_display_diagnostics_ = nullptr;
   LinePlotWidget* time_plot_ = nullptr;
   LinePlotWidget* fft_plot_ = nullptr;
   LinePlotWidget* peak_index_plot_ = nullptr;
@@ -181,7 +194,6 @@ class MainWindow final : public QMainWindow {
   QSpinBox* peak_start_ = nullptr;
   QSpinBox* peak_end_ = nullptr;
   QSpinBox* period_start_ = nullptr;
-  QSpinBox* period_length_ = nullptr;
   QSpinBox* up_start_ = nullptr;
   QSpinBox* up_length_ = nullptr;
   QSpinBox* down_start_ = nullptr;

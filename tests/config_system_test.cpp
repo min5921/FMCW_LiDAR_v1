@@ -32,26 +32,21 @@ bool hasIssue(const fmcw::ValidationResult& result, fmcw::ValidationSeverity sev
                      });
 }
 
-std::size_t issueCount(const fmcw::ValidationResult& result,
-                       fmcw::ValidationSeverity severity) {
-  return static_cast<std::size_t>(std::count_if(
-      result.issues.begin(), result.issues.end(),
-      [severity](const fmcw::ValidationIssue& issue) { return issue.severity == severity; }));
-}
-
 void testDefaultsAndRoundTrip() {
   const fmcw::SystemConfig defaults;
   const auto validation = fmcw::ConfigValidator::validate(defaults);
   expect(!validation.hasErrors(), "code defaults pass validation");
-  expect(hasIssue(validation, fmcw::ValidationSeverity::Warning, "digitizer.sample_point"),
-         "default record is ATS-valid and warns that its capture margin exceeds one chirp period");
-  expect(issueCount(validation, fmcw::ValidationSeverity::Warning) == 1U,
-         "record margin is the only default warning");
+  expect(!validation.hasWarnings(),
+         "digitizer record length is the single full-period length and needs no duplicate warning");
 
   const auto yaml = fmcw::ConfigProfileCodec::toYaml(defaults);
+  expect(yaml.find("chirp_period_samples: 4096") != std::string::npos,
+         "serialized compatibility field mirrors the digitizer record length");
   const auto decoded = fmcw::ConfigProfileCodec::decodeYaml(yaml, "round-trip");
   expect(decoded.ok(), "serialized default YAML decodes");
   expect(decoded.config.digitizer.channel == fmcw::DigitizerChannel::A, "round trip preserves single channel A");
+  expect(decoded.config.digitizer.trigger_delay_samples == 0U,
+         "external trigger delay defaults to zero samples");
   expect(decoded.config.chirp_segmentation.mode == fmcw::ChirpTriggerMode::UpChirpOnly,
          "round trip preserves up-chirp-only trigger mode");
   expect(decoded.config.profile.schema_version == 5, "round trip uses the fixed-TTL laser-distance schema version");
@@ -134,11 +129,8 @@ void testStrictYamlAndLayering() {
          "user profile overrides the platform FFT backend");
   const auto layered_validation = fmcw::ConfigValidator::validate(layered.config);
   expect(!layered_validation.hasErrors(), "layered profile passes validation");
-  expect(hasIssue(layered_validation, fmcw::ValidationSeverity::Warning,
-                  "digitizer.sample_point"),
-         "layered profile reports only the intentional record-margin warning");
-  expect(issueCount(layered_validation, fmcw::ValidationSeverity::Warning) == 1U,
-         "layered profile has no laser consistency warnings");
+  expect(!layered_validation.hasWarnings(),
+         "layered profile has no duplicate chirp-period or laser consistency warnings");
 
   const auto qualification = fmcw::ConfigProfileCodec::loadLayered({
       source_root / "config" / "default.yaml",
@@ -161,38 +153,32 @@ void testStrictYamlAndLayering() {
       source_root / "config" / "calibration" / "default.yaml",
   });
   expect(jetson.ok(), "Jetson platform layer loads");
-  expect(jetson.config.ui.plot_update_hz == 20.0, "Jetson UI rate override is applied");
+  expect(jetson.config.ui.plot_update_hz == 30.0, "Jetson UI rate override is applied");
   const auto jetson_validation = fmcw::ConfigValidator::validate(jetson.config);
   expect(!jetson_validation.hasErrors(), "Jetson platform profile passes validation");
-  expect(hasIssue(jetson_validation, fmcw::ValidationSeverity::Warning,
-                  "digitizer.sample_point"),
-         "Jetson profile reports the same record-margin warning");
-  expect(issueCount(jetson_validation, fmcw::ValidationSeverity::Warning) == 1U,
-         "Jetson profile has no laser consistency warnings");
+  expect(!jetson_validation.hasWarnings(),
+         "Jetson profile uses the digitizer record as its full-period length");
 }
 
-void testLaserDistanceInputsAndRecordMargin() {
+void testLaserDistanceInputsAndRecordLength() {
   fmcw::SystemConfig exact_period_record;
   exact_period_record.digitizer.sample_point = 3840;
   exact_period_record.digitizer.post_trigger_samples = 3840;
   exact_period_record.chirp_segmentation.trigger_to_period_offset = 0;
-  exact_period_record.chirp_segmentation.chirp_period_samples = 3840;
   exact_period_record.chirp_segmentation.up_segment = {192, 1920};
   exact_period_record.chirp_segmentation.down_segment = {2112, 3840};
   exact_period_record.chirp_segmentation.guard_samples = 64;
   const auto exact_period_validation = fmcw::ConfigValidator::validate(exact_period_record);
-  expect(!hasIssue(exact_period_validation, fmcw::ValidationSeverity::Warning,
-                   "digitizer.sample_point"),
-         "an ATS-aligned record equal to one chirp period has no capture-margin warning");
+  expect(!exact_period_validation.hasWarnings(),
+         "an ATS-aligned digitizer record defines the full-period length without a duplicate warning");
 
   fmcw::SystemConfig over_period_record = exact_period_record;
   over_period_record.digitizer.sample_point = 3968;
   over_period_record.digitizer.post_trigger_samples = 3968;
   const auto over_period_validation = fmcw::ConfigValidator::validate(over_period_record);
-  expect(!over_period_validation.hasErrors() &&
-             hasIssue(over_period_validation, fmcw::ValidationSeverity::Warning,
-                      "digitizer.sample_point"),
-         "an ATS-valid record longer than one chirp period remains startable with a warning");
+  expect(!over_period_validation.hasErrors() && !over_period_validation.hasWarnings() &&
+             std::abs(fmcw::derivedRecordPeriodSeconds(over_period_record) - 3.968e-6) < 1.0e-12,
+         "changing the ATS record length directly changes the derived full-period duration");
 
   fmcw::SystemConfig independent_laser_inputs = exact_period_record;
   independent_laser_inputs.laser.sweep_bandwidth_hz = 1.5e9;
@@ -301,6 +287,17 @@ void testSchemaAndBoardCapabilityValidation() {
                   fmcw::ValidationSeverity::Error, "calibration"),
          "non-finite Cartesian calibration values are rejected");
 
+  fmcw::SystemConfig last_non_nyquist_bin;
+  last_non_nyquist_bin.processing.peak_search_end_bin = 1023;
+  expect(!fmcw::ConfigValidator::validate(last_non_nyquist_bin).hasErrors(),
+         "FFT length 2048 accepts bin 1023 as the inclusive peak-search end");
+
+  fmcw::SystemConfig nyquist_peak_bin = last_non_nyquist_bin;
+  nyquist_peak_bin.processing.peak_search_end_bin = 1024;
+  expect(hasIssue(fmcw::ConfigValidator::validate(nyquist_peak_bin),
+                  fmcw::ValidationSeverity::Error, "processing.peak_search_end_bin"),
+         "FFT length 2048 excludes Nyquist bin 1024 from peak search");
+
   fmcw::SystemConfig oversized_udp_packet;
   oversized_udp_packet.udp.enabled = true;
   oversized_udp_packet.udp.packet_point_count = 3274;
@@ -374,7 +371,7 @@ void testStartGateSnapshotAndOverflowStop() {
 int main() {
   testDefaultsAndRoundTrip();
   testStrictYamlAndLayering();
-  testLaserDistanceInputsAndRecordMargin();
+  testLaserDistanceInputsAndRecordLength();
   testPresentationAndChangePolicy();
   testSchemaAndBoardCapabilityValidation();
   testActiveAndPendingConfiguration();

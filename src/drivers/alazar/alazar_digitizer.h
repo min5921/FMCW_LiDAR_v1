@@ -32,10 +32,12 @@ class AlazarDigitizer final : public IDigitizer {
 
  private:
   struct Impl;
+  bool abortAsyncReadLocked(std::unique_lock<std::mutex>& lock, std::string& error);
   bool configureBoard(std::string& error);
   void releaseBuffers();
 
   mutable std::mutex mutex_;
+  mutable std::mutex telemetry_mutex_;
   std::unique_ptr<Impl> impl_;
   SystemConfig config_;
   DigitizerTelemetry telemetry_;

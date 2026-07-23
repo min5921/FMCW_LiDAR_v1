@@ -132,8 +132,8 @@ Phase 7.1 verification:
 
 - ATS9371 12-bit left-aligned DMA samples now use the SDK shift rule and signed full-scale conversion.
 - Minimum, midpoint, maximum, padding-bit, 16-bit endpoint, invalid-width, and all 4096 ATS9371 code tests pass.
-- Code defaults, layered Windows simulator profile, and Jetson profile validate with zero errors; the intentional 4096-sample record margin is shown as a non-blocking warning.
-- Full-period timing is defined by sampling rate and `chirp_period_samples`; actual timing remains a Phase 7.5 measurement input.
+- Code defaults, layered Windows simulator profile, and Jetson profile validate with zero errors and no duplicate period-length warning.
+- Captured full-period timing is derived from Digitizer sample rate and sample point; actual trigger timing remains a Phase 7.5 measurement input.
 - Laser Specification exposes only measured bandwidth and full triangular sweep rate in `Hz` for distance conversion.
 - Raw format v1 remains converted signed `int16`; original DMA `uint16` block storage is reserved for version 2 in Phase 7.4.
 - Windows MSVC Release built with ATS-SDK, FFTW, and CUDA/cuFFT enabled.
@@ -158,8 +158,8 @@ Record-length policy refinement (2026-07-15):
 
 - `sample_point` is now an operator-selected Alazar record length and is never derived from optical sweep rate.
 - ATS9371 validation enforces minimum 256 samples, 128-sample record/pre-trigger alignment, 8176-sample maximum NPT pre-trigger, at least 64 post-trigger samples, and 16-sample single-channel trigger-delay alignment.
-- A record longer than configured `chirp_period_samples` produces a visible non-blocking warning; segment or full-period data outside the record remains an error.
-- The Digitizer page shows ATS validity, record duration, and excess time beyond one configured chirp period next to the editable record count.
+- Digitizer sample point is the single captured full-period length; segment data outside the record remains an error.
+- The Digitizer page shows ATS validity and record duration next to the editable record count without a duplicate period-length comparison.
 - Windows MSVC Release and CTest 5/5 passed. The warning-state simulator START delivered 141 DMA batches / 9,024 records with queue 0/32 and no DMA drop or trigger miss.
 - Packaged EXE SHA-256: `B14C0CD37954367988305F8349F8BF9FDCF562FB297F2C8CB2566975EAACAA25`.
 - Implementation commit: `4fc5a1e`
@@ -170,8 +170,8 @@ TTL and laser distance contract refinement (2026-07-15):
 - The Digitizer UI no longer exposes an analog full-scale trigger threshold or threshold code.
 - Laser Specification now contains only `sweep_bandwidth_hz` and full triangular `sweep_rate_hz`, both entered in Hz.
 - Distance uses `c * (f_up + f_down) / (8 * bandwidth * sweep_rate)`; the legacy hard-coded 200000 Hz value is replaced by the configured sweep rate.
-- Chirp timing, simulator/replay pacing, record-margin warning, and raw throughput estimation use sampling rate plus `chirp_period_samples`, independently of Laser Specification.
-- Laser period/slope consistency warnings were removed. The intentional record-margin warning remains the only default warning.
+- Simulator/replay pacing and raw throughput estimation use Digitizer sample rate plus sample point, independently of Laser Specification.
+- Laser period/slope consistency and duplicate record-margin warnings are removed.
 - Configuration schema version is now 5; velocity wavelength is owned by calibration instead of the Laser UI.
 - Windows MSVC Release and CTest 5/5 passed. Digitizer and Laser pages were visually checked in the packaged GUI.
 - Packaged EXE SHA-256: `742DC9FE18BF0AA5B16CA72CC0FC70D8E279FA350ECE8601EEDD66C3E4275A40`.
@@ -322,10 +322,31 @@ Ownership-stage instrumentation and descriptor reuse (2026-07-17):
 
 Live-view and segmentation usability refinement (2026-07-17):
 
-- Chirp segmentation controls now accept full-period, UP, and DOWN start/length values. The UI converts these values to the existing half-open `[start, end)` processing contract with overflow validation, and the frozen snapshot overlay follows the same conversion.
+- Chirp segmentation controls accept period start and UP/DOWN start/length values. Full-period length comes directly from Digitizer sample point, while segment values use the existing half-open `[start, end)` processing contract with overflow validation.
 - Only the visible Live tab is delivered to the Qt GUI thread. Acquisition, all 998-record FFT/peak/distance processing, B-scan assembly, storage, and UDP remain active while hidden plot conversion and repaint work is skipped.
-- Plot repaint is capped at 30 Hz and full status aggregation at 10 Hz. Dense finite Time Domain and FFT traces use a per-pixel min/max envelope, while series containing threshold-invalid `NaN` values retain their gaps.
+- Windows plot repaint is capped at 60 Hz, Jetson defaults to 30 Hz, and full status aggregation remains at 10 Hz. Line plots share immutable snapshot vectors instead of copying them into Qt containers; dense finite traces retain the per-pixel min/max envelope and threshold-invalid `NaN` gaps.
+- Live View now reports measured DMA, selected snapshot delivery, and completed data-paint rates plus omitted DMA sequences, GUI-merged updates, and set/paint p95/max latency in a non-I/O 1-second diagnostic window.
 - Selected A-scan can be changed with a synchronized horizontal slider or numeric control. Slider dragging applies the runtime selection once on release and does not restart or reconfigure acquisition.
 - The digitizer simulator precomputes deterministic DMA-slot-varying templates with approximately 96 ADC-count RMS Gaussian-like noise. The runtime path does not generate random samples, preserving qualification cadence and DMA-overflow behavior.
 - Windows MSVC Release CTest passed 9/9, and the refreshed packaged EXE passed `--smoke-test`. Release and package SHA-256 are `C71D59952652858E73139FD92B36BC84F95EAB545BC994FB0CB505A390D29938`.
 - No new real-time acceptance claim is made from this run because an external model-training workload was active. The preceding idle-machine and sustained acceptance records remain the current performance evidence.
+
+ATS trigger-delay and live-plot validation (2026-07-23):
+
+- Trigger delay now defaults to `0 samples` in the C++ defaults and YAML profiles. The packaged Digitizer page was verified with 4992 post-trigger samples and zero pre-trigger samples.
+- Windows line-plot delivery runs at up to 60 Hz, Jetson defaults to 30 Hz, and immutable waveform/FFT vectors are shared directly with the visible plot. Release Time Domain and FFT renders passed with the 4992 x 998 qualification simulator.
+- An actual ATS9371 run with 200 kHz TRIG IN, 200 Hz AUX trigger-enable, 4992 samples, and 998 records/buffer measured approximately 139.08 B-scans/s and 7.190 ms/buffer with zero DMA drops. The same rate remained when Live View was hidden, so GUI plotting is not limiting DMA cadence.
+- Removing the former 400-sample delay improved the earlier approximately 100 B-scans/s result but did not reach the 200 B-scans/s target. External-trigger acceptance and the NPT record-length/re-arm margin remain a separate hardware-timing investigation.
+- The Windows MSVC Release build, Release CTest 9/9, package smoke test, and automated Time Domain/FFT/Digitizer renders passed. Package SHA-256 is `516804899E19047934E2006D529808C41325569441EA67857C178422FFF3831A`.
+
+ATS9371 200 Hz acquisition and Qt paint verification (2026-07-23):
+
+- The external trigger/arm issue behind the earlier 139.08 Hz result was corrected. A short real-board run then sustained 200.0 DMA buffers/s at 1 GS/s, 4736 samples/record, 998 records/buffer, eight DMA buffers, TTL rising edge, and trigger delay 0.
+- Full-period segmentation used UP start/length 100/2048 and DOWN start/length 2500/2048 with guard 10. The CPU FFTW path averaged about 1.8 ms, with p95 2.17 ms, maximum 3.853 ms, and no observed deadline miss.
+- Live View publishes only the latest selected A-scan. Time Domain and FFT each sustained about 59 Hz while acquisition remained at 200 Hz; intentionally omitted display sequences reflect the 60 Hz Windows UI cap rather than DMA or processing loss.
+- Dense Time Domain drawing now uses a per-screen-column min/max envelope and one batched line draw. Sparse FFT drawing uses a batched integer-point polyline. Immutable waveform vectors are shared through the GUI path without full-vector copies.
+- On the real data, Time Domain paint improved from p95/max 481.11/481.11 ms to 1.85/2.12 ms. FFT paint improved from 53.53/53.53 ms to 1.58/1.60 ms. GUI and paint coalescing remained 0.0/s.
+- A 2048-point real-to-complex transform retains Nyquist index 1024 internally. Live FFT, peak search, and UI limits use 0 through 1023, preventing the terminal Nyquist spike from entering measurement.
+- Operator STOP completed and returned to START; the digitizer disconnected cleanly. EDFA, MCU, raw recording, and UDP were intentionally disabled during this focused check.
+- Release CTest passed 9/9. The packaged EXE SHA-256 is `53DE2B92C5FA8AA5E2EA73C379D0CD3057E410AC69F487656E4834FBDECE41F0`.
+- This is short functional evidence, not the fixed 10-minute Phase 7.2/7.3D/7.4 hardware acceptance. Long-duration DMA, locked-page/handle, storage, thermal, and Jetson checks remain pending.

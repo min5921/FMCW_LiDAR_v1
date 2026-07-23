@@ -7,5 +7,5 @@ storage:
   output_directory: "data/raw"
   queue_capacity: 64
 ui:
-  plot_update_hz: 30
+  plot_update_hz: 60
   point_cloud_update_hz: 10

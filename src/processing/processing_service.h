@@ -21,6 +21,11 @@ enum class ProcessingEnqueueResult {
   Error,
 };
 
+enum class ProcessingStopMode {
+  DrainPending,
+  DiscardPending,
+};
+
 struct ProcessingLatencyBreakdown {
   double end_to_end_ms = 0.0;
   double ownership_ms = 0.0;
@@ -40,6 +45,7 @@ struct ProcessingServiceStatus {
   std::size_t queue_size = 0;
   std::size_t queue_capacity = 0;
   std::size_t queue_high_water_mark = 0;
+  std::uint64_t batches_discarded_on_stop = 0;
   std::uint64_t batches_processed = 0;
   std::uint64_t frames_processed = 0;
   std::uint64_t last_processed_frame_id = 0;
@@ -81,7 +87,8 @@ class ProcessingService {
   bool updateRuntimeConfig(const ProcessingConfig& config, std::uint64_t processing_config_revision,
                            std::string& error);
   void setProcessedFrameCallback(ProcessedFrameCallback callback);
-  void requestStop(std::string reason);
+  void requestStop(std::string reason,
+                   ProcessingStopMode mode = ProcessingStopMode::DrainPending);
   bool waitUntilStopped(std::string& error);
   bool waitForProcessedBatches(std::uint64_t target_count,
                                std::chrono::milliseconds timeout,

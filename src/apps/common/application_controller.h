@@ -11,6 +11,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <mutex>
+#include <optional>
 
 namespace fmcw {
 
@@ -19,6 +21,13 @@ using FftSnapshotPtr = std::shared_ptr<const FftSnapshot>;
 using ScanLineSnapshotPtr = std::shared_ptr<const ScanLineSnapshot>;
 using BScanSnapshotPtr = std::shared_ptr<const BScanSnapshot>;
 using PointCloudSnapshotPtr = std::shared_ptr<const PointCloudSnapshot>;
+
+struct UiDispatchMetrics {
+  std::uint64_t waveform_published = 0;
+  std::uint64_t waveform_coalesced = 0;
+  std::uint64_t fft_published = 0;
+  std::uint64_t fft_coalesced = 0;
+};
 
 struct RuntimeStatus {
   OperationState state = OperationState::Disconnected;
@@ -83,6 +92,7 @@ struct RuntimeStatus {
   QString source_name;
   QString backend_name;
   QString storage_stop_reason;
+  QString active_operation;
   QString detail;
 };
 
@@ -110,6 +120,7 @@ class ApplicationController final : public QObject {
   void setEdfaOutput(bool enabled);
   void uploadMcuWaveform();
   void captureSegmentationSnapshot();
+  UiDispatchMetrics takeUiDispatchMetrics();
 
  signals:
   void statusChanged(fmcw::RuntimeStatus status);
@@ -124,8 +135,26 @@ class ApplicationController final : public QObject {
   void commandCompleted(QString command, QString message);
 
  private:
+  void enqueueStatus(RuntimeStatus status);
+  void enqueueWaveform(WaveformSnapshotPtr snapshot);
+  void enqueueFft(FftSnapshotPtr snapshot);
+  void enqueueScanLine(ScanLineSnapshotPtr snapshot);
+  void enqueueBScan(BScanSnapshotPtr snapshot);
+  void enqueuePointCloud(PointCloudSnapshotPtr snapshot);
+  void schedulePendingUiDispatchLocked();
+  void drainPendingUiUpdates();
+
   QThread runtime_thread_;
   RuntimeWorker* worker_ = nullptr;
+  std::mutex pending_ui_mutex_;
+  std::optional<RuntimeStatus> pending_status_;
+  WaveformSnapshotPtr pending_waveform_;
+  FftSnapshotPtr pending_fft_;
+  ScanLineSnapshotPtr pending_scan_line_;
+  BScanSnapshotPtr pending_bscan_;
+  PointCloudSnapshotPtr pending_point_cloud_;
+  bool ui_dispatch_scheduled_ = false;
+  UiDispatchMetrics ui_dispatch_metrics_;
 };
 
 }  // namespace fmcw

@@ -141,7 +141,7 @@ UI 선택 기준:
 - Jetson/Linux UI: Qt 6 로컬 UI
 - 3D viewer: Qt/OpenGL 기반 경량 point cloud renderer
 
-화면 책임과 Qt runtime 계약은 `docs/gui_runtime_requirements.md`를 따른다. Overview는 상태와 session summary만 표시하고, 실시간 plot은 Live View가 전담한다. 실행 중 변경 가능한 값과 restart-required 값은 각 field 옆 상태로 구분한다.
+화면 책임과 Qt runtime 계약은 `docs/gui_runtime_requirements.md`를 따른다. Overview는 상태와 session summary만 표시하며, `FRAMES`에는 raster FPS와 생성 완료 frame 수만 표시하고 실시간 plot은 Live View가 전담한다. 실행 중 변경 가능한 값과 restart-required 값은 각 field 옆 상태로 구분한다. Processing의 상세 batch 진단은 해당 page가 보일 때만 UI를 갱신하고 숨겨져 있을 때는 마지막 표시값을 유지한다.
 
 ### 3.2 Digitizer Board Setup
 
@@ -164,7 +164,7 @@ UI에서 다음 항목을 설정할 수 있어야 한다.
 - Trigger delay
 - Laser trigger mode: `up_chirp_only`로 고정
 - Full-period acquisition: 항상 enable
-- Full-period start/length samples
+- Full-period start samples; length는 Digitizer sample point에서 파생
 - Pre-trigger samples
 - Post-trigger samples
 - Up segment start/length sample
@@ -179,7 +179,7 @@ UI에서 다음 항목을 설정할 수 있어야 한다.
 - `sample_point`는 사용자가 Alazar record 길이로 직접 입력하며 laser sweep rate로부터 자동 계산하지 않는다.
 - ATS-SDK 25.1.0 section 7.2 기준 ATS9371 record 길이는 최소 256 samples이고 128 samples의 배수여야 한다.
 - Record samples control은 지원되지 않는 정수를 확정하지 않으며, keyboard 입력과 step 조작 모두 위 SDK 규칙을 만족하는 값만 config에 반영한다. 예를 들어 4992는 유효하고 5000은 유효하지 않다.
-- `sample_point`가 `chirp_period_samples`보다 크면 Warning을 표시하되 START를 차단하지 않는다.
+- `sample_point`는 캡처된 full-period record 길이의 단일 기준이며 별도 period length 입력을 두지 않는다.
 - v1 hardware acquisition에서는 trigger 1개가 전체 up+down chirp period 1개를 의미한다.
 - legacy `up_down_pair`는 hardware profile이나 UI에 노출하지 않고 replay/import 변환에서만 읽는다.
 - `up_chirp_only` 모드의 record length는 설정된 full chirp period와 UP/DOWN segment를 포함해야 하며 추가 margin은 선택 사항이다.
@@ -199,8 +199,8 @@ UI에서 다음 항목을 설정할 수 있어야 한다.
 실행 중 변경 정책:
 
 - 실행 중 변경 가능: peak threshold/search range, DC removal, plot range, color map, segment overlay 표시
-- Preview 중 변경 가능: full-period 및 up/down segment start/length, guard samples
-- 재시작 필요: board capability, sampling rate, sample point, channel, record count, chirp period samples, DMA buffer count, FFT backend/length, raw/processed save 조건, UDP endpoint
+- Preview 중 변경 가능: full-period start, up/down segment start/length, guard samples
+- 재시작 필요: board capability, sampling rate, sample point, channel, record count, DMA buffer count, FFT backend/length, raw/processed save 조건, UDP endpoint
 - 재시작 필요 설정은 Running 중 잠그고, STOP 후 `Apply Setup`으로 disconnect/configure/reconnect한다. 자동 START는 하지 않는다.
 
 현재 코드 기준 관련 항목:
@@ -354,7 +354,7 @@ legacy 참고:
 - `chirp_segmentation.mode`: hardware acquisition에서는 `up_chirp_only`로 고정
 - `legacy_pair`: 과거 raw data replay/import 변환기에서만 허용
 - `trigger_to_period_offset`: trigger 이후 full period 시작 sample offset
-- `chirp_period_samples`: full up+down period 전체 sample 수
+- full up+down period 전체 sample 수는 `digitizer.sample_point`에서 파생한다. 기존 YAML의 `chirp_period_samples`는 profile 호환용 mirror로만 읽고 저장 시 `sample_point`와 같은 값으로 쓴다.
 - `up_segment.start_sample`, `up_segment.end_sample_exclusive`
 - `down_segment.start_sample`, `down_segment.end_sample_exclusive`
 - `guard_samples`: chirp 전환부와 불안정 구간 제외 sample 수
@@ -365,7 +365,7 @@ legacy 참고:
 UI 요구사항:
 
 - Processing 페이지는 사용자가 요청한 한 개 full-period frame을 고정 snapshot으로 표시하고 trigger, up segment, down segment, guard zone을 색상 overlay로 표시한다.
-- UI는 full-period와 각 segment의 start/length를 입력받고, end는 `start + length`로 계산해 sample index와 시간 단위(us/ns)를 함께 보여준다.
+- UI는 full-period start와 각 segment의 start/length를 입력받고, full-period length는 Digitizer의 `sample_point`를 사용한다. Segment end는 `start + length`로 계산해 sample index와 시간 단위(us/ns)를 함께 보여준다.
 - 사용자가 고정 snapshot에서 segment boundary를 조정하면 overlay와 validation 결과를 즉시 갱신한다.
 - 연속 실시간 waveform은 Live View의 Time Domain 탭에서만 표시한다.
 - segment가 record 밖으로 나가거나 서로 겹치면 Start를 막는다.
@@ -468,9 +468,10 @@ UI 기능:
 - plot은 전체 raw buffer를 매 frame 그리지 않고 필요 시 downsample한다.
 - UI 렌더링 속도와 acquisition frame rate를 분리한다.
 - 오래된 frame을 모두 그리려 하지 않고 최신 frame 우선 정책을 둔다.
-- 현재 보이는 Live tab만 Qt GUI 전달, QVector 변환, repaint를 수행하며 숨은 tab은 GUI 갱신하지 않는다.
+- 현재 보이는 Live tab만 Qt GUI 전달, snapshot binding, repaint를 수행하며 숨은 tab은 GUI 갱신하지 않는다. Line plot은 immutable snapshot vector를 공유하고 표시용 Qt container 전체 복사를 만들지 않는다.
 - dense Time Domain/FFT는 화면 픽셀 기반 min/max envelope로 렌더링하고, acquisition/processing은 원본 전체 sample을 그대로 처리한다.
-- Windows plot은 최대 30 Hz, 상태 telemetry는 10 Hz로 갱신한다. UI에서 합쳐진 frame은 DMA drop이나 processing miss로 간주하지 않는다.
+- Live View는 DMA 생성 Hz, GUI snapshot 전달 Hz, 실제 data paint Hz, display에서 생략된 DMA sequence, paint 전에 병합된 GUI update, set/paint p95 및 paint max를 1초 단위로 표시한다. Display 생략은 DMA drop 또는 processing drop과 별도로 집계한다.
+- Windows plot은 최대 60 Hz, Jetson plot은 기본 30 Hz, 상태 telemetry는 10 Hz로 갱신한다. UI에서 합쳐진 frame은 DMA drop이나 processing miss로 간주하지 않는다.
 - Selected A-scan은 숫자 입력과 가로 slider를 동기화하며 slider drag 완료 시 선택을 적용한다.
 - 사용자가 freeze를 누르면 acquisition은 계속 돌고 화면만 정지한다.
 - cursor가 가리키는 sample index, FFT bin, distance 값을 표시한다.

@@ -1,7 +1,5 @@
 #include "processing/fft_backends.h"
 
-#include "core/realtime_thread.h"
-
 #ifndef FMCW_HAS_FFTW
 #define FMCW_HAS_FFTW 0
 #endif
@@ -140,7 +138,6 @@ bool FftwBackend::execute(const std::vector<float>& input,
 #endif
   for (std::int64_t lane_number = 0;
        lane_number < static_cast<std::int64_t>(impl_->lanes.size()); ++lane_number) {
-    prioritizeCurrentRealtimeThread(RealtimeThreadPriority::High);
     auto& lane = impl_->lanes[static_cast<std::size_t>(lane_number)];
     const auto input_offset = lane.transform_offset * impl_->plan.length;
     const auto output_offset = lane.transform_offset * spectrum_length;

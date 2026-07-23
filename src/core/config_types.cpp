@@ -207,11 +207,11 @@ double derivedMcuFrameTimeMs(const SystemConfig& config) {
       config.scan.scanner_sample_rate_hz;
 }
 
-double derivedChirpPeriodSeconds(const SystemConfig& config) {
+double derivedRecordPeriodSeconds(const SystemConfig& config) {
   if (!(config.digitizer.sample_rate_hz > 0.0)) {
     return 0.0;
   }
-  return static_cast<double>(config.chirp_segmentation.chirp_period_samples) /
+  return static_cast<double>(config.digitizer.sample_point) /
       config.digitizer.sample_rate_hz;
 }
 
@@ -230,7 +230,6 @@ SystemConfig makeAts9371QualificationSimulatorConfig() {
   config.digitizer.post_trigger_samples = 4992;
   config.scan.x_pixel_count = 998;
   config.chirp_segmentation.trigger_to_period_offset = 0;
-  config.chirp_segmentation.chirp_period_samples = 4992;
   config.chirp_segmentation.up_segment = {0, 2048};
   config.chirp_segmentation.down_segment = {2944, 4992};
   config.chirp_segmentation.guard_samples = 448;

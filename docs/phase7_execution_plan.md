@@ -81,7 +81,7 @@ DMA buffer는 acquisition, processing, raw storage 사이의 기본 운반 단�
 - ATS9371 12-bit sample의 16-bit DMA alignment를 SDK 방식으로 변환한다.
 - ADC 변환을 독립 helper로 분리하고 minimum, midpoint, maximum, clipping test를 추가한다.
 - legacy `raw - 32768` 표시와 SDK `sample >> 4` 변환의 full-scale 관계를 검증한다.
-- `sample_rate_hz`, `chirp_period_samples`, `sample_point`, trigger offset의 full-period acquisition contract를 강화한다.
+- `sample_rate_hz`, `sample_point`, trigger offset의 full-period acquisition contract를 강화하고 중복 period length를 제거한다.
 - 기본 profile의 1 GS/s, 20 us, 3840-sample 불일치를 제거한다.
 - raw format이 original DMA `uint16`을 보존할지 converted `int16`을 저장할지 확정하고 format version 영향을 기록한다.
 
@@ -101,7 +101,7 @@ DMA buffer는 acquisition, processing, raw storage 사이의 기본 운반 단�
 
 - ATS SDK 25.1.0 예제와 같은 right shift 규칙을 독립 sample helper에 적용했다.
 - 12-bit 전체 4096 code가 legacy `raw - 32768` signed full-scale 값과 일치함을 검증했다.
-- 기본 개발 profile은 `1 GS/s`, `3840 period samples`, `4096 record samples`를 사용한다. 256-sample capture margin은 의도 확인용 Warning으로 표시한다.
+- 기본 개발 profile은 `1 GS/s`, `4096 record samples`를 사용하며 이 Digitizer record가 캡처된 full-period 길이의 단일 기준이다.
 - Laser UI는 거리 변환용 measured bandwidth와 full triangular sweep rate를 `Hz` 단위로 직접 설정한다.
 - raw format v1은 converted signed `int16`을 유지하고 original DMA `uint16` block은 Phase 7.4의 version 2로 추가한다.
 - Windows Release build에서 ATS-SDK, FFTW, CUDA/cuFFT가 활성화되었고 CTest 5/5가 통과했다.
@@ -145,6 +145,18 @@ DMA buffer는 acquisition, processing, raw storage 사이의 기본 운반 단�
 - Packaged simulator runtime delivered 141 batches and 9,024 records with processing queue 0/32, DMA drops 0, and trigger misses 0 in the GUI smoke run.
 - Remaining Phase 7.2 acceptance: connect ATS9371 and complete the 10-minute DMA, locked-page, handle, STOP, and overflow checks. Status remains `in_progress` until that hardware evidence exists.
 - Software implementation commit: `3cfcea3`
+
+### ATS9371 Short-Run and Live-Display Verification (2026-07-23)
+
+- The real ATS9371 was exercised at System 1 / Board 1 with 1 GS/s, 4736 samples/record, 998 records/buffer, eight DMA buffers, external TTL rising-edge trigger, and zero trigger delay.
+- Full-period records used UP start/length 100/2048 and DOWN start/length 2500/2048 with guard 10. CPU FFTW ran the same strict-threshold, integer-bin, distance/velocity, and XYZIV pipeline used by CUDA.
+- The corrected external trigger/arm setup sustained 200.0 DMA buffers/s in the short run. Processing averaged about 1.8 ms with p95 2.17 ms, maximum 3.853 ms, and no observed deadline miss.
+- The latest selected A-scan display sustained about 59 Hz on both Time Domain and FFT while acquisition continued at 200 Hz. Dense Time Domain traces use a per-pixel min/max envelope, and sparse FFT traces use a batched integer-point polyline.
+- Time Domain paint p95/maximum improved from 481.11/481.11 ms to 1.85/2.12 ms. FFT paint p95/maximum improved from 53.53/53.53 ms to 1.58/1.60 ms.
+- Display-only sequence omissions are expected from the 200 Hz producer and 60 Hz Windows display cap. GUI coalescing and paint coalescing remained at 0.0/s, with no observed DMA or processing drop.
+- For a 2048-point real-to-complex FFT, the Nyquist bin remains available internally at index 1024. Live FFT, peak search, and operator limits intentionally expose bins 0 through 1023.
+- Operator STOP returned the application to START, and disconnect completed cleanly. EDFA, MCU, raw storage, and UDP were disabled for this focused test.
+- This closes short functional and live-display verification only. The fixed 10-minute DMA, locked-page, handle, overflow, and storage acceptance remains pending.
 
 ## 7. Phase 7.3: Signal Processing Optimization
 
@@ -461,4 +473,4 @@ Phase 7.7: complete Jetson integration and release
 
 Current next subphase: **7.5 Laser, MCU, and scan alignment** after the required hardware timing inputs are available.
 
-7.2, 7.3D, and 7.4 hardware acceptance remain blocked. The 7.4 contiguous DMA-block implementation improved CUDA feed throughput but did not make either backend pass the 5 ms end-to-end gate. The next software work should start only with measured chirp/trigger and MCU scan-alignment inputs, or with a focused 7.3D snapshot/ownership latency optimization decision.
+The ATS9371 short run now proves 200 Hz DMA operation, selected-view Qt delivery, and clean operator STOP with the current trigger wiring. Phase 7.2 long-duration acceptance, Phase 7.3D hard acceptance, and Phase 7.4 sustained storage acceptance remain blocked. The next software work should start with measured chirp/trigger and MCU scan-alignment inputs, or with the remaining fixed-duration hardware acceptance runs.
