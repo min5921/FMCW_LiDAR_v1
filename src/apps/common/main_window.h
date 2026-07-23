@@ -10,6 +10,7 @@
 #include <QList>
 #include <QStringList>
 
+class QApplication;
 class QCheckBox;
 class QComboBox;
 class QDoubleSpinBox;
@@ -28,6 +29,8 @@ class QWidget;
 
 namespace fmcw {
 
+void applyDarkApplicationTheme(QApplication& application);
+
 class MainWindow final : public QMainWindow {
  public:
   explicit MainWindow(QString platform_name, QWidget* parent = nullptr);
@@ -36,7 +39,6 @@ class MainWindow final : public QMainWindow {
   void captureSegmentation();
   void showPage(int index);
   void showLiveTab(int index);
-  void setDarkTheme(bool enabled = true);
   bool savePointCloudFramebuffer(const QString& path);
 
  private:
@@ -154,6 +156,7 @@ class MainWindow final : public QMainWindow {
   QComboBox* input_range_ = nullptr;
   QComboBox* impedance_ = nullptr;
   QComboBox* coupling_ = nullptr;
+  QLabel* trigger_input_ = nullptr;
   QComboBox* trigger_slope_ = nullptr;
   QSpinBox* trigger_delay_ = nullptr;
   QSpinBox* pre_trigger_ = nullptr;

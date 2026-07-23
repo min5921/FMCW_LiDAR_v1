@@ -1,8 +1,8 @@
 {
-  "version": 6,
+  "version": 3,
   "cmakeMinimumRequired": {
     "major": 3,
-    "minor": 24,
+    "minor": 21,
     "patch": 0
   },
   "configurePresets": [
@@ -50,7 +50,10 @@
       },
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
-        "FMCW_TARGET_PLATFORM": "JETSON"
+        "FMCW_TARGET_PLATFORM": "JETSON",
+        "FMCW_WITH_FFTW": "OFF",
+        "FMCW_WITH_CUDA": "ON",
+        "FMCW_REQUIRE_CUDA": "ON"
       }
     }
   ],
@@ -72,6 +75,13 @@
     {
       "name": "windows-msvc-debug",
       "configurePreset": "windows-msvc-debug",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "windows-msvc-release",
+      "configurePreset": "windows-msvc-release",
       "output": {
         "outputOnFailure": true
       }

@@ -12,7 +12,7 @@
 
 ## Windows Alazar
 
-Current workstation discovery with ATS-SDK 25.1.0 reports one ATS9371 at System 1 / Board 1: 12-bit, serial 860928, FPGA 35.3, driver 7.13.12. The application treats this address and model as fixed and rejects a mismatch.
+Current workstation discovery with ATS-SDK 25.1.0 reports one ATS9371 at System 1 / Board 1: 12-bit, serial 860928, FPGA 35.3, driver 7.13.12. The application keeps this address fixed, allows one of the supported 12-bit AUX trigger-enable models to be selected, and rejects a selection/hardware mismatch.
 
 1. 보드 모델에 맞는 AlazarTech Windows driver와 ATS-SDK를 설치한다.
 2. vendor utility에서 board가 정상 인식되고 self-test를 통과하는지 확인한다.
@@ -40,16 +40,15 @@ Jetson은 Linux라는 이유만으로 모든 Alazar board가 자동 지원되는
 1. board별 arm64 driver를 설치하고 PCIe link width/speed와 IOMMU 설정을 확인한다.
 2. ATS-SDK header는 일반적으로 `/usr/local/AlazarTech/include`, library는 system library path의 `libATSApi.so`를 사용한다.
 3. `ldconfig -p | grep ATSApi`와 vendor sample NPT acquisition을 먼저 통과시킨다.
-4. 프로젝트를 구성하고 CMake의 SDK enabled 메시지를 확인한다.
+4. `deploy/jetson/jetson.env`에서 SDK root를 지정하고 표준 Jetson 빌드를 수행한다.
 
 ```bash
-cmake --preset jetson-release -DALAZAR_SDK_ROOT=/usr/local/AlazarTech
-cmake --build --preset jetson-release
-ctest --preset jetson-release
+bash deploy/jetson/build.sh
 ```
 
-5. Windows와 같은 A/B 단일 채널 finite test, full-period 검증, 10분 연속 test를 수행한다.
-6. GPU/3D UI를 동시에 켠 상태의 PCIe throughput과 thermal throttling은 Phase 7에서 별도 측정한다.
+5. configure log의 `AlazarTech ATS-SDK adapter: enabled`와 CTest 통과를 확인한다.
+6. Windows와 같은 A/B 단일 채널 finite test, full-period 검증, 10분 연속 test를 수행한다.
+7. GPU/3D UI를 동시에 켠 상태의 PCIe throughput과 thermal throttling은 Phase 7에서 별도 측정한다.
 
 공식 설치 및 Linux 연동 기준:
 

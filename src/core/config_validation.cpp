@@ -169,7 +169,8 @@ ValidationResult ConfigValidator::validate(const SystemConfig& config) {
         "Use the external TTL trigger source");
   }
   if (digitizer.coupling != Coupling::Dc) {
-    add(result, ValidationSeverity::Error, "digitizer.coupling", "ATS9371 analog inputs use DC coupling",
+    add(result, ValidationSeverity::Error, "digitizer.coupling",
+        "Supported 12-bit AUX trigger-enable boards use DC coupling",
         "Select DC coupling");
   }
   if (digitizer.acquisition_mode == AcquisitionMode::Finite && digitizer.finite_frame_count == 0) {

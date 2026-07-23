@@ -19,7 +19,7 @@ RuntimeAdapters createRuntimeAdapters(AcquisitionSource source) {
       adapters.digitizer = std::make_unique<AlazarDigitizer>();
       adapters.edfa = std::make_unique<EdfaSerialController>();
       adapters.mcu = std::make_unique<McuSerialController>();
-      adapters.display_name = "Alazar ATS9371 hardware";
+      adapters.display_name = "AlazarTech hardware";
       break;
     case AcquisitionSource::Replay:
       adapters.digitizer = std::make_unique<ReplayDigitizer>();

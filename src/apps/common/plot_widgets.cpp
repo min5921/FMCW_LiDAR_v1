@@ -222,6 +222,8 @@ void drawSparsePolyline(QPainter& painter, const std::vector<float>& values,
 }  // namespace
 
 LinePlotWidget::LinePlotWidget(QWidget* parent) : QWidget(parent) {
+  setObjectName("plotSurface");
+  setAutoFillBackground(true);
   setMinimumSize(360, 220);
   setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
   setMouseTracking(true);
@@ -462,6 +464,8 @@ void LinePlotWidget::mouseMoveEvent(QMouseEvent* event) {
 }
 
 HeatmapWidget::HeatmapWidget(QWidget* parent) : QWidget(parent) {
+  setObjectName("plotSurface");
+  setAutoFillBackground(true);
   setMinimumSize(480, 280);
   setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
   setMouseTracking(true);
@@ -583,6 +587,8 @@ void HeatmapWidget::mouseMoveEvent(QMouseEvent* event) {
 }
 
 SegmentationPlotWidget::SegmentationPlotWidget(QWidget* parent) : QWidget(parent) {
+  setObjectName("plotSurface");
+  setAutoFillBackground(true);
   setMinimumSize(520, 280);
   setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
 }

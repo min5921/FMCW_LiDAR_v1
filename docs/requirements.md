@@ -32,7 +32,7 @@
 
 주요 구성:
 
-- UI: Qt 6 기반 상업용 장비 소프트웨어 느낌의 데스크톱 앱
+- UI: Qt 6.2 이상 기반 상업용 장비 소프트웨어 느낌의 데스크톱 앱
 - Digitizer: AlazarTech ATS SDK
 - FFT: GPU CUDA FFT와 CPU FFT 선택 가능
 - Plot: 2D plot, heatmap, 3D point cloud
@@ -51,14 +51,15 @@
 주요 구성:
 
 - UI:
-  - Qt 6 기반 로컬 UI
+  - Qt 6.2 이상 기반 로컬 UI
   - 실시간성이 필요한 화면은 가벼운 OpenGL 기반 rendering 우선
   - 원격 dashboard/headless service는 후속 옵션으로만 검토
+- Build: CMake 3.18 이상
 - Digitizer:
   - AlazarTech 보드를 Jetson에서 직접 사용
 - FFT:
   - CUDA FFT
-- CPU FFT fallback: FFTW
+- CPU FFT fallback: 지원하지 않음; Jetson은 CUDA/cuFFT 필수
 - Network:
   - UDP point cloud 송신
   - 원격 설정 수신 가능 구조
@@ -147,7 +148,11 @@ UI 선택 기준:
 
 UI에서 다음 항목을 설정할 수 있어야 한다.
 
-- Board model: `ATS9371`로 고정하고 SDK 연결 시 실제 board kind를 검증
+- Board model: `ATS9120`, `ATS9130`, `ATS9350/51/52/53`, `ATS9360/62/64`,
+  `ATS9371/73` 중 선택하고 SDK 연결 시 실제 board kind와 일치하는지 검증
+- 별도 보드 진단 화면은 두지 않고 기존 `Board model`에는 모델 번호만 표시한다.
+- 모델 선택을 바꾸면 sampling rate, input range, record/pre-trigger alignment,
+  trigger range 및 AutoDMA flag를 해당 모델의 capability로 다시 설정한다.
 - System ID / Board ID: `1 / 1`로 고정하며 UI 입력에서 제외
 - Channel select: A 또는 B
 - Sampling rate
@@ -156,11 +161,12 @@ UI에서 다음 항목을 설정할 수 있어야 한다.
 - A-scan count: `Records per buffer`에서 파생
 - B-scan count: 한 프레임의 Y line 수와 B-scan matrix 높이를 위해 사용자가 설정
 - Input range
-- Coupling: ATS9371 analog input은 DC로 고정
+- Coupling: 지원하는 Alazar analog input은 DC로 고정
 - Impedance
-- Trigger source: `TRIG IN`, External TTL, DC coupling으로 고정
+- Trigger source: `TRIG IN`, external, DC coupling으로 고정
 - Trigger slope
-- Trigger threshold: 사용자 설정에서 제외. ATS SDK level 인자는 legacy와 동일한 내부 code `150`, external range는 `ETR_TTL`로 고정
+- Trigger threshold: 사용자 설정에서 제외. ATS SDK level 인자는 내부 code `150`으로
+  고정하고 external range는 모델에 따라 `ETR_TTL` 또는 `ETR_5V`를 사용
 - Trigger delay
 - Laser trigger mode: `up_chirp_only`로 고정
 - Full-period acquisition: 항상 enable
@@ -177,7 +183,8 @@ UI에서 다음 항목을 설정할 수 있어야 한다.
 설정 검증:
 
 - `sample_point`는 사용자가 Alazar record 길이로 직접 입력하며 laser sweep rate로부터 자동 계산하지 않는다.
-- ATS-SDK 25.1.0 section 7.2 기준 ATS9371 record 길이는 최소 256 samples이고 128 samples의 배수여야 한다.
+- ATS-SDK 25.1.0 기준 record 길이는 모든 지원 모델에서 최소 256 samples이며,
+  ATS9120/9130/9350/9351/9352/9353은 32 samples, 나머지는 128 samples의 배수여야 한다.
 - Record samples control은 지원되지 않는 정수를 확정하지 않으며, keyboard 입력과 step 조작 모두 위 SDK 규칙을 만족하는 값만 config에 반영한다. 예를 들어 4992는 유효하고 5000은 유효하지 않다.
 - `sample_point`는 캡처된 full-period record 길이의 단일 기준이며 별도 period length 입력을 두지 않는다.
 - v1 hardware acquisition에서는 trigger 1개가 전체 up+down chirp period 1개를 의미한다.
@@ -187,8 +194,9 @@ UI에서 다음 항목을 설정할 수 있어야 한다.
 - up/down segment 길이는 같은 FFT length를 사용하거나 padding/resampling 정책이 명확해야 한다.
 - `B-scan count`는 scan setup의 Y line count와 일치해야 한다.
 - A-scan count는 `records_per_buffer`와 항상 같아야 하며 별도 입력값으로 관리하지 않는다.
-- sampling rate 선택값은 ATS9371 internal clock이 지원하는 discrete 값으로 제한한다.
-- ATS9371 record/pre-trigger alignment는 128 samples, NPT pre-trigger 최대값은 8176 samples, 최소 post-trigger는 64 samples, single-channel trigger delay alignment는 16 samples를 사용한다.
+- sampling rate와 input range 선택값은 선택한 보드가 지원하는 discrete 값으로 제한한다.
+- pre-trigger alignment, NPT pre-trigger 최대값, 최소 64 post-trigger samples,
+  single-channel trigger delay alignment는 선택한 보드의 capability를 사용한다.
 - 초기 버전에서는 A+B 동시 수집을 지원하지 않는다.
 - 선택 가능한 채널은 단일 채널 A 또는 단일 채널 B로 제한한다.
 - selected channel이 바뀌면 buffer size, FFT batch, 저장 포맷을 다시 계산한다.
@@ -1100,7 +1108,7 @@ FMCW_LiDAR/
 
 작업:
 
-- ATS9371 ADC sample alignment와 chirp profile 일관성 수정
+- 지원 대상 12-bit AUX trigger-enable ATS 모델의 ADC sample alignment와 chirp profile 일관성 유지
 - packaged EXE의 simulator 고정 runtime을 Alazar/MCU/EDFA hardware runtime으로 교체
 - DMA buffer 단위 acquisition, FFTW batch, CUDA full pipeline 구현
 - DMA-block high-speed raw recording과 replay 구현
@@ -1109,7 +1117,6 @@ FMCW_LiDAR/
 - Jetson Qt UI packaging
 - Jetson AlazarTech SDK/driver 설치 절차 문서화
 - Jetson CUDA/cuFFT 동작 확인
-- Jetson FFTW build/link 확인
 - Linux serial/UDP/storage adapter 검증
 - 로컬 Qt UI 자동 실행 옵션 구성
 - long-run acquisition/storage test
@@ -1122,7 +1129,7 @@ FMCW_LiDAR/
 - Windows에서 실제 ATS9371 acquisition, FFTW/CUDA processing, raw recording이 장시간 검증된다.
 - audit finding `P7-001`부터 `P7-008`까지 모두 닫힌다.
 - Jetson에서 Qt UI가 실행된다.
-- Jetson에서 Alazar acquisition path가 검증된다.
+- Jetson에서 지원 ATS 모델의 Alazar acquisition path와 CUDA/cuFFT pipeline이 검증된다.
 - 장시간 운용 시 drop, memory growth, handle leak을 측정할 수 있다.
 - Windows와 Jetson에서 같은 profile/schema를 공유한다.
 

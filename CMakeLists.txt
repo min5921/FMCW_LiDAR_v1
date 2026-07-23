@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.24)
+cmake_minimum_required(VERSION 3.18)
 
 project(FMCW_LiDAR_v1
   VERSION 0.1.0
@@ -14,14 +14,15 @@ option(FMCW_BUILD_QT_APPS "Build Qt desktop applications" ON)
 option(FMCW_BUILD_TESTS "Build core contract tests" ON)
 option(FMCW_WITH_FFTW "Enable FFTW CPU backend when fftw3 is available" ON)
 option(FMCW_WITH_CUDA "Enable CUDA/cuFFT backend when CUDA is available" ON)
+option(FMCW_REQUIRE_CUDA "Fail configuration when CUDA/cuFFT is unavailable" OFF)
 option(FMCW_WITH_ALAZAR "Enable AlazarTech ATS-SDK adapter when the SDK is available" ON)
 
 set(FMCW_TARGET_PLATFORM "AUTO" CACHE STRING "Target platform: AUTO, WINDOWS, or JETSON")
 set_property(CACHE FMCW_TARGET_PLATFORM PROPERTY STRINGS AUTO WINDOWS JETSON)
 set(ALAZAR_SDK_ROOT "" CACHE PATH "AlazarTech SDK root directory")
 set(FFTW_ROOT "" CACHE PATH "FFTW installation root directory")
-set(FMCW_CUDA_ARCHITECTURES "native" CACHE STRING
-    "CUDA architectures for FMCW targets (for example: native, 87, 120, or 87;120)")
+set(FMCW_CUDA_ARCHITECTURES "auto" CACHE STRING
+    "CUDA architectures for FMCW targets (auto, native on CMake 3.24+, 87, 120, or 87;120)")
 
 string(TOUPPER "${FMCW_TARGET_PLATFORM}" FMCW_TARGET_PLATFORM)
 if(FMCW_TARGET_PLATFORM STREQUAL "AUTO")

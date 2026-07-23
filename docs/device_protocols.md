@@ -8,14 +8,18 @@ Phase 3의 장비 adapter는 `IDigitizer`, `IEdfaController`, `IMcuController` �
 
 현재 hardware adapter 지원 범위:
 
-- ATS9371, System 1 / Board 1 고정 및 `AlazarGetBoardKind` 검증
-- internal clock discrete sample rates: 1 kS/s, 2 kS/s, 5 kS/s, 10 kS/s, 20 kS/s, 50 kS/s, 100 kS/s, 200 kS/s, 500 kS/s, 1 MS/s, 2 MS/s, 5 MS/s, 10 MS/s, 20 MS/s, 50 MS/s, 100 MS/s, 200 MS/s, 500 MS/s, 800 MS/s, 1 GS/s
-- 입력 범위 +/-400 mV, 50 ohm, DC coupling
-- external TTL trigger (`ETR_TTL`), fixed legacy SDK level argument `150`, rising 또는 falling slope
+- SDK 25.1.0 기준 12-bit 및 AUX trigger-enable 조건을 만족하는 11개 모델
+- ATS9120, ATS9130, ATS9350/51/52/53, ATS9360/62/64, ATS9371/73
+- System 1 / Board 1 고정 및 선택 모델과 `AlazarGetBoardKind` 일치 검증
+- 선택 모델별 internal-clock discrete sample rate와 input range, 50 ohm, DC coupling
+- external trigger range는 모델별 `ETR_TTL` 또는 `ETR_5V`, level code `150`
+- positive-slope `AUX_IN_TRIGGER_ENABLE` B-scan gate
 - channel A 또는 channel B 중 하나만 사용
 - `ADMA_NPT | ADMA_EXTERNAL_STARTCAPTURE`
-- `digitizer.fifo_only_streaming`에 따라 `ADMA_FIFO_ONLY_STREAMING` 선택
-- `AlazarAllocBufferU16`을 사용하는 9..16-bit board
+- 모델의 SDK NPT Scan 설정에 따라 `ADMA_FIFO_ONLY_STREAMING` 선택
+- native left-aligned 12-bit sample을 위한 `AlazarAllocBufferU16`
+
+모델별 정확한 rate/range/record/trigger 표는 `docs/alazar_supported_models.md`를 따른다.
 
 수집 순서:
 
@@ -28,7 +32,7 @@ Phase 3의 장비 adapter는 `IDigitizer`, `IEdfaController`, `IMcuController` �
 7. buffer의 모든 record를 소비한 뒤 즉시 다시 post한다.
 8. Stop, 오류, 소멸 시 반드시 async read를 abort하고 DMA buffer를 해제한다.
 
-한 trigger는 up chirp 시작에서만 들어오며 한 record에 up/down 전체 주기가 들어온다. `up_segment`와 `down_segment`는 record 내 half-open sample range로 metadata에 복사된다. `fifo_only_streaming`은 legacy 장비 기본값인 `true`지만, on-board memory를 사용하는 보드는 acceptance 과정에서 vendor 권장값을 확인해 `false`로 변경한다.
+한 trigger는 up chirp 시작에서만 들어오며 한 record에 up/down 전체 주기가 들어온다. `up_segment`와 `down_segment`는 record 내 half-open sample range로 metadata에 복사된다. `fifo_only_streaming`은 사용자 설정이 아니라 선택 모델의 SDK `NPT_Scan` 예제 설정을 따른다.
 
 공식 ATS-SDK의 AutoDMA 흐름과 API 설치 위치는 다음 문서를 기준으로 한다.
 

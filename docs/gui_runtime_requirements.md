@@ -30,7 +30,7 @@
 |---|---|---|
 | Overview | readiness, device status, active profile, session summary, throughput/drop counters | waveform, FFT, B-scan |
 | Live View | Time Domain, FFT, Peak Analysis, Distance/Velocity, B-scan, 3D | hardware setup forms |
-| Digitizer | ATS9371, fixed System 1 / Board 1, A or B channel, supported sample rate/range, DMA, detailed trigger | scanner Start/Stop |
+| Digitizer | supported ATS model, fixed System 1 / Board 1, A or B channel, model-specific sample rate/range, DMA, detailed trigger | scanner Start/Stop |
 | Laser / EDFA | laser specification, EDFA none/manual/controlled, setpoint, output safety control | acquisition Start/Stop |
 | Scan / MCU | frame geometry, DMA-derived A-scans/B-scan, operator B-scans/frame, measured DMA rate/frame time, full-frame MCU waveform | local scan Start/Stop |
 | Processing | FFT backend, window/DC, independent peak threshold/search, segmentation snapshot | FFT spectrum plot |
@@ -77,8 +77,9 @@ EDFA output on/off는 광 출력 안전 명령이므로 Laser / EDFA 페이지�
 - restart-required 설정은 global `STOP` 후 수정하고 `Apply Setup`을 누른다.
 - `Apply Setup`은 필요 시 disconnect, configure, reconnect까지 수행하고 Ready에서 멈춘다. 안전을 위해 acquisition을 자동 재시작하지 않는다.
 - Digitizer sampling rate, input range, impedance는 선택한 board capability가 제공하는 ComboBox 값만 허용한다.
-- Digitizer record samples는 ATS9371의 최소 256 및 128-sample resolution을 강제하는 aligned numeric control을 사용하며, 지원되지 않는 typed value는 config에 확정하지 않는다.
-- ATS9371 System ID와 Board ID는 모두 1로 고정하며 UI에서 변경하지 않는다.
+- Digitizer record samples는 선택 모델의 최소값과 32/128-sample resolution을 강제하는 aligned numeric control을 사용하며, 지원되지 않는 typed value는 config에 확정하지 않는다.
+- Alazar System ID와 Board ID는 모두 1로 고정하며 UI에서 변경하지 않는다.
+- `Board model`에는 모델 번호만 표시하고 별도 진단 화면은 두지 않는다. 모델 변경 시 같은 페이지의 setup 선택값만 다시 채운다.
 - A-scans/B-scan은 records per buffer에서 파생하고 B-scans/frame은 사용자가 설정한다.
 - B-scan rate와 period는 Alazar DMA buffer 완료 간격에서 실측하며, measured frame time은 `period * B-scans/frame`으로 계산한다.
 - MCU cycle time은 전체 프레임 파형 point 수와 100 kHz point rate에서 별도로 계산한다.

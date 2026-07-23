@@ -8,10 +8,11 @@
 #include <QTimer>
 
 int main(int argc, char* argv[]) {
+  QCoreApplication::setAttribute(Qt::AA_UseStyleSheetPropagationInWidgetStyles, true);
   QApplication app(argc, argv);
+  fmcw::applyDarkApplicationTheme(app);
   fmcw::MainWindow window(QStringLiteral(FMCW_PLATFORM_NAME));
   const auto arguments = app.arguments();
-  window.setDarkTheme();
   window.show();
 
   if (arguments.contains(QStringLiteral("--demo-run"))) {

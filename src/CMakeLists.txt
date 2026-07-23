@@ -11,6 +11,11 @@ if(FMCW_WITH_CUDA)
   endif()
 endif()
 
+if(FMCW_REQUIRE_CUDA AND NOT FMCW_HAS_CUDA_FFT)
+  message(FATAL_ERROR
+    "CUDA/cuFFT is required for this build, but the CUDA compiler or CUDAToolkit was not found.")
+endif()
+
 set(FMCW_CORE_SOURCES
   core/acquisition_session.cpp
   core/app_version.cpp
@@ -178,30 +183,60 @@ else()
   unset(FMCW_FFTW_RUNTIME_DLL CACHE)
   message(STATUS "FFTW CPU backend: disabled (set FFTW_ROOT to enable)")
 endif()
+set(FMCW_HAS_FFTW "${FMCW_HAS_FFTW}" CACHE INTERNAL
+    "Whether the FFTW backend is available" FORCE)
 
 if(FMCW_HAS_CUDA_FFT)
   target_link_libraries(fmcw_core PRIVATE CUDA::cudart CUDA::cufft)
   set_target_properties(fmcw_core PROPERTIES
     CUDA_STANDARD 17
     CUDA_STANDARD_REQUIRED ON
-    CUDA_ARCHITECTURES "${FMCW_CUDA_ARCHITECTURES}"
   )
+  set(_fmcw_cuda_architectures "${FMCW_CUDA_ARCHITECTURES}")
+  if(_fmcw_cuda_architectures STREQUAL "auto")
+    if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.24)
+      set(_fmcw_cuda_architectures "native")
+    else()
+      set(_fmcw_cuda_architectures "")
+      message(WARNING
+        "CMake before 3.24 cannot resolve CUDA architecture 'auto'; "
+        "using the compiler default. Pass FMCW_CUDA_ARCHITECTURES explicitly.")
+    endif()
+  elseif(_fmcw_cuda_architectures STREQUAL "native" AND
+         CMAKE_VERSION VERSION_LESS 3.24)
+    message(FATAL_ERROR
+      "CUDA architecture 'native' requires CMake 3.24 or newer. "
+      "Pass a numeric architecture such as 87 for Jetson Orin.")
+  endif()
+  if(_fmcw_cuda_architectures)
+    set_property(TARGET fmcw_core PROPERTY
+      CUDA_ARCHITECTURES "${_fmcw_cuda_architectures}")
+    set(_fmcw_cuda_architecture_message "${_fmcw_cuda_architectures}")
+  else()
+    set(_fmcw_cuda_architecture_message "compiler default")
+  endif()
   if(WIN32)
     find_file(FMCW_CUFFT_RUNTIME_DLL NAMES cufft64_13.dll cufft64_12.dll cufft64_11.dll
       HINTS "${CUDAToolkit_BIN_DIR}" "${CUDAToolkit_BIN_DIR}/x64")
     set(FMCW_CUFFT_RUNTIME_DLL "${FMCW_CUFFT_RUNTIME_DLL}" CACHE INTERNAL "cuFFT runtime DLL")
   endif()
   target_compile_definitions(fmcw_core PRIVATE FMCW_HAS_CUDA_FFT=1)
-  message(STATUS "CUDA cuFFT backend: enabled for architectures ${FMCW_CUDA_ARCHITECTURES}")
+  message(STATUS
+    "CUDA cuFFT backend: enabled for architectures ${_fmcw_cuda_architecture_message}")
 else()
   target_compile_definitions(fmcw_core PRIVATE FMCW_HAS_CUDA_FFT=0)
   unset(FMCW_CUFFT_RUNTIME_DLL CACHE)
   message(STATUS "CUDA cuFFT backend: disabled")
 endif()
+set(FMCW_HAS_CUDA_FFT "${FMCW_HAS_CUDA_FFT}" CACHE INTERNAL
+    "Whether the CUDA/cuFFT backend is available" FORCE)
 
 if(FMCW_BUILD_QT_APPS)
-  find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets OpenGL OpenGLWidgets)
-  qt_standard_project_setup()
+  find_package(Qt6 6.2 REQUIRED COMPONENTS Core Gui Widgets OpenGL OpenGLWidgets)
+  set(CMAKE_AUTOMOC ON)
+  set(CMAKE_AUTOUIC ON)
+  set(CMAKE_AUTORCC ON)
+  message(STATUS "Qt version: ${Qt6_VERSION}")
 
   add_library(fmcw_qt_common STATIC
     apps/common/application_controller.cpp

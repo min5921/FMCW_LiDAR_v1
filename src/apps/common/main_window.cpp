@@ -35,6 +35,7 @@
 #include <QStackedWidget>
 #include <QStatusBar>
 #include <QStyle>
+#include <QStyleFactory>
 #include <QTabWidget>
 #include <QTextCursor>
 #include <QTimer>
@@ -58,7 +59,7 @@ constexpr qint64 kFrameRateSampleIntervalMs = 1000;
 
 QGroupBox* groupBox(const QString& title, QWidget* parent = nullptr) {
   auto* group = new QGroupBox(title, parent);
-  group->setProperty("surface", true);
+  group->setObjectName("surfaceGroup");
   return group;
 }
 
@@ -72,14 +73,14 @@ void tuneForm(QFormLayout* form) {
 
 QFrame* statusCard(const QString& title, QLabel*& value, QWidget* parent) {
   auto* frame = new QFrame(parent);
-  frame->setProperty("card", true);
+  frame->setObjectName("statusCard");
   auto* layout = new QVBoxLayout(frame);
   layout->setContentsMargins(16, 13, 16, 13);
   layout->setSpacing(7);
   auto* caption = new QLabel(title, frame);
-  caption->setProperty("caption", true);
+  caption->setObjectName("cardCaption");
   value = new QLabel("--", frame);
-  value->setProperty("metric", true);
+  value->setObjectName("cardMetric");
   value->setWordWrap(true);
   layout->addWidget(caption);
   layout->addWidget(value);
@@ -113,9 +114,14 @@ void setStyledProperty(QWidget* widget, const char* name, const char* value) {
 
 QWidget* wrapInScrollArea(QWidget* content) {
   auto* scroll = new QScrollArea;
+  scroll->setObjectName("pageScroll");
   scroll->setWidgetResizable(true);
   scroll->setFrameShape(QFrame::NoFrame);
   scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+  scroll->viewport()->setObjectName("pageScrollViewport");
+  scroll->viewport()->setAutoFillBackground(true);
+  content->setObjectName("pageContent");
+  content->setAutoFillBackground(true);
   scroll->setWidget(content);
   return scroll;
 }
@@ -136,6 +142,13 @@ QString sampleRateText(double sample_rate_hz) {
     return QString("%1 MS/s").arg(sample_rate_hz / 1.0e6, 0, 'g', 6);
   }
   return QString("%1 kS/s").arg(sample_rate_hz / 1.0e3, 0, 'g', 6);
+}
+
+QString inputRangeText(double input_range_volts) {
+  if (input_range_volts >= 1.0) {
+    return QString("+/- %1 V").arg(input_range_volts, 0, 'g', 6);
+  }
+  return QString("+/- %1 mV").arg(input_range_volts * 1000.0, 0, 'g', 6);
 }
 
 class RecordLengthSpinBox final : public QSpinBox {
@@ -212,33 +225,70 @@ class RecordLengthSpinBox final : public QSpinBox {
 
 QString darkStyleSheet() {
   return QStringLiteral(R"(
-    QMainWindow, QWidget#workspace { background: #11171a; color: #dce5e7; }
+    QWidget { font-family: "Segoe UI"; font-size: 9pt; }
+    QMainWindow, QDialog, QMessageBox, QWidget#workspace, QWidget#pageSurface,
+    QWidget#pageContent, QStackedWidget, QScrollArea#pageScroll,
+    QWidget#pageScrollViewport { background-color: #11171a; color: #dce5e7; }
     QWidget#sidebar { background: #0b1013; color: #edf4f3; }
-    QLabel#brand { color: #f6f9f9; }
-    QLabel#platform { color: #61c7ba; }
-    QListWidget#navigation { color: #aebcc0; }
+    QLabel#brand { color: #f6f9f9; font-size: 16pt; font-weight: 700; }
+    QLabel#platform { color: #61c7ba; font-size: 8pt; font-weight: 600; }
+    QListWidget#navigation { background: transparent; border: none; outline: none; color: #aebcc0; }
+    QListWidget#navigation::item { height: 42px; padding-left: 12px; border-left: 3px solid transparent; }
     QListWidget#navigation::item:hover { background: #182226; color: #ffffff; }
     QListWidget#navigation::item:selected { background: #203036; color: #ffffff; border-left: 3px solid #35b2a3; }
     QWidget#commandBar { background: #171f23; border-bottom: 1px solid #303b40; }
-    QLabel#pageTitle { color: #f0f4f5; }
-    QLabel[caption="true"] { color: #91a2a8; }
-    QLabel[metric="true"] { color: #e8eff0; }
-    QFrame[card="true"], QGroupBox[surface="true"] { background: #192226; border: 1px solid #303c41; }
-    QGroupBox::title { color: #cbd6d9; }
-    QPushButton { border-color: #3a494f; background: #202b30; color: #dce5e7; }
+    QLabel#pageTitle { color: #f0f4f5; font-size: 17pt; font-weight: 650; }
+    QLabel[caption="true"], QLabel#cardCaption { color: #91a2a8; font-size: 8pt; font-weight: 600; }
+    QLabel#cardMetric { color: #e8eff0; font-size: 12pt; font-weight: 650; }
+    QFrame#statusCard, QGroupBox#surfaceGroup {
+      background-color: #192226;
+      border: 1px solid #303c41;
+      border-radius: 6px;
+    }
+    QGroupBox { margin-top: 12px; padding: 14px 12px 10px 12px; font-weight: 650; }
+    QGroupBox::title {
+      subcontrol-origin: margin;
+      left: 12px;
+      padding: 0 5px;
+      color: #cbd6d9;
+    }
+    QPushButton {
+      min-height: 30px;
+      padding: 0 12px;
+      border: 1px solid #3a494f;
+      border-radius: 4px;
+      background: #202b30;
+      color: #dce5e7;
+      font-weight: 600;
+    }
     QPushButton:hover { background: #29373c; border-color: #61757d; }
     QPushButton:pressed { background: #152024; }
     QPushButton:disabled { color: #68777c; background: #181f22; border-color: #2c363a; }
     QPushButton#applyButton { background: #173d3a; color: #7ee0d3; border-color: #347e76; }
     QPushButton#applyButton:hover { background: #1d4b47; border-color: #4da398; }
     QPushButton#connectButton { background: #31545c; color: #ffffff; border-color: #426b74; }
-    QPushButton#startButton[runState="start"] { background: #19734f; color: #ffffff; border-color: #249169; }
-    QPushButton#startButton[runState="stop"] { background: #bd5f29; color: #ffffff; border-color: #df7d43; }
-    QPushButton#startButton[runState="stopping"] { background: #4a3d28; color: #cfc4ae; border-color: #6a593b; }
+    QPushButton#startButton[runState="start"] { min-width: 76px; background: #19734f; color: #ffffff; border-color: #249169; }
+    QPushButton#startButton[runState="stop"] { min-width: 76px; background: #bd5f29; color: #ffffff; border-color: #df7d43; }
+    QPushButton#startButton[runState="stopping"] { min-width: 76px; background: #4a3d28; color: #cfc4ae; border-color: #6a593b; }
     QPushButton#emergencyButton { background: #a82f38; color: #ffffff; border-color: #ca4c55; }
-    QToolButton { border-color: #3a494f; background: #202b30; color: #dce5e7; }
+    QToolButton {
+      min-width: 30px;
+      min-height: 30px;
+      border: 1px solid #3a494f;
+      border-radius: 4px;
+      background: #202b30;
+      color: #dce5e7;
+    }
     QToolButton:hover, QToolButton:checked { background: #21403e; border-color: #4b9f96; }
-    QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox { background: #12191d; color: #e1e8ea; border-color: #3a494f; selection-background-color: #277f76; }
+    QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox {
+      min-height: 28px;
+      padding: 0 7px;
+      background: #12191d;
+      color: #e1e8ea;
+      border: 1px solid #3a494f;
+      border-radius: 3px;
+      selection-background-color: #277f76;
+    }
     QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus { border-color: #35b2a3; }
     QLineEdit:disabled, QComboBox:disabled, QSpinBox:disabled, QDoubleSpinBox:disabled { background: #171e21; color: #708086; border-color: #2a3438; }
     QComboBox::drop-down { border: none; width: 24px; }
@@ -249,81 +299,107 @@ QString darkStyleSheet() {
     QSlider::groove:horizontal { height: 4px; background: #344248; border-radius: 2px; }
     QSlider::sub-page:horizontal { background: #35b2a3; border-radius: 2px; }
     QSlider::handle:horizontal { width: 14px; margin: -5px 0; background: #dce7e8; border: 1px solid #54c1b4; border-radius: 7px; }
-    QTabWidget::pane { border-color: #303c41; background: #192226; }
-    QTabBar::tab { background: #141c20; color: #8fa0a6; border-color: #303c41; }
+    QTabWidget::pane { border: 1px solid #303c41; background: #192226; }
+    QWidget#plotSurface { background-color: #151e22; color: #dce5e7; }
+    QTabBar::tab {
+      min-width: 106px;
+      height: 31px;
+      padding: 0 10px;
+      background: #141c20;
+      color: #8fa0a6;
+      border: 1px solid #303c41;
+    }
     QTabBar::tab:hover { background: #202b30; color: #dce5e7; }
     QTabBar::tab:selected { background: #192226; color: #62d0c2; border-top: 2px solid #35b2a3; }
+    QLabel[statusKind], QPushButton#validationButton {
+      border: 1px solid #46555b;
+      border-radius: 3px;
+      padding: 3px 7px;
+      font-weight: 600;
+    }
     QLabel[statusKind="ready"], QPushButton#validationButton[statusKind="ready"] { background: #153a2b; color: #79d9ad; border-color: #286a50; }
     QLabel[statusKind="warn"], QPushButton#validationButton[statusKind="warn"] { background: #473619; color: #f2c873; border-color: #80632d; }
     QLabel[statusKind="error"], QPushButton#validationButton[statusKind="error"] { background: #452125; color: #f0959c; border-color: #7b3940; }
     QLabel[statusKind="neutral"], QPushButton#validationButton[statusKind="neutral"] { background: #263137; color: #afbdc1; border-color: #46555b; }
-    QPlainTextEdit { background: #0c1114; color: #d5e0e2; border-color: #303c41; }
-    QScrollArea, QScrollArea > QWidget > QWidget { background: #11171a; }
+    QPushButton#validationButton { min-height: 28px; padding: 0 9px; }
+    QPlainTextEdit {
+      background: #0c1114;
+      color: #d5e0e2;
+      border: 1px solid #303c41;
+      font-family: Consolas;
+      font-size: 9pt;
+    }
+    QScrollArea#pageScroll, QScrollArea#pageScroll > QWidget#pageScrollViewport,
+    QScrollArea#pageScroll QWidget#pageContent { background-color: #11171a; }
     QScrollBar:vertical { background: #11171a; width: 11px; margin: 0; }
     QScrollBar::handle:vertical { background: #405057; min-height: 28px; border-radius: 4px; }
     QScrollBar::handle:vertical:hover { background: #586b73; }
     QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
-    QStatusBar { background: #151d21; color: #91a2a8; border-top-color: #303b40; }
+    QScrollBar:horizontal { background: #11171a; height: 11px; margin: 0; }
+    QScrollBar::handle:horizontal { background: #405057; min-width: 28px; border-radius: 4px; }
+    QScrollBar::handle:horizontal:hover { background: #586b73; }
+    QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0; }
+    QSplitter::handle { background: #303c41; }
+    QMenu { background: #182125; color: #e1e8ea; border: 1px solid #425158; }
+    QMenu::item:selected { background: #275f5a; }
+    QStatusBar { background: #151d21; color: #91a2a8; border-top: 1px solid #303b40; }
     QToolTip { background: #263238; color: #f2f6f6; border: 1px solid #52646b; padding: 4px; }
   )");
 }
 
+QPalette darkPalette() {
+  QPalette palette;
+  const auto set_enabled_colors = [&palette](QPalette::ColorGroup group) {
+    palette.setColor(group, QPalette::Window, QColor("#11171a"));
+    palette.setColor(group, QPalette::WindowText, QColor("#dce5e7"));
+    palette.setColor(group, QPalette::Base, QColor("#151e22"));
+    palette.setColor(group, QPalette::AlternateBase, QColor("#222e33"));
+    palette.setColor(group, QPalette::ToolTipBase, QColor("#263238"));
+    palette.setColor(group, QPalette::ToolTipText, QColor("#f2f6f6"));
+    palette.setColor(group, QPalette::Text, QColor("#dce5e7"));
+    palette.setColor(group, QPalette::Button, QColor("#202b30"));
+    palette.setColor(group, QPalette::ButtonText, QColor("#dce5e7"));
+    palette.setColor(group, QPalette::BrightText, QColor("#ffffff"));
+    palette.setColor(group, QPalette::Light, QColor("#64777e"));
+    palette.setColor(group, QPalette::Midlight, QColor("#52646b"));
+    palette.setColor(group, QPalette::Mid, QColor("#35444a"));
+    palette.setColor(group, QPalette::Dark, QColor("#0b1013"));
+    palette.setColor(group, QPalette::Shadow, QColor("#050809"));
+    palette.setColor(group, QPalette::Link, QColor("#61c7ba"));
+    palette.setColor(group, QPalette::Highlight, QColor("#35b2a3"));
+    palette.setColor(group, QPalette::HighlightedText, QColor("#ffffff"));
+    palette.setColor(group, QPalette::PlaceholderText, QColor("#82949b"));
+  };
+  set_enabled_colors(QPalette::Active);
+  set_enabled_colors(QPalette::Inactive);
+  set_enabled_colors(QPalette::Disabled);
+  palette.setColor(QPalette::Disabled, QPalette::WindowText, QColor("#68777c"));
+  palette.setColor(QPalette::Disabled, QPalette::Text, QColor("#68777c"));
+  palette.setColor(QPalette::Disabled, QPalette::ButtonText, QColor("#68777c"));
+  palette.setColor(QPalette::Disabled, QPalette::HighlightedText, QColor("#a8b3b7"));
+  return palette;
+}
+
 }  // namespace
+
+void applyDarkApplicationTheme(QApplication& application) {
+  if (auto* fusion_style = QStyleFactory::create(QStringLiteral("Fusion"))) {
+    application.setStyle(fusion_style);
+  }
+  application.setPalette(darkPalette());
+  application.setStyleSheet(darkStyleSheet());
+}
 
 MainWindow::MainWindow(QString platform_name, QWidget* parent)
     : QMainWindow(parent), platform_name_(std::move(platform_name)) {
   config_ = makeAts9371QualificationSimulatorConfig();
   if (platform_name_.compare(QStringLiteral("Jetson"), Qt::CaseInsensitive) == 0) {
     config_.ui.plot_update_hz = 30.0;
+    config_.processing.fft_backend = FftBackendKind::Cuda;
   }
   setWindowTitle(QString("FMCW LiDAR v%1 - %2").arg(QString::fromStdString(versionString()), platform_name_));
   setMinimumSize(1180, 720);
   resize(1480, 900);
-
-  setStyleSheet(R"(
-    QMainWindow, QWidget#workspace { background: #eef2f3; color: #253238; }
-    QWidget { font-family: "Segoe UI"; font-size: 9pt; }
-    QWidget#sidebar { background: #182126; color: #edf4f3; }
-    QLabel#brand { color: #ffffff; font-size: 16pt; font-weight: 700; }
-    QLabel#platform { color: #8fc9c3; font-size: 8pt; font-weight: 600; }
-    QListWidget#navigation { background: transparent; border: none; outline: none; color: #b9c6c9; }
-    QListWidget#navigation::item { height: 42px; padding-left: 12px; border-left: 3px solid transparent; }
-    QListWidget#navigation::item:hover { background: #243239; color: #ffffff; }
-    QListWidget#navigation::item:selected { background: #293a40; color: #ffffff; border-left: 3px solid #36a69a; }
-    QWidget#commandBar { background: #ffffff; border-bottom: 1px solid #d8e0e2; }
-    QLabel#pageTitle { font-size: 17pt; font-weight: 650; color: #1f2b30; }
-    QLabel[caption="true"] { color: #68767c; font-size: 8pt; font-weight: 600; }
-    QLabel[metric="true"] { color: #203036; font-size: 12pt; font-weight: 650; }
-    QFrame[card="true"], QGroupBox[surface="true"] { background: #ffffff; border: 1px solid #dce3e5; border-radius: 6px; }
-    QGroupBox { margin-top: 12px; padding: 14px 12px 10px 12px; font-weight: 650; }
-    QGroupBox::title { subcontrol-origin: margin; left: 12px; padding: 0 5px; color: #344349; }
-    QPushButton { min-height: 30px; padding: 0 12px; border: 1px solid #cbd5d8; border-radius: 4px; background: #ffffff; color: #26353b; font-weight: 600; }
-    QPushButton:hover { background: #f4f7f7; border-color: #9aabad; }
-    QPushButton:disabled { color: #9ba6aa; background: #edf1f2; }
-    QPushButton#applyButton { background: #e7f4f2; color: #126b63; border-color: #8dc8c1; }
-    QPushButton#connectButton { background: #354b54; color: #ffffff; border-color: #354b54; }
-    QPushButton#startButton[runState="start"] { background: #16724c; color: #ffffff; border-color: #16724c; min-width: 76px; }
-    QPushButton#startButton[runState="stop"] { background: #cf6b2d; color: #ffffff; border-color: #cf6b2d; min-width: 76px; }
-    QPushButton#startButton[runState="stopping"] { background: #d8d0c2; color: #6f6250; border-color: #b8aa93; min-width: 76px; }
-    QPushButton#emergencyButton { background: #b52e35; color: #ffffff; border-color: #b52e35; }
-    QToolButton { min-width: 30px; min-height: 30px; border: 1px solid #cbd5d8; border-radius: 4px; background: #ffffff; }
-    QToolButton:hover, QToolButton:checked { background: #e6f3f1; border-color: #67afa7; }
-    QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox { min-height: 28px; padding: 0 7px; background: #ffffff; border: 1px solid #cbd5d8; border-radius: 3px; }
-    QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus { border-color: #238b82; }
-    QSlider::groove:horizontal { height: 4px; background: #d4dfe1; border-radius: 2px; }
-    QSlider::sub-page:horizontal { background: #2b9b90; border-radius: 2px; }
-    QSlider::handle:horizontal { width: 14px; margin: -5px 0; background: #ffffff; border: 1px solid #238b82; border-radius: 7px; }
-    QTabWidget::pane { border: 1px solid #d9e1e3; background: #ffffff; }
-    QTabBar::tab { min-width: 106px; height: 31px; padding: 0 10px; background: #e8edef; color: #56656b; border: 1px solid #d8e0e2; }
-    QTabBar::tab:selected { background: #ffffff; color: #176f68; border-top: 2px solid #25988d; }
-    QLabel[statusKind="ready"], QPushButton#validationButton[statusKind="ready"] { background: #dff2e8; color: #12613f; border: 1px solid #a9d7bf; border-radius: 3px; padding: 3px 7px; font-weight: 600; }
-    QLabel[statusKind="warn"], QPushButton#validationButton[statusKind="warn"] { background: #fff1d8; color: #8a5814; border: 1px solid #e6c37e; border-radius: 3px; padding: 3px 7px; font-weight: 600; }
-    QLabel[statusKind="error"], QPushButton#validationButton[statusKind="error"] { background: #f9e2e4; color: #932c34; border: 1px solid #dda4a9; border-radius: 3px; padding: 3px 7px; font-weight: 600; }
-    QLabel[statusKind="neutral"], QPushButton#validationButton[statusKind="neutral"] { background: #e8edef; color: #536168; border: 1px solid #ccd5d8; border-radius: 3px; padding: 3px 7px; font-weight: 600; }
-    QPushButton#validationButton { min-height: 28px; padding: 0 9px; }
-    QPlainTextEdit { background: #11191d; color: #d5e0e2; border: 1px solid #2d3b41; font-family: Consolas; font-size: 9pt; }
-    QStatusBar { background: #ffffff; color: #536168; border-top: 1px solid #d8e0e2; }
-  )");
 
   auto* central = new QWidget(this);
   central->setObjectName("workspace");
@@ -464,36 +540,14 @@ MainWindow::MainWindow(QString platform_name, QWidget* parent)
   controller_->applyConfig(config_);
 }
 
-void MainWindow::setDarkTheme(bool enabled) {
-  if (!enabled) {
-    return;
-  }
-
-  QPalette palette = this->palette();
-  palette.setColor(QPalette::Window, QColor("#11171a"));
-  palette.setColor(QPalette::WindowText, QColor("#dce5e7"));
-  palette.setColor(QPalette::Base, QColor("#151e22"));
-  palette.setColor(QPalette::AlternateBase, QColor("#222e33"));
-  palette.setColor(QPalette::Text, QColor("#dce5e7"));
-  palette.setColor(QPalette::Button, QColor("#202b30"));
-  palette.setColor(QPalette::ButtonText, QColor("#dce5e7"));
-  palette.setColor(QPalette::Mid, QColor("#35444a"));
-  palette.setColor(QPalette::Midlight, QColor("#64777e"));
-  palette.setColor(QPalette::PlaceholderText, QColor("#82949b"));
-  palette.setColor(QPalette::Highlight, QColor("#35b2a3"));
-  palette.setColor(QPalette::HighlightedText, QColor("#ffffff"));
-  qApp->setPalette(palette);
-  setPalette(palette);
-  setStyleSheet(styleSheet() + darkStyleSheet());
-  update();
-}
-
 bool MainWindow::savePointCloudFramebuffer(const QString& path) {
   return point_cloud_plot_ != nullptr && point_cloud_plot_->grabFramebuffer().save(path, "PNG");
 }
 
 QWidget* MainWindow::makePage(QString title, QWidget* content) {
   auto* page = new QWidget;
+  page->setObjectName("pageSurface");
+  page->setAutoFillBackground(true);
   auto* layout = new QVBoxLayout(page);
   layout->setContentsMargins(20, 16, 20, 18);
   layout->setSpacing(12);
@@ -752,7 +806,7 @@ QWidget* MainWindow::buildDigitizerPage() {
   tuneForm(board_form);
   acquisition_source_ = new QComboBox(board);
   acquisition_source_->addItem("Simulator", static_cast<int>(AcquisitionSource::Simulator));
-  acquisition_source_->addItem("Alazar ATS9371", static_cast<int>(AcquisitionSource::Alazar));
+  acquisition_source_->addItem("AlazarTech ATS", static_cast<int>(AcquisitionSource::Alazar));
   acquisition_source_->addItem("Raw Replay", static_cast<int>(AcquisitionSource::Replay));
   replay_file_ = new QLineEdit(board);
   replay_file_->setPlaceholderText("Select *.raw.0000.bin");
@@ -810,9 +864,9 @@ QWidget* MainWindow::buildDigitizerPage() {
   records_per_buffer_->setRange(2, 15000);
   dma_buffer_count_ = new QSpinBox(dma);
   dma_buffer_count_->setRange(2, 128);
-  auto* trigger_input = new QLabel("TRIG IN | External TTL | fixed comparator | DC coupled", dma);
-  trigger_input->setWordWrap(true);
-  trigger_input->setProperty("statusKind", "neutral");
+  trigger_input_ = new QLabel("TRIG IN | External TTL range | level 150 | DC coupled", dma);
+  trigger_input_->setWordWrap(true);
+  trigger_input_->setProperty("statusKind", "neutral");
   trigger_slope_ = new QComboBox(dma);
   trigger_slope_->addItems({"Rising edge", "Falling edge"});
   trigger_delay_ = new QSpinBox(dma);
@@ -833,7 +887,7 @@ QWidget* MainWindow::buildDigitizerPage() {
   trigger_mode->setProperty("statusKind", "ready");
   dma_form->addRow("Records / buffer", records_per_buffer_);
   dma_form->addRow("DMA buffers", dma_buffer_count_);
-  dma_form->addRow("Trigger input", trigger_input);
+  dma_form->addRow("Trigger input", trigger_input_);
   dma_form->addRow("Trigger edge", trigger_slope_);
   dma_form->addRow("Trigger delay", trigger_delay_);
   dma_form->addRow("Pre-trigger", pre_trigger_);
@@ -991,7 +1045,14 @@ QWidget* MainWindow::buildProcessingPage() {
   auto* fft_form = new QFormLayout(fft);
   tuneForm(fft_form);
   fft_backend_ = new QComboBox(fft);
-  fft_backend_->addItems({"FFTW (CPU)", "CUDA cuFFT"});
+  const bool is_jetson =
+      platform_name_.compare(QStringLiteral("Jetson"), Qt::CaseInsensitive) == 0;
+  if (is_jetson) {
+    fft_backend_->addItem("CUDA cuFFT");
+    fft_backend_->setEnabled(false);
+  } else {
+    fft_backend_->addItems({"FFTW (CPU)", "CUDA cuFFT"});
+  }
   window_function_ = new QComboBox(fft);
   window_function_->addItems({"Hann", "Hamming", "Blackman", "Rectangular"});
   dc_removal_ = new QCheckBox("Remove DC component", fft);
@@ -1399,7 +1460,11 @@ void MainWindow::connectUi() {
       udp_queue_, udp_policy_};
   const QList<QObject*> runtime_controls = {dc_removal_, peak_threshold_, peak_start_, peak_end_};
   connect(board_profile_, &QComboBox::currentIndexChanged, this, [this] {
-    populateDigitizerCapabilities(board_profile_->currentData().toString(), 0.0, 0.0, 0U);
+    populateDigitizerCapabilities(
+        board_profile_->currentData().toString(),
+        sample_rate_->currentData().toDouble(),
+        input_range_->currentData().toDouble(),
+        impedance_->count() > 0 ? impedance_->currentData().toUInt() : 0U);
   });
   connect(acquisition_source_, &QComboBox::currentIndexChanged,
           this, [this] { updateRuntimeSourceControls(); });
@@ -1571,6 +1636,11 @@ SystemConfig MainWindow::configFromControls() const {
   config.runtime.replay_file = replay_file_->text().trimmed().toStdString();
   config.runtime.replay_loop = replay_loop_->isChecked();
   config.digitizer.board_profile = board_profile_->currentData().toString().toStdString();
+  if (const auto* capabilities =
+          findDigitizerBoardCapabilities(config.digitizer.board_profile)) {
+    config.digitizer.fifo_only_streaming =
+        capabilities->fifo_only_streaming_supported;
+  }
   config.digitizer.system_id = kAlazarSystemId;
   config.digitizer.board_id = kAlazarBoardId;
   config.digitizer.channel = digitizer_channel_->currentIndex() == 0 ? DigitizerChannel::A : DigitizerChannel::B;
@@ -1608,7 +1678,10 @@ SystemConfig MainWindow::configFromControls() const {
   config.digitizer.b_scan_count = config.scan.y_line_count;
   config.mcu.enabled = mcu_enabled_->isChecked();
   config.mcu.port = mcu_port_->text().trimmed().toStdString();
-  config.processing.fft_backend = fft_backend_->currentIndex() == 0 ? FftBackendKind::Fftw : FftBackendKind::Cuda;
+  config.processing.fft_backend =
+      platform_name_.compare(QStringLiteral("Jetson"), Qt::CaseInsensitive) == 0
+      ? FftBackendKind::Cuda
+      : (fft_backend_->currentIndex() == 0 ? FftBackendKind::Fftw : FftBackendKind::Cuda);
   config.chirp_segmentation.window = static_cast<WindowFunction>(window_function_->currentIndex());
   config.chirp_segmentation.segment_fft_length = static_cast<std::uint32_t>(fft_length_->value());
   config.processing.dc_removal = dc_removal_->isChecked();
@@ -1663,20 +1736,32 @@ void MainWindow::populateDigitizerCapabilities(QString profile_id, double prefer
   pre_trigger_->setSingleStep(static_cast<int>(capabilities->pretrigger_alignment_samples));
   trigger_delay_->setSingleStep(static_cast<int>(
       capabilities->single_channel_trigger_delay_alignment_samples));
+  if (trigger_input_ != nullptr) {
+    trigger_input_->setText(
+        capabilities->external_trigger_range == AlazarExternalTriggerRange::Ttl
+            ? "TRIG IN | External TTL range | level 150 | DC coupled"
+            : "TRIG IN | External 5 V range | level 150 | DC coupled");
+  }
   int preferred_rate_index = 0;
+  double nearest_rate_distance = std::numeric_limits<double>::infinity();
   for (std::size_t index = 0; index < capabilities->sample_rates_hz.size(); ++index) {
     const auto rate = capabilities->sample_rates_hz[index];
     sample_rate_->addItem(sampleRateText(rate), rate);
-    if (std::abs(rate - preferred_rate_hz) <= 1.0) {
+    const auto distance = std::abs(rate - preferred_rate_hz);
+    if (preferred_rate_hz > 0.0 && distance < nearest_rate_distance) {
       preferred_rate_index = static_cast<int>(index);
+      nearest_rate_distance = distance;
     }
   }
   int preferred_range_index = 0;
+  double nearest_range_distance = std::numeric_limits<double>::infinity();
   for (std::size_t index = 0; index < capabilities->input_ranges_volts.size(); ++index) {
     const auto range = capabilities->input_ranges_volts[index];
-    input_range_->addItem(QString("+/- %1 mV").arg(range * 1000.0, 0, 'g', 8), range);
-    if (std::abs(range - preferred_range_volts) <= 1.0e-9) {
+    input_range_->addItem(inputRangeText(range), range);
+    const auto distance = std::abs(range - preferred_range_volts);
+    if (preferred_range_volts > 0.0 && distance < nearest_range_distance) {
       preferred_range_index = static_cast<int>(index);
+      nearest_range_distance = distance;
     }
   }
   int preferred_impedance_index = 0;
@@ -1690,6 +1775,19 @@ void MainWindow::populateDigitizerCapabilities(QString profile_id, double prefer
   sample_rate_->setCurrentIndex(preferred_rate_index);
   input_range_->setCurrentIndex(preferred_range_index);
   impedance_->setCurrentIndex(preferred_impedance_index);
+  const auto trigger_delay_alignment =
+      static_cast<int>(capabilities->single_channel_trigger_delay_alignment_samples);
+  if (trigger_delay_alignment > 0) {
+    trigger_delay_->setValue(
+        (trigger_delay_->value() / trigger_delay_alignment) *
+        trigger_delay_alignment);
+  }
+  const auto pretrigger_alignment =
+      static_cast<int>(capabilities->pretrigger_alignment_samples);
+  if (pretrigger_alignment > 0) {
+    pre_trigger_->setValue(
+        (pre_trigger_->value() / pretrigger_alignment) * pretrigger_alignment);
+  }
   updateDerivedAcquisitionLabels();
 }
 
@@ -1786,6 +1884,11 @@ void MainWindow::updateDerivedAcquisitionLabels() {
 void MainWindow::loadConfigToControls(const SystemConfig& config, bool mark_pending) {
   loading_controls_ = true;
   config_ = config;
+  const bool is_jetson =
+      platform_name_.compare(QStringLiteral("Jetson"), Qt::CaseInsensitive) == 0;
+  if (is_jetson) {
+    config_.processing.fft_backend = FftBackendKind::Cuda;
+  }
   profile_combo_->clear();
   profile_combo_->addItem(QString::fromStdString(config.profile.name));
   const auto source_index = acquisition_source_->findData(
@@ -1822,7 +1925,8 @@ void MainWindow::loadConfigToControls(const SystemConfig& config, bool mark_pend
   bidirectional_->setChecked(config.scan.bidirectional);
   mcu_enabled_->setChecked(config.mcu.enabled);
   mcu_port_->setText(QString::fromStdString(config.mcu.port));
-  fft_backend_->setCurrentIndex(config.processing.fft_backend == FftBackendKind::Fftw ? 0 : 1);
+  fft_backend_->setCurrentIndex(
+      is_jetson ? 0 : (config.processing.fft_backend == FftBackendKind::Fftw ? 0 : 1));
   window_function_->setCurrentIndex(static_cast<int>(config.chirp_segmentation.window));
   fft_length_->setValue(static_cast<int>(config.chirp_segmentation.segment_fft_length));
   updatePeakBinLimits();
@@ -1904,10 +2008,15 @@ void MainWindow::updateLivePlotSubscription() {
   fft_plot_->resetDisplayMetrics();
   static_cast<void>(controller_->takeUiDispatchMetrics());
   if (live_display_diagnostics_ != nullptr) {
-    live_display_diagnostics_->setText(
-        plot_index == 0 || plot_index == 1
-            ? "Display | collecting 1 second diagnostic window"
-            : "Display | diagnostics active for Time Domain and FFT");
+    if (plot_index == 0 || plot_index == 1) {
+      live_display_diagnostics_->setText(
+          "Display | collecting 1 second diagnostic window");
+    } else if (plot_index >= 2) {
+      live_display_diagnostics_->setText(
+          "Display | selected A-scan snapshots are paused outside Time Domain / FFT");
+    } else {
+      live_display_diagnostics_->setText("Display | inactive");
+    }
   }
   controller_->setLivePlotIndex(plot_index);
 }
@@ -1925,9 +2034,17 @@ void MainWindow::updateLiveDisplayDiagnostics() {
           !freeze_live_
       ? live_tabs_->currentIndex()
       : -1;
-  if (!runtime_status_.running || (plot_index != 0 && plot_index != 1)) {
+  if (!runtime_status_.running) {
+    live_display_diagnostics_->setText("Display | acquisition stopped");
+    return;
+  }
+  if (freeze_live_) {
+    live_display_diagnostics_->setText("Display | frozen");
+    return;
+  }
+  if (plot_index != 0 && plot_index != 1) {
     live_display_diagnostics_->setText(
-        freeze_live_ ? "Display | frozen" : "Display | waiting for active Time Domain or FFT data");
+        "Display | selected A-scan snapshots are paused outside Time Domain / FFT");
     return;
   }
 

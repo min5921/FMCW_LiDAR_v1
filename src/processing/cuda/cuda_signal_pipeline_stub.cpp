@@ -9,6 +9,10 @@ CudaSignalPipeline::~CudaSignalPipeline() = default;
 
 bool CudaSignalPipeline::available() { return false; }
 
+std::size_t CudaSignalPipeline::capacity() const { return 0U; }
+
+std::size_t CudaSignalPipeline::inFlightCount() const { return 0U; }
+
 bool CudaSignalPipeline::configure(const SystemConfig&,
                                    std::uint64_t,
                                    const std::vector<float>&,
@@ -23,6 +27,31 @@ bool CudaSignalPipeline::configure(const SystemConfig&,
 bool CudaSignalPipeline::updateRuntimeConfig(const ProcessingConfig&,
                                              std::uint64_t,
                                              std::string& error) {
+  error = "CUDA signal pipeline was not compiled";
+  return false;
+}
+
+bool CudaSignalPipeline::submitBatch(RawFrameBatchPtr,
+                                     std::uint32_t,
+                                     std::string& error) {
+  error = "CUDA signal pipeline was not compiled";
+  return false;
+}
+
+bool CudaSignalPipeline::releaseCompletedInputs(bool, std::string& error) {
+  error = "CUDA signal pipeline was not compiled";
+  return false;
+}
+
+bool CudaSignalPipeline::collectNext(
+    bool,
+    RawFrameBatchPtr& raw_batch,
+    std::vector<ProcessedFrame>& processed_batch,
+    bool& collected,
+    std::string& error) {
+  raw_batch.reset();
+  processed_batch.clear();
+  collected = false;
   error = "CUDA signal pipeline was not compiled";
   return false;
 }

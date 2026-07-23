@@ -36,16 +36,51 @@ cmake --preset windows-msvc-release -DALAZAR_SDK_ROOT=C:\AlazarTech\ATS-SDK\25.1
 Required for the Qt application:
 
 - a C++17 compiler;
-- CMake 3.24 or newer and Ninja;
-- Qt 6 development packages;
+- CMake 3.18 or newer and Ninja;
+- Qt 6.2 or newer development packages;
 - CUDA/cuFFT compatible with the installed JetPack release;
 - AlazarTech Linux SDK and driver support verified for the exact board and Jetson PCIe connection.
 
+For transfer to another Jetson, the Windows workspace can create a source-only bundle that excludes
+`.git`, legacy vendor material, outputs, and existing build products:
+
+```powershell
+.\deploy\jetson\export_source.ps1
+```
+
+This produces:
+
+```text
+build/package/FMCW_LiDAR_Jetson_Source
+build/package/FMCW_LiDAR_Jetson_Source.zip
+```
+
+On the Jetson, configure `deploy/jetson/jetson.env` and run one command:
+
 ```bash
-cmake --preset jetson-release -DALAZAR_SDK_ROOT=/usr/local/AlazarTech
+bash deploy/jetson/build.sh
+```
+
+The script validates ARM64, CMake, Ninja, Qt 6.2 or newer, required CUDA/cuFFT, and the optional Alazar
+ARM64 SDK before configuring. Jetson is built with FFTW disabled and CUDA required. It builds
+Release, runs the applicable CTest targets and the Qt smoke test, then creates
+`build/package/FMCW_LiDAR_Jetson`. The source manifest uses LF line endings and can be checked
+on Jetson with `sha256sum -c SOURCE_MANIFEST.sha256`.
+
+The direct `build.sh` path is the canonical Jetson build and supports CMake
+3.18. `CMakePresets.json` uses preset schema version 3, so the optional
+`jetson-release` preset requires CMake 3.21 or newer:
+
+```bash
+cmake --preset jetson-release \
+  -DFMCW_CUDA_ARCHITECTURES=87 \
+  -DALAZAR_SDK_ROOT=/usr/local/AlazarTech
 cmake --build --preset jetson-release
 ctest --preset jetson-release
 ```
+
+Replace `87` with the numeric CUDA architecture for the target Jetson. The
+canonical `build.sh` path performs this detection automatically.
 
 ## External SDK Roots
 
@@ -55,6 +90,16 @@ The following CMake cache variables are used for dependency discovery:
 - `FFTW_ROOT`: FFTW headers and libraries when package discovery is insufficient.
 
 CUDA is enabled only when CMake finds both the `nvcc` CUDA compiler and `CUDAToolkit`. The active implementation is compiled from `src/processing/cuda/cuda_fft_backend.cu`. EDFA/MCU serial support uses Win32 COM or POSIX tty directly; FTDI or USB-UART devices still require their operating system driver, but vendor control executables are not runtime dependencies.
+
+Qt 6.2 compatibility does not use `qt_standard_project_setup()`, which was
+introduced in Qt 6.3. The project enables CMake `AUTOMOC`, `AUTOUIC`, and
+`AUTORCC` directly so the same source builds with Jetson Qt 6.2 and newer
+Windows Qt versions.
+
+CMake 3.18 is the project minimum because it provides the CUDA architecture
+target property used by the cuFFT build. The Jetson build script converts
+`FMCW_JETSON_CUDA_ARCHITECTURES=auto` to a numeric architecture, avoiding the
+CMake 3.24-only `native` value on older Jetson toolchains.
 
 ## Phase 4 FFT Backends
 

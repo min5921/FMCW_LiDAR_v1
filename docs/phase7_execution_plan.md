@@ -410,15 +410,15 @@ Disk write, UDP transmission, and Qt paint time은 이 5 ms signal-processing ga
 
 ### Scope
 
-- 정확한 Jetson/JetPack kernel에 맞는 ATS9371 arm64 driver 지원을 확인한다.
-- Qt, ATS API, FFTW, CUDA/cuFFT, serial, UDP, storage를 arm64 target에서 build/link한다.
+- 정확한 Jetson/JetPack kernel과 선택한 지원 ATS 모델에 맞는 arm64 driver 지원을 확인한다.
+- Qt, ATS API, CUDA/cuFFT, serial, UDP, storage를 arm64 target에서 build/link한다. Jetson release에서는 FFTW를 빌드하지 않는다.
 - local Qt launcher, profile location, log/data directory를 package한다.
 - GPU/CPU load, memory, PCIe throughput, NVMe throughput, thermal throttling을 장시간 측정한다.
 - Windows와 Jetson이 같은 schema/profile/calibration을 공유하는지 확인한다.
 
 ### Exit Criteria
 
-- Jetson에서 GUI를 통해 ATS9371 acquisition과 FFTW/CUDA 측정을 각각 수행한다.
+- Jetson에서 GUI를 통해 선택한 지원 ATS 모델의 acquisition과 CUDA/cuFFT 측정을 수행한다.
 - 장시간 시험에서 thermal throttling과 queue 상태를 기록하고 운용 한계를 문서화한다.
 - Windows와 Jetson release package 및 hardware acceptance report가 완성된다.
 

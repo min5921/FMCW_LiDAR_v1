@@ -40,6 +40,18 @@ std::uint64_t nowNs() {
 
 #if FMCW_HAS_ALAZAR_SDK
 
+static_assert(static_cast<std::uint32_t>(ATS9350) == 14U);
+static_assert(static_cast<std::uint32_t>(ATS9351) == 18U);
+static_assert(static_cast<std::uint32_t>(ATS9360) == 25U);
+static_assert(static_cast<std::uint32_t>(ATS9373) == 29U);
+static_assert(static_cast<std::uint32_t>(ATS9120) == 32U);
+static_assert(static_cast<std::uint32_t>(ATS9371) == 33U);
+static_assert(static_cast<std::uint32_t>(ATS9130) == 34U);
+static_assert(static_cast<std::uint32_t>(ATS9352) == 35U);
+static_assert(static_cast<std::uint32_t>(ATS9353) == 44U);
+static_assert(static_cast<std::uint32_t>(ATS9364) == 53U);
+static_assert(static_cast<std::uint32_t>(ATS9362) == 58U);
+
 bool check(RETURN_CODE code, const char* operation, std::string& error) {
   if (code == ApiSuccess) {
     return true;
@@ -76,14 +88,47 @@ U32 sampleRateId(double sample_rate_hz) {
     case 5000000ULL: return SAMPLE_RATE_5MSPS;
     case 10000000ULL: return SAMPLE_RATE_10MSPS;
     case 20000000ULL: return SAMPLE_RATE_20MSPS;
+    case 25000000ULL: return SAMPLE_RATE_25MSPS;
     case 50000000ULL: return SAMPLE_RATE_50MSPS;
     case 100000000ULL: return SAMPLE_RATE_100MSPS;
+    case 125000000ULL: return SAMPLE_RATE_125MSPS;
     case 200000000ULL: return SAMPLE_RATE_200MSPS;
+    case 250000000ULL: return SAMPLE_RATE_250MSPS;
     case 500000000ULL: return SAMPLE_RATE_500MSPS;
+    case 750000000ULL: return SAMPLE_RATE_750MSPS;
     case 800000000ULL: return SAMPLE_RATE_800MSPS;
     case 1000000000ULL: return SAMPLE_RATE_1000MSPS;
+    case 1200000000ULL: return SAMPLE_RATE_1200MSPS;
+    case 1500000000ULL: return SAMPLE_RATE_1500MSPS;
+    case 1800000000ULL: return SAMPLE_RATE_1800MSPS;
+    case 2000000000ULL: return SAMPLE_RATE_2000MSPS;
+    case 2400000000ULL: return SAMPLE_RATE_2400MSPS;
+    case 3000000000ULL: return SAMPLE_RATE_3000MSPS;
+    case 3600000000ULL: return SAMPLE_RATE_3600MSPS;
+    case 4000000000ULL: return SAMPLE_RATE_4000MSPS;
     default: return 0U;
   }
+}
+
+U32 inputRangeId(double input_range_volts) {
+  switch (static_cast<std::uint32_t>(std::llround(input_range_volts * 1000.0))) {
+    case 40U: return INPUT_RANGE_PM_40_MV;
+    case 50U: return INPUT_RANGE_PM_50_MV;
+    case 80U: return INPUT_RANGE_PM_80_MV;
+    case 100U: return INPUT_RANGE_PM_100_MV;
+    case 200U: return INPUT_RANGE_PM_200_MV;
+    case 400U: return INPUT_RANGE_PM_400_MV;
+    case 500U: return INPUT_RANGE_PM_500_MV;
+    case 800U: return INPUT_RANGE_PM_800_MV;
+    case 1000U: return INPUT_RANGE_PM_1_V;
+    case 2000U: return INPUT_RANGE_PM_2_V;
+    case 4000U: return INPUT_RANGE_PM_4_V;
+    default: return 0U;
+  }
+}
+
+U32 externalTriggerRangeId(AlazarExternalTriggerRange range) {
+  return range == AlazarExternalTriggerRange::FiveVolts ? ETR_5V : ETR_TTL;
 }
 
 struct AlazarDmaBuffer {
@@ -146,6 +191,7 @@ struct AlazarDmaLease {
 struct AlazarDigitizer::Impl {
 #if FMCW_HAS_ALAZAR_SDK
   HANDLE board = nullptr;
+  const DigitizerBoardCapabilities* capabilities = nullptr;
   U8 bits_per_sample = 0;
   std::vector<std::shared_ptr<AlazarDmaBuffer>> buffers;
   std::vector<RawFrameMetadata> record_metadata_templates;
@@ -199,11 +245,22 @@ bool AlazarDigitizer::configure(const SystemConfig& config, std::string& error) 
   if (capabilities == nullptr || !supportsSampleRate(*capabilities, config.digitizer.sample_rate_hz) ||
       !supportsInputRange(*capabilities, config.digitizer.input_range_volts) ||
       !supportsImpedance(*capabilities, config.digitizer.impedance_ohms) ||
-      config.digitizer.trigger_source != TriggerSource::External || config.digitizer.coupling != Coupling::Dc) {
+      capabilities->bits_per_sample != 12U || !capabilities->aux_trigger_enable_supported ||
+      config.digitizer.trigger_source != TriggerSource::External ||
+      config.digitizer.coupling != Coupling::Dc) {
     error = "Alazar settings are outside the selected board capability profile";
     return false;
   }
+#if FMCW_HAS_ALAZAR_SDK
+  if (impl_->board != nullptr &&
+      (impl_->capabilities == nullptr ||
+       impl_->capabilities->profile_id != capabilities->profile_id)) {
+    error = "Selected board model does not match the connected Alazar board";
+    return false;
+  }
+#endif
   config_ = config;
+  config_.digitizer.fifo_only_streaming = capabilities->fifo_only_streaming_supported;
   configured_ = true;
   {
     std::lock_guard<std::mutex> telemetry_lock(telemetry_mutex_);
@@ -231,19 +288,35 @@ bool AlazarDigitizer::connect(std::string& error) {
     error = "AlazarGetBoardBySystemID returned no board for System 1 / Board 1";
     return false;
   }
-  const auto board_kind = AlazarGetBoardKind(impl_->board);
-  if (board_kind != ATS9371) {
-    error = "Expected ATS9371 at System 1 / Board 1, detected board kind " +
-            std::to_string(static_cast<unsigned int>(board_kind));
+  const auto board_kind = static_cast<std::uint32_t>(AlazarGetBoardKind(impl_->board));
+  const auto* detected_capabilities =
+      findDigitizerBoardCapabilitiesBySdkBoardKind(board_kind);
+  if (detected_capabilities == nullptr) {
+    error = "Detected Alazar board kind " + std::to_string(board_kind) +
+            " is not in the supported 12-bit AUX trigger-enable model list";
     impl_->board = nullptr;
     return false;
   }
+  const auto* selected_capabilities =
+      findDigitizerBoardCapabilities(config_.digitizer.board_profile);
+  if (selected_capabilities == nullptr ||
+      selected_capabilities->sdk_board_kind != board_kind) {
+    error = "Selected " +
+            (selected_capabilities == nullptr ? config_.digitizer.board_profile
+                                              : selected_capabilities->display_name) +
+            " but detected " + detected_capabilities->display_name +
+            " at System 1 / Board 1";
+    impl_->board = nullptr;
+    return false;
+  }
+  impl_->capabilities = detected_capabilities;
   {
     std::lock_guard<std::mutex> telemetry_lock(telemetry_mutex_);
     telemetry_.device.connected = true;
   }
   if (!configureBoard(error)) {
     impl_->board = nullptr;
+    impl_->capabilities = nullptr;
     std::lock_guard<std::mutex> telemetry_lock(telemetry_mutex_);
     telemetry_.device.connected = false;
     return false;
@@ -251,7 +324,8 @@ bool AlazarDigitizer::connect(std::string& error) {
   {
     std::lock_guard<std::mutex> telemetry_lock(telemetry_mutex_);
     telemetry_.device.ready = true;
-    telemetry_.device.detail = "ATS9371 System 1 / Board 1 connected and configured";
+    telemetry_.device.detail = impl_->capabilities->display_name +
+        " System 1 / Board 1 connected and configured";
   }
   error.clear();
   return true;
@@ -272,6 +346,8 @@ void AlazarDigitizer::disconnect() {
   }
   releaseBuffers();
   impl_->board = nullptr;
+  impl_->capabilities = nullptr;
+  impl_->bits_per_sample = 0U;
 #endif
   {
     std::lock_guard<std::mutex> telemetry_lock(telemetry_mutex_);
@@ -337,7 +413,8 @@ bool AlazarDigitizer::start(std::string& error) {
   const U32 records_per_acquisition = config_.digitizer.acquisition_mode == AcquisitionMode::Finite ?
       config_.digitizer.finite_frame_count : 0x7FFFFFFFU;
   U32 flags = ADMA_EXTERNAL_STARTCAPTURE | ADMA_NPT;
-  if (config_.digitizer.fifo_only_streaming) {
+  if (impl_->capabilities != nullptr &&
+      impl_->capabilities->fifo_only_streaming_supported) {
     flags |= ADMA_FIFO_ONLY_STREAMING;
   }
   if (!check(AlazarBeforeAsyncRead(impl_->board, channelMask(config_.digitizer.channel),
@@ -666,27 +743,42 @@ bool AlazarDigitizer::abortAsyncReadLocked(std::unique_lock<std::mutex>& lock,
 
 bool AlazarDigitizer::configureBoard(std::string& error) {
 #if FMCW_HAS_ALAZAR_SDK
+  if (impl_->capabilities == nullptr) {
+    error = "No supported Alazar board model has been detected";
+    return false;
+  }
   const auto sample_rate_id = sampleRateId(config_.digitizer.sample_rate_hz);
   if (sample_rate_id == 0U) {
-    error = "Unsupported ATS9371 internal-clock sample rate";
+    error = "Unsupported " + impl_->capabilities->display_name +
+            " internal-clock sample rate";
+    return false;
+  }
+  const auto input_range_id = inputRangeId(config_.digitizer.input_range_volts);
+  if (input_range_id == 0U) {
+    error = "Unsupported " + impl_->capabilities->display_name +
+            " input range";
     return false;
   }
   if (!check(AlazarSetCaptureClock(impl_->board, INTERNAL_CLOCK, sample_rate_id,
                                    CLOCK_EDGE_RISING, 0), "AlazarSetCaptureClock", error) ||
       !check(AlazarInputControlEx(impl_->board, channelMask(config_.digitizer.channel),
-                                  couplingId(config_.digitizer.coupling), INPUT_RANGE_PM_400_MV,
+                                  couplingId(config_.digitizer.coupling), input_range_id,
                                   IMPEDANCE_50_OHM), "AlazarInputControlEx", error) ||
       !check(AlazarSetTriggerOperation(impl_->board, TRIG_ENGINE_OP_J, TRIG_ENGINE_J, TRIG_EXTERNAL,
                                        triggerSlopeId(config_.digitizer.trigger_slope),
-                                       kAlazarExternalTtlTriggerLevelCode,
+                                       kAlazarExternalTriggerLevelCode,
                                        TRIG_ENGINE_K, TRIG_DISABLE, TRIGGER_SLOPE_POSITIVE, 128),
              "AlazarSetTriggerOperation", error) ||
-      !check(AlazarSetExternalTrigger(impl_->board, DC_COUPLING, ETR_TTL),
+      !check(AlazarSetExternalTrigger(
+                 impl_->board, DC_COUPLING,
+                 externalTriggerRangeId(impl_->capabilities->external_trigger_range)),
              "AlazarSetExternalTrigger", error) ||
       !check(AlazarSetTriggerDelay(impl_->board, config_.digitizer.trigger_delay_samples),
              "AlazarSetTriggerDelay", error) ||
       !check(AlazarSetTriggerTimeOut(impl_->board, 0), "AlazarSetTriggerTimeOut", error) ||
-      !check(AlazarConfigureAuxIO(impl_->board, AUX_IN_TRIGGER_ENABLE, 1), "AlazarConfigureAuxIO", error)) {
+      !check(AlazarConfigureAuxIO(
+                 impl_->board, AUX_IN_TRIGGER_ENABLE, TRIGGER_SLOPE_POSITIVE),
+             "AlazarConfigureAuxIO", error)) {
     return false;
   }
   U32 max_samples = 0;
@@ -694,8 +786,9 @@ bool AlazarDigitizer::configureBoard(std::string& error) {
              "AlazarGetChannelInfo", error)) {
     return false;
   }
-  if (impl_->bits_per_sample != 12U) {
-    error = "ATS9371 DMA fast path requires the expected 12-bit left-aligned sample format";
+  if (impl_->bits_per_sample != impl_->capabilities->bits_per_sample) {
+    error = impl_->capabilities->display_name +
+            " did not report the expected 12-bit left-aligned sample format";
     return false;
   }
   error.clear();

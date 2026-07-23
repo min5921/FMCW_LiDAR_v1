@@ -10,6 +10,7 @@
 #include <cmath>
 #include <iostream>
 #include <limits>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -55,8 +56,8 @@ void testDefaultsAndRoundTrip() {
   expect(decoded.config.runtime.acquisition_source == fmcw::AcquisitionSource::Simulator &&
              decoded.config.runtime.replay_file.empty() && !decoded.config.runtime.replay_loop,
          "round trip preserves the simulator runtime source defaults");
-  expect(fmcw::kAlazarExternalTtlTriggerLevelCode == 150U,
-         "external TTL trigger retains the fixed legacy SDK level argument");
+  expect(fmcw::kAlazarExternalTriggerLevelCode == 150U,
+         "external trigger retains the fixed SDK level argument");
   expect(decoded.config.laser.sweep_bandwidth_hz == 2.0e9 &&
              decoded.config.laser.sweep_rate_hz == 200.0e3,
          "round trip preserves the two distance-conversion laser inputs");
@@ -84,6 +85,64 @@ void testDefaultsAndRoundTrip() {
              fmcw::nearestSupportedRecordLength(board, 5000U) == 4992U &&
              fmcw::nearestSupportedRecordLength(board, 5056U) == 5120U,
          "unsupported record lengths normalize to the nearest ATS9371 setting");
+}
+
+void testSupportedAlazarBoardCatalog() {
+  const auto& boards = fmcw::digitizerBoardCapabilities();
+  expect(boards.size() == 11U,
+         "catalog contains the 11 SDK 25.1.0 models with 12-bit data and AUX trigger-enable");
+
+  std::set<std::string> profile_ids;
+  std::set<std::uint32_t> board_kinds;
+  bool common_contract_valid = true;
+  for (const auto& board : boards) {
+    profile_ids.insert(board.profile_id);
+    board_kinds.insert(board.sdk_board_kind);
+    common_contract_valid = common_contract_valid &&
+        board.bits_per_sample == 12U &&
+        board.aux_trigger_enable_supported &&
+        board.impedances_ohms == std::vector<std::uint32_t>{50U} &&
+        !board.sample_rates_hz.empty() &&
+        !board.input_ranges_volts.empty();
+    expect(fmcw::findDigitizerBoardCapabilitiesBySdkBoardKind(board.sdk_board_kind) ==
+               &board,
+           board.display_name + " is addressable by its SDK board kind");
+  }
+  expect(profile_ids.size() == boards.size() && board_kinds.size() == boards.size(),
+         "supported Alazar profiles and SDK board kinds are unique");
+  expect(common_contract_valid,
+         "every supported board satisfies the 12-bit AUX trigger-enable acquisition contract");
+
+  const auto* ats9120 = fmcw::findDigitizerBoardCapabilities("ats9120");
+  const auto* ats9350 = fmcw::findDigitizerBoardCapabilities("ats9350");
+  const auto* ats9360 = fmcw::findDigitizerBoardCapabilities("ats9360");
+  const auto* ats9362 = fmcw::findDigitizerBoardCapabilities("ats9362");
+  const auto* ats9373 = fmcw::findDigitizerBoardCapabilities("ats9373");
+  expect(ats9120 != nullptr && ats9120->sdk_board_kind == 32U &&
+             fmcw::supportsSampleRate(*ats9120, 20.0e6) &&
+             !fmcw::supportsSampleRate(*ats9120, 25.0e6) &&
+             fmcw::supportsInputRange(*ats9120, 4.0) &&
+             ats9120->record_resolution_samples == 32U &&
+             ats9120->fifo_only_streaming_supported,
+         "ATS9120 exposes its low-speed rate, range, record, and FIFO constraints");
+  expect(ats9350 != nullptr &&
+             ats9350->external_trigger_range ==
+                 fmcw::AlazarExternalTriggerRange::FiveVolts &&
+             !ats9350->fifo_only_streaming_supported &&
+             fmcw::supportsSampleRate(*ats9350, 125.0e6),
+         "ATS9350 uses its SDK 5 V external-trigger and non-FIFO NPT setup");
+  expect(ats9360 != nullptr && fmcw::supportsSampleRate(*ats9360, 1.8e9) &&
+             ats9360->fifo_only_streaming_supported,
+         "ATS9360 exposes its 1.8 GS/s FIFO-only setup");
+  expect(ats9362 != nullptr && fmcw::supportsSampleRate(*ats9362, 750.0e6) &&
+             !ats9362->fifo_only_streaming_supported,
+         "ATS9362 exposes its 750 MS/s non-FIFO setup");
+  expect(ats9373 != nullptr && ats9373->sdk_board_kind == 29U &&
+             fmcw::supportsSampleRate(*ats9373, 4.0e9) &&
+             ats9373->fifo_only_streaming_supported,
+         "ATS9373 exposes its 4 GS/s FIFO-only setup");
+  expect(fmcw::findDigitizerBoardCapabilitiesBySdkBoardKind(9999U) == nullptr,
+         "unknown SDK board kinds are rejected");
 }
 
 void testStrictYamlAndLayering() {
@@ -370,6 +429,7 @@ void testStartGateSnapshotAndOverflowStop() {
 
 int main() {
   testDefaultsAndRoundTrip();
+  testSupportedAlazarBoardCatalog();
   testStrictYamlAndLayering();
   testLaserDistanceInputsAndRecordLength();
   testPresentationAndChangePolicy();

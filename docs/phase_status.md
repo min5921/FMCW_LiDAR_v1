@@ -350,3 +350,64 @@ ATS9371 200 Hz acquisition and Qt paint verification (2026-07-23):
 - Operator STOP completed and returned to START; the digitizer disconnected cleanly. EDFA, MCU, raw recording, and UDP were intentionally disabled during this focused check.
 - Release CTest passed 9/9. The packaged EXE SHA-256 is `53DE2B92C5FA8AA5E2EA73C379D0CD3057E410AC69F487656E4834FBDECE41F0`.
 - This is short functional evidence, not the fixed 10-minute Phase 7.2/7.3D/7.4 hardware acceptance. Long-duration DMA, locked-page/handle, storage, thermal, and Jetson checks remain pending.
+
+Alazar 12-bit AUX trigger-enable model expansion (2026-07-23):
+
+- ATS-SDK 25.1.0 support is intentionally limited to ATS9120, ATS9130,
+  ATS9350/51/52/53, ATS9360/62/64, ATS9371, and ATS9373. All eleven use the
+  native left-aligned 12-bit DMA path and have an SDK `NPT_Scan` example with
+  `AUX_IN_TRIGGER_ENABLE`.
+- The existing Digitizer `Board model` combo shows only the model number.
+  There is no separate diagnostic page. Changing the model repopulates its
+  sampling rates, input ranges, record/pre-trigger/delay alignment, external
+  trigger range, and SDK-recommended FIFO-only flag.
+- Connect verifies the selected model against `AlazarGetBoardKind()` at fixed
+  System 1 / Board 1. Unsupported models and model-selection mismatches stop
+  before board configuration.
+- The Windows ATS-SDK Release build and CTest passed 9/9. The refreshed package
+  passed `--smoke-test`; build and package SHA-256 are
+  `7FB143E4B27147F4E0331CD463FC75093B5D322284C12774C4D88C5FFE95182B`.
+- The Jetson CUDA-only source bundle was regenerated, its source manifest
+  verified with zero mismatches, and all Bash scripts passed syntax checks.
+- Only ATS9371 has been exercised on the current hardware. Every other model
+  remains subject to driver, trigger, DMA, and sustained-throughput acceptance
+  on its actual board.
+
+Jetson Qt/CMake compatibility baseline (2026-07-23):
+
+- The shared Qt Widgets/OpenGL UI now declares Qt 6.2 as its minimum. The
+  Qt 6.3-only `qt_standard_project_setup()` helper was removed and replaced
+  with direct CMake AUTOMOC, AUTOUIC, and AUTORCC settings.
+- The project CMake minimum is 3.18. Jetson no longer depends on the CMake
+  3.24-only CUDA `native` architecture value.
+- `FMCW_JETSON_CUDA_ARCHITECTURES=auto` maps Thor, Orin, Xavier, TX2, and
+  Nano/TX1 to numeric CUDA architectures. Unknown models stop with an
+  instruction to set the value explicitly.
+- Windows Qt 6.11 was reconfigured through the same direct autogen path. The
+  ATS-SDK Release build and CTest passed 9/9, and the refreshed package passed
+  `--smoke-test`. Build and package SHA-256 are
+  `33A582FE14075AAEE6EB7EB92B602AC37E8E4C793350D374BABD12EF968FEB5C`.
+- The operator completed the native Qt 6.2/CMake 3.18 ARM64 build and launched
+  the simulator on Jetson. The Qt smoke tests shown with that build passed.
+
+Jetson Qt 6.2 dark-theme portability (2026-07-23):
+
+- Jetson screenshots showed that the system palette leaked through scroll-area
+  viewports, standard group boxes, disabled controls, and Overview cards. The
+  previous constructor first polished widgets with a light stylesheet and then
+  appended a dark stylesheet after construction, which behaved inconsistently
+  on Qt 6.2.
+- Both platform entry points now install one application-wide Fusion style,
+  complete dark palette, and dark stylesheet before constructing `MainWindow`.
+  Static surfaces use stable object names, while dynamic status properties are
+  explicitly repolished. The native operating-system title bar remains
+  controlled by the desktop theme.
+- The CMake 3.18 Jetson build path no longer uses the CMake 3.20-only
+  `ctest --test-dir` option. Preset schema version 3 is documented and declared
+  as requiring CMake 3.21, while `deploy/jetson/build.sh` remains the canonical
+  CMake 3.18 path.
+- Windows Qt 6.11 Release build and CTest passed 9/9. Automated renders of
+  all eight pages plus live Time Domain, FFT, B-scan, and the OpenGL point cloud
+  retained dark backgrounds and readable enabled/disabled controls. The
+  refreshed package passed `--smoke-test`; its EXE SHA-256 is
+  `A870F2F6119B2F6914C84C5926D5672480CCB5AD2BA255C01014E3A119E58AE0`.
