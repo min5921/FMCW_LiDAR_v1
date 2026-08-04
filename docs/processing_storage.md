@@ -94,11 +94,11 @@ velocity  = calibrated_velocity
 - `ScanLineSnapshot`: X pixel별 peak index/value, radial distance, velocity, forward depth, validity
 - `BScanSnapshot`: `width x height` Cartesian forward-depth (`point.y`) matrix와 validity mask
 
-Waveform/FFT는 processed frame마다 교체한다. Scan line과 B-scan은 한 B-scan line의 모든 X pixel이 채워졌을 때 publish한다. Point cloud는 모든 B-scan line이 채워진 complete raster frame에서만 publish하며, 다음 frame 조립 중에는 직전 complete snapshot을 유지한다. UI가 느리면 과거 snapshot을 누적하지 않고 최신 shared snapshot을 읽는다.
+Waveform/FFT는 processed frame마다 교체한다. Scan line은 한 B-scan line의 모든 X pixel이 채워졌을 때 publish한다. B-scan과 point cloud는 모든 B-scan line이 채워진 complete raster frame에서만 원자적으로 publish하며, 다음 frame 조립 중에는 직전 complete snapshot을 유지한다. UI가 느리면 과거 snapshot을 누적하지 않고 최신 shared snapshot을 읽는다.
 
 ### Selected Display And 3D Snapshot
 
-- `PointCloudSnapshot` carries one complete raster of XYZ/intensity/velocity points. Every published snapshot has `completed_lines == height` and `complete == true`; partial raster work buffers are never exposed to the 3D viewer.
+- `BScanSnapshot` and `PointCloudSnapshot` carry one complete raster. Every published snapshot has `completed_lines == height` and `complete == true`; partial raster work buffers are never exposed to either viewer.
 - `WaveformSnapshot` and `FftSnapshot` are published only for the configured zero-based `record_index_in_buffer`.
 - This is the legacy-compatible display selection. Every A-scan still passes through FFT, peak measurement, scan-line/B-scan/point-cloud aggregation, raw/processed storage, and UDP assembly.
 
@@ -145,6 +145,8 @@ JSON sidecar에는 다음을 기록한다.
 - completed flag와 stop reason
 
 `split_file_size_gb`를 넘으면 다음 numbered raw part를 연다. 한 frame은 두 part로 분할하지 않으므로 part 크기는 최대 한 frame만큼 설정값을 초과할 수 있다.
+
+Processed binary format v2 additionally records the trajectory sample index, source X/Y commands, calibrated X/Y angles, detected fast axis/direction, coordinate source, and command coordinates copied into the final point. Point-cloud CSV exports `x, y, z, intensity, velocity, scan_x_command, scan_y_command`. UDP packet v1 remains unchanged at five floats per point for compatibility.
 
 ## 9. Replay
 

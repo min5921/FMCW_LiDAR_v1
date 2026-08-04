@@ -49,6 +49,8 @@ outputs/*
 # Local IDE settings
 .idea/
 .vscode/
+.codex-remote-attachments/
+**/.settings/language.settings.xml
 
 # Machine-specific CMake paths and SDK locations
 CMakeUserPresets.json

@@ -48,11 +48,14 @@ detect_cuda_architectures() {
   esac
 
   if command -v nvidia-smi >/dev/null 2>&1; then
-    local compute_capability
-    compute_capability="$(
-      nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null |
-        head -n 1 | tr -d '.[:space:]'
+    local compute_capabilities=""
+    local compute_capability=""
+    compute_capabilities="$(
+      nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null || true
     )"
+    compute_capability="${compute_capabilities%%$'\n'*}"
+    compute_capability="${compute_capability//./}"
+    compute_capability="${compute_capability//[[:space:]]/}"
     if [[ "${compute_capability}" =~ ^[0-9]+$ ]]; then
       printf '%s' "${compute_capability}"
       return

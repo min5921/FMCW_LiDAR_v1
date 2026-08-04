@@ -47,9 +47,22 @@ foreach ($directory in $directories) {
     Copy-Item -LiteralPath $source -Destination $target -Recurse
 }
 
+# Copy-Item does not honor .gitignore. Keep the CubeIDE project sources, but
+# remove local firmware build products and machine-specific indexer state.
+$firmwareTarget = Join-Path $destinationPath "src\firmware"
+if (Test-Path -LiteralPath $firmwareTarget) {
+    Get-ChildItem -LiteralPath $firmwareTarget -Recurse -Directory |
+        Where-Object { $_.Name -in @("Debug", "Release") } |
+        Sort-Object { $_.FullName.Length } -Descending |
+        Remove-Item -Recurse -Force
+    Get-ChildItem -LiteralPath $firmwareTarget -Recurse -File |
+        Where-Object { $_.Name -eq "language.settings.xml" } |
+        Remove-Item -Force
+}
+
 $documentationTarget = Join-Path $destinationPath "docs"
 New-Item -ItemType Directory -Path $documentationTarget | Out-Null
-foreach ($document in @(
+$documents = @(
     "build_setup.md",
     "alazar_supported_models.md",
     "configuration.md",
@@ -57,14 +70,25 @@ foreach ($document in @(
     "device_protocols.md",
     "hardware_acceptance.md",
     "phase_status.md"
-)) {
+)
+foreach ($document in $documents) {
     Copy-Item -LiteralPath (Join-Path $repositoryRoot "docs\$document") -Destination $documentationTarget
 }
 
 $revision = "uncommitted-source"
 try {
     $revision = (git -C $repositoryRoot rev-parse HEAD).Trim()
-    if (-not [string]::IsNullOrWhiteSpace((git -C $repositoryRoot status --porcelain))) {
+    $revisionPaths = @($files) + @($directories)
+    $revisionPaths += $documents | ForEach-Object { "docs/$_" }
+    $statusArguments = @(
+        "-C", $repositoryRoot,
+        "status", "--porcelain", "--untracked-files=normal", "--"
+    ) + $revisionPaths
+    $sourceStatus = @(& git @statusArguments)
+    if ($LASTEXITCODE -ne 0) {
+        throw "git status failed while calculating the source revision"
+    }
+    if ($sourceStatus.Count -gt 0) {
         $revision = "$revision-dirty"
     }
 } catch {

@@ -79,14 +79,21 @@ fi
 
 qt_found=0
 qt_version=""
+qt_config_path=""
 if pkg-config --exists Qt6Core Qt6Gui Qt6Widgets Qt6OpenGL Qt6OpenGLWidgets 2>/dev/null; then
   qt_found=1
   qt_version="$(pkg-config --modversion Qt6Core)"
 elif [[ -n "${FMCW_JETSON_QT_ROOT:-}" && -d "${FMCW_JETSON_QT_ROOT}" ]]; then
   qt_found=1
-elif find /usr/lib /usr/local/lib -path '*/cmake/Qt6/Qt6Config.cmake' \
-     -print -quit 2>/dev/null | grep -q .; then
-  qt_found=1
+else
+  qt_config_path="$(
+    find /usr/lib /usr/local/lib \
+      -path '*/cmake/Qt6/Qt6Config.cmake' \
+      -print -quit 2>/dev/null || true
+  )"
+  if [[ -n "${qt_config_path}" ]]; then
+    qt_found=1
+  fi
 fi
 if [[ "${qt_found}" -eq 1 ]]; then
   if [[ -n "${qt_version}" ]]; then
@@ -96,7 +103,11 @@ if [[ "${qt_found}" -eq 1 ]]; then
       fail "Qt ${qt_version} is too old; version 6.2 or newer is required"
     fi
   else
-    pass "Qt 6 development files; CMake will verify version 6.2 or newer"
+    if [[ -n "${qt_config_path}" ]]; then
+      pass "Qt 6 development files: ${qt_config_path}; CMake will verify version 6.2 or newer"
+    else
+      pass "Qt 6 development files; CMake will verify version 6.2 or newer"
+    fi
   fi
 else
   fail "Qt 6.2+ development files were not found; install Qt or set FMCW_JETSON_QT_ROOT"
@@ -108,10 +119,28 @@ else
   fail "nvcc is missing; install the JetPack CUDA toolkit"
 fi
 
-if ldconfig -p 2>/dev/null | grep -q 'libcufft\.so'; then
-  pass "cuFFT runtime"
-elif find /usr/local/cuda -name 'libcufft.so*' -print -quit 2>/dev/null | grep -q .; then
-  pass "cuFFT runtime under /usr/local/cuda"
+cufft_library=""
+
+for candidate in \
+  /usr/local/cuda/targets/aarch64-linux/lib/libcufft.so \
+  /usr/local/cuda/lib64/libcufft.so
+do
+  if [[ -e "${candidate}" ]]; then
+    cufft_library="${candidate}"
+    break
+  fi
+done
+
+if [[ -z "${cufft_library}" ]]; then
+  cufft_library="$(
+    find -L /usr/local/cuda \
+      -name 'libcufft.so' \
+      -print -quit 2>/dev/null || true
+  )"
+fi
+
+if [[ -n "${cufft_library}" ]]; then
+  pass "cuFFT runtime: ${cufft_library}"
 else
   fail "libcufft.so was not found; install the JetPack CUDA toolkit"
 fi
@@ -138,6 +167,17 @@ if is_on "${FMCW_JETSON_WITH_ALAZAR:-ON}"; then
   fi
 else
   warn "Alazar adapter is disabled; only Simulator/Replay can be used"
+fi
+
+mcu_uart="${FMCW_JETSON_MCU_UART:-/dev/ttyTHS0}"
+if [[ -e "${mcu_uart}" ]]; then
+  if [[ -r "${mcu_uart}" && -w "${mcu_uart}" ]]; then
+    pass "Jetson 40-pin MCU UART: ${mcu_uart} (read/write access)"
+  else
+    warn "Jetson 40-pin MCU UART exists but is not accessible by $(id -un): ${mcu_uart}; add the user to dialout and log in again"
+  fi
+else
+  warn "Jetson 40-pin MCU UART is not visible: ${mcu_uart}; enable UART1 on J30 pins 8/10 with Jetson-IO"
 fi
 
 if [[ ! -f "${root_dir}/CMakeLists.txt" || ! -d "${root_dir}/src" ]]; then

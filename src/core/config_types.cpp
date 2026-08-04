@@ -110,6 +110,10 @@ std::string toString(SerialParity value) {
   return "none";
 }
 
+std::string toString(McuWaveformSource value) {
+  return value == McuWaveformSource::LegacyXymFile ? "legacy_xym_file" : "generated_raster";
+}
+
 bool fromString(std::string_view text, DigitizerChannel& value) {
   return parseEnum(text, value, {{"a", DigitizerChannel::A}, {"b", DigitizerChannel::B}});
 }
@@ -189,6 +193,11 @@ bool fromString(std::string_view text, SerialParity& value) {
   return parseEnum(text, value, {{"none", SerialParity::None},
                                  {"even", SerialParity::Even},
                                  {"odd", SerialParity::Odd}});
+}
+
+bool fromString(std::string_view text, McuWaveformSource& value) {
+  return parseEnum(text, value, {{"legacy_xym_file", McuWaveformSource::LegacyXymFile},
+                                 {"generated_raster", McuWaveformSource::GeneratedRaster}});
 }
 
 std::uint32_t derivedAScanCount(const SystemConfig& config) {

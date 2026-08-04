@@ -56,6 +56,12 @@ void PointCloudWidget::setSnapshot(std::shared_ptr<const PointCloudSnapshot> sna
   if (!snapshot || !snapshot->complete || snapshot == snapshot_) {
     return;
   }
+  const bool new_session = snapshot_ != nullptr &&
+      snapshot->scan_frame_index <= snapshot_->scan_frame_index;
+  if (new_session) {
+    accumulated_points_.clear();
+    spatial_bounds_valid_ = false;
+  }
   snapshot_ = std::move(snapshot);
   current_points_.clear();
   std::copy_if(snapshot_->points.begin(), snapshot_->points.end(), std::back_inserter(current_points_),
@@ -69,6 +75,9 @@ void PointCloudWidget::setSnapshot(std::shared_ptr<const PointCloudSnapshot> sna
     }
   }
   rebuildVertices();
+  if (!spatial_bounds_valid_) {
+    fitSpatialBounds();
+  }
   update();
 }
 
@@ -90,6 +99,7 @@ void PointCloudWidget::setAccumulate(bool enabled) {
     accumulated_points_ = current_points_;
   }
   rebuildVertices();
+  fitSpatialBounds();
   update();
 }
 
@@ -99,6 +109,7 @@ void PointCloudWidget::resetCamera() {
   zoom_ = 1.0F;
   pan_x_ = 0.0F;
   pan_y_ = 0.0F;
+  fitSpatialBounds();
   update();
 }
 
@@ -108,11 +119,11 @@ bool PointCloudWidget::saveCurrentCloud(const QString& path) const {
     return false;
   }
   QTextStream stream(&file);
-  stream << "x_m,y_m,z_m,intensity_db,velocity_mps\n";
+  stream << "x_m,y_m,z_m,intensity_db,velocity_mps,scan_x_command,scan_y_command\n";
   const auto& points = accumulate_ ? accumulated_points_ : current_points_;
   for (const auto& point : points) {
     stream << point.x << ',' << point.y << ',' << point.z << ',' << point.intensity << ','
-           << point.velocity << '\n';
+           << point.velocity << ',' << point.scan_x_command << ',' << point.scan_y_command << '\n';
   }
   return stream.status() == QTextStream::Ok;
 }
@@ -223,16 +234,8 @@ void PointCloudWidget::rebuildVertices() {
   const auto& points = accumulate_ ? accumulated_points_ : current_points_;
   vertices_.clear();
   if (points.empty()) {
-    center_x_ = center_y_ = center_z_ = 0.0F;
-    extent_ = 1.0F;
     return;
   }
-  float minimum_x = std::numeric_limits<float>::max();
-  float minimum_y = std::numeric_limits<float>::max();
-  float minimum_z = std::numeric_limits<float>::max();
-  float maximum_x = std::numeric_limits<float>::lowest();
-  float maximum_y = std::numeric_limits<float>::lowest();
-  float maximum_z = std::numeric_limits<float>::lowest();
   float minimum_value = std::numeric_limits<float>::max();
   float maximum_value = std::numeric_limits<float>::lowest();
   const auto valueFor = [this](const PointXYZI& point) {
@@ -241,20 +244,10 @@ void PointCloudWidget::rebuildVertices() {
     return std::sqrt(point.x * point.x + point.y * point.y + point.z * point.z);
   };
   for (const auto& point : points) {
-    minimum_x = std::min(minimum_x, point.x);
-    minimum_y = std::min(minimum_y, point.y);
-    minimum_z = std::min(minimum_z, point.z);
-    maximum_x = std::max(maximum_x, point.x);
-    maximum_y = std::max(maximum_y, point.y);
-    maximum_z = std::max(maximum_z, point.z);
     const auto value = valueFor(point);
     minimum_value = std::min(minimum_value, value);
     maximum_value = std::max(maximum_value, value);
   }
-  center_x_ = 0.5F * (minimum_x + maximum_x);
-  center_y_ = 0.5F * (minimum_y + maximum_y);
-  center_z_ = 0.5F * (minimum_z + maximum_z);
-  extent_ = std::max({maximum_x - minimum_x, maximum_y - minimum_y, maximum_z - minimum_z, 1.0e-4F});
   const auto value_span = std::max(maximum_value - minimum_value, 1.0e-6F);
   vertices_.reserve(points.size());
   for (const auto& point : points) {
@@ -264,6 +257,36 @@ void PointCloudWidget::rebuildVertices() {
     colorMap((valueFor(point) - minimum_value) / value_span, red, green, blue);
     vertices_.push_back({point.x, point.y, point.z, red, green, blue});
   }
+}
+
+void PointCloudWidget::fitSpatialBounds() {
+  const auto& points = accumulate_ ? accumulated_points_ : current_points_;
+  if (points.empty()) {
+    center_x_ = center_y_ = center_z_ = 0.0F;
+    extent_ = 1.0F;
+    spatial_bounds_valid_ = false;
+    return;
+  }
+  float minimum_x = std::numeric_limits<float>::max();
+  float minimum_y = std::numeric_limits<float>::max();
+  float minimum_z = std::numeric_limits<float>::max();
+  float maximum_x = std::numeric_limits<float>::lowest();
+  float maximum_y = std::numeric_limits<float>::lowest();
+  float maximum_z = std::numeric_limits<float>::lowest();
+  for (const auto& point : points) {
+    minimum_x = std::min(minimum_x, point.x);
+    minimum_y = std::min(minimum_y, point.y);
+    minimum_z = std::min(minimum_z, point.z);
+    maximum_x = std::max(maximum_x, point.x);
+    maximum_y = std::max(maximum_y, point.y);
+    maximum_z = std::max(maximum_z, point.z);
+  }
+  center_x_ = 0.5F * (minimum_x + maximum_x);
+  center_y_ = 0.5F * (minimum_y + maximum_y);
+  center_z_ = 0.5F * (minimum_z + maximum_z);
+  extent_ = std::max({maximum_x - minimum_x, maximum_y - minimum_y,
+                      maximum_z - minimum_z, 1.0e-4F});
+  spatial_bounds_valid_ = true;
 }
 
 }  // namespace fmcw

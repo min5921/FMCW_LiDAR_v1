@@ -50,7 +50,7 @@ edfa:
 | `storage` | raw/processed toggle, split/flush, queue | GB, frame |
 | `ui` | 2D/3D refresh rate, overlay, color map, last profile | Hz |
 | `calibration` | distance/velocity/angle correction and velocity wavelength | m, m/s, nm, deg |
-| `mcu` | optional UART, ACK, retry | baud, ms |
+| `mcu` | optional UART, waveform source/file, ACK, retry | baud, ms |
 
 `chirp_segmentation.mode`는 `up_chirp_only`만 허용한다. Digitizer는 up chirp trigger에서 전체 up/down 주기를 한 번에 받고, `up_segment`와 `down_segment`의 half-open range `[start, end)`를 후단 처리에 전달한다.
 
@@ -58,11 +58,11 @@ Laser 설정은 `sweep_bandwidth_hz`와 full triangular waveform의 `sweep_rate_
 
 Full-period sample segmentation은 Laser 설정과 독립적이다. 일반 development simulator와 replay는 UI 확인을 위한 제한된 pacing을 사용한다. `runtime.simulator_realtime_dma: true`인 ATS qualification simulator만 실제 trigger 부하를 재현하기 위해 `records_per_buffer / laser.sweep_rate_hz`를 DMA completion 주기로 사용한다. Digitizer simulator는 시작 시 96 ADC-count RMS Gaussian-like noise가 포함된 재현 가능한 signal template을 미리 생성하고 DMA slot별로 순환하여, runtime 난수 생성 비용 없이 Time Domain과 FFT가 실제 입력처럼 변하도록 한다. 실제 장비에서는 trigger timestamp와 DMA completion timestamp를 telemetry로 측정한다.
 
-`digitizer.board_profile`은 선택 가능한 sampling rate, input range, record alignment와 trigger range를 제한한다. 지원 범위는 SDK 25.1.0의 12-bit 및 `AUX_IN_TRIGGER_ENABLE` NPT Scan 조건을 모두 만족하는 11개 모델이며 상세 목록은 `docs/alazar_supported_models.md`에 있다. System/Board ID는 `1 / 1`, DC coupling과 `50 ohm`은 고정한다. 기존 `Board model` ComboBox에는 모델 번호만 표시하고 모델 변경 시 해당 capability의 setup 값을 다시 채우며 별도 진단 화면은 두지 않는다.
+`digitizer.board_profile`은 선택 가능한 sampling rate, input range, record alignment와 trigger range를 제한한다. 지원 범위는 SDK 25.1.0의 12-bit 및 `AUX_IN_TRIGGER_ENABLE` NPT Scan 조건을 모두 만족하는 11개 모델이며 상세 목록은 `docs/alazar_supported_models.md`에 있다. System/Board ID는 `1 / 1`, DC coupling과 `50 ohm`은 고정한다. `runtime.acquisition_source: alazar`에서는 SDK의 `AlazarGetBoardKind`로 모델을 자동 감지하고 `Board model`에는 읽기 전용 결과만 표시한다. 감지된 capability에 맞춰 sampling rate, input range, record/pre-trigger/trigger-delay alignment를 즉시 다시 채우므로 사용자가 모델을 선택하지 않는다. Simulator와 Replay는 저장된 `board_profile`을 장비 capability emulation과 raw 해석에 사용한다.
 
 Trigger는 `TRIG IN`, external, DC coupling contract를 사용한다. UI는 rising/falling edge, trigger delay, pre/post-trigger samples만 표시하며 analog `% FS` threshold는 제공하지 않는다. ATS SDK trigger level 인자는 내부 code `150`을 사용하고 외부 입력 range는 모델에 따라 `ETR_TTL` 또는 `ETR_5V`로 설정한다. AUX IN은 positive-slope `AUX_IN_TRIGGER_ENABLE` B-scan gate로 고정한다. Delay 기본값은 `0 samples`, trigger timeout은 `0 ticks`이며 record/pre-trigger/delay alignment는 선택 모델의 capability를 따른다.
 
-Scan 계산에서 A-scans/B-scan은 별도 입력값이 아니라 `digitizer.records_per_buffer`와 동일하다. B-scans/frame은 사용자가 지정하며, 한 프레임의 position 수는 두 값의 곱이다. B-scan rate와 period는 Alazar DMA buffer 완료 timestamp에서 실측하고, frame time은 실측 period와 B-scans/frame의 곱으로 계산한다. MCU의 100 kHz point rate는 전체 프레임 파형 cycle time 계산에만 사용한다.
+Scan 계산에서 A-scans/B-scan은 별도 입력값이 아니라 `digitizer.records_per_buffer`와 동일하다. B-scans/frame은 사용자가 지정하며, 한 프레임의 position 수는 두 값의 곱이다. B-scan rate와 period는 Alazar DMA buffer 완료 timestamp에서 실측하고, frame time은 실측 period와 B-scans/frame의 곱으로 계산한다. MCU의 100 kHz point rate는 전체 waveform cycle time과 A-scan-to-command mapping에 사용한다. `mcu.waveform_source: legacy_xym_file`에서는 `mcu.waveform_file`의 실제 point 수가 cycle 길이를 정하며 원본 M rising edge 수는 B-scans/frame과 같아야 한다. 원본 X/Y 순서가 vector scan 방향을 정하므로 `scan.bidirectional`은 적용하지 않는다. 각 command 축의 파일 전체 min/max는 `scan.x_start_deg`/`x_end_deg`와 `scan.y_start_deg`/`y_end_deg`에 선형 대응한다. `generated_raster`에서만 point 수를 `records_per_buffer * y_line_count`로 계산하고 `scan.bidirectional`을 적용한다. `scan.trigger_shift_samples`는 원본 X/Y, 원본 M, 좌표 anchor를 바꾸지 않고 업로드 직전에 출력 M/B-trigger bit만 반복 waveform 안에서 순환 이동한다. `0`은 원본 timing, 음수는 trigger advance, 양수는 trigger delay이며 100 kHz에서 1 sample은 10 us이다. 변경 후에는 `Apply Setup`과 waveform 재업로드가 필요하다.
 
 ## Single UI And Field Presentation
 
@@ -72,7 +72,13 @@ Scan 계산에서 A-scans/B-scan은 별도 입력값이 아니라 `digitizer.rec
 
 ### Runtime Acquisition Source
 
-The `runtime` profile group selects `simulator`, `alazar`, or `replay`. Source changes are restart-required settings and are available directly on the Digitizer page. `alazar` creates the selected supported ATS model plus MCU and EDFA serial adapters; `simulator` creates deterministic fake adapters; `replay` reads raw format v1 through the same acquisition and processing pipeline. Replay requires `runtime.replay_file`, while `runtime.replay_loop` controls end-of-stream looping. `runtime.simulator_realtime_dma` enables the bounded, absolute-cadence DMA ring used by `config/profiles/ats9371_200hz_simulator.yaml`; a full ring latches overflow instead of slowing or silently dropping input. Normal operation uses the GUI and saved profiles rather than command-line source options.
+The `runtime` profile group selects `simulator`, `alazar`, or `replay` for the digitizer only. Source changes are restart-required settings and are available directly on the Digitizer page. `alazar` auto-detects the supported ATS model at System 1 / Board 1, `simulator` creates the deterministic DMA source, and `replay` reads raw format v1 through the same acquisition and processing pipeline. Optional MCU and EDFA adapters are selected independently: enabled/controlled profiles always use the platform serial transport even while the digitizer is Simulator or Replay, while disabled/none profiles remain explicit bypasses. Replay requires `runtime.replay_file`, while `runtime.replay_loop` controls end-of-stream looping. `runtime.simulator_realtime_dma` enables the bounded, absolute-cadence DMA ring used by `config/profiles/ats9371_200hz_simulator.yaml`; a full ring latches overflow instead of slowing or silently dropping input. Normal operation uses the GUI and saved profiles rather than command-line source options.
+
+Laser / EDFA와 Scan / MCU의 `Serial port`는 Windows의 현재 COM 장치 또는 Jetson/Linux의 지원 tty 장치를 자동 검색하는 combo box다. Jetson에서는 MCU용 `/dev/ttyTHS0`을 `Jetson 40-pin UART (pins 8/10)`으로, EDFA용 `/dev/ttyUSB*`를 `USB UART`로 구분해 표시하고 각 장치 역할에 맞는 포트를 목록 앞에 배치한다. 새 장치를 연결한 뒤 refresh 버튼으로 목록을 갱신하고 선택한 뒤 `Apply Setup`과 `Connect`를 수행한다. MCU와 controlled EDFA가 같은 포트를 선택하면 검증 오류로 Apply와 Connect를 차단한다. Windows COM은 한 프로세스가 독점하므로 vendor controller나 다른 serial tool이 같은 포트를 열고 있으면 이를 닫은 뒤 연결해야 한다. Controlled mode는 APC만 지원하며 출력 setpoint 범위는 0.0~30.0 dBm이다. 연결 시 실제 mode, target, soft activation, input/output power, pump current를 읽어 표시한다. `Enable Output`은 APC mode와 UI setpoint를 장비 응답으로 확인한 뒤 activation을 요청하며, `Disconnect`, 전역 `STOP`, `E-STOP`은 serial port를 닫기 전에 output OFF를 시도한다.
+
+### Profile Load And Apply
+
+상단 profile 표시는 저장하거나 불러온 YAML 파일의 base name을 사용한다. `Load`는 새 설정을 controls에 staging하고 `APPLY REQUIRED` 상태로 전환하지만 현재 적용된 runtime config를 즉시 덮어쓰지 않는다. 이후 `Apply Setup` 또는 `Connect`가 성공해야 applied config와 revision이 갱신된다. 따라서 저장한 profile을 다시 불러왔을 때 기본 `ATS9371 200 Hz Simulator` 이름이나 이전 runtime 설정이 남지 않는다.
 
 전역 Basic/Advanced mode는 schema version 2부터 사용하지 않는다. 모든 설정 페이지는 항상 접근 가능하며, field policy의 `primary`는 페이지에 바로 표시하고 `detailed`는 같은 페이지의 `Details` 영역에 표시한다. 이 구분은 접근 권한이나 별도 운용 mode가 아니다.
 
@@ -91,7 +97,7 @@ UDP v1은 little-endian `FMCW` point packet을 사용한다. `packet_point_count
 - Laser group은 `sweep_bandwidth_hz`, `sweep_rate_hz`만 유지한다.
 - velocity wavelength는 `calibration.velocity_wavelength_nm`으로 이동한다.
 - 더 이상 사용하지 않는 `scan.line_time_ms`를 제거한다.
-- MCU waveform point 수는 `records_per_buffer * y_line_count`로 계산한다.
+- MCU `generated_raster` waveform point 수는 `records_per_buffer * y_line_count`로 계산하고, `legacy_xym_file`은 파일의 실제 point 수를 사용한다.
 - B-scan timing은 설정 파일 값이 아니라 runtime DMA telemetry로 기록한다.
 - 더 이상 지원하지 않는 `ui.mode` key를 제거한다.
 - `processing.normalize`, `processing.peak_tracking_*`, `processing.peak_lost_policy` key를 제거한다.

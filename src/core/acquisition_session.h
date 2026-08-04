@@ -6,6 +6,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <memory>
 #include <string>
 
 namespace fmcw {
@@ -37,6 +38,8 @@ class AcquisitionSession {
   IEdfaController& edfa_;
   IMcuController& mcu_;
   SystemConfig config_;
+  McuWaveformSnapshotPtr active_waveform_;
+  std::uint64_t scan_line_sequence_ = 0;
   std::atomic_uint64_t config_revision_{0};
   std::atomic_bool configured_{false};
   std::atomic_bool connected_{false};

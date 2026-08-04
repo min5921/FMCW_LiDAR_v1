@@ -68,7 +68,7 @@ build\preset-windows-msvc-debug\src\fmcw_lidar_windows.exe --demo-run --live-tab
 build\preset-windows-msvc-debug\src\fmcw_lidar_windows.exe --demo-run --page=5 --capture-segmentation --screenshot=outputs\phase5_segmentation.png
 ```
 
-`--page`는 0부터 7, `--live-tab`은 0부터 4 범위를 사용한다. demo screenshot은 B-scan line이 완성될 시간을 포함해 5.2초 후 저장하고 자동 종료한다.
+`--page`는 0부터 7, `--live-tab`은 0부터 5 범위를 사용한다. demo screenshot은 complete raster B-scan frame이 완성될 시간을 포함해 5.2초 후 저장하고 자동 종료한다.
 
 ## 5. Phase 6 Extension
 

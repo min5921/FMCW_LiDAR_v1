@@ -66,22 +66,36 @@ bool EdfaSerialController::connect(std::string& error) {
   }
   status_.device.connected = true;
   status_.device.ready = false;
-  if (!refreshReading(error)) {
+  if (!refreshDeviceState(error)) {
     transport_->close();
     status_.device.connected = false;
     return false;
   }
   status_.device.ready = true;
-  status_.device.detail = "EDFA connected and responding";
+  status_.device.detail = status_.output_enabled
+      ? "EDFA connected | output enabled"
+      : "EDFA connected | output disabled";
   return true;
 }
 
 void EdfaSerialController::disconnect() {
+  bool disable_output = false;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    disable_output = config_.mode == EdfaMode::Controlled &&
+        status_.output_enabled && transport_->isOpen();
+  }
+  if (disable_output) {
+    std::string ignored;
+    setOutputEnabled(false, ignored);
+  }
+
   std::lock_guard<std::mutex> lock(mutex_);
   transport_->close();
   status_.device.connected = false;
   status_.device.running = false;
   status_.output_enabled = false;
+  status_.telemetry_valid = false;
   status_.device.ready = config_.mode != EdfaMode::Controlled;
   status_.device.detail = config_.mode == EdfaMode::None ? "EDFA bypass active" : "EDFA disconnected";
 }
@@ -97,7 +111,12 @@ bool EdfaSerialController::setControlMode(EdfaControlMode mode, std::string& err
       !EdfaProtocol::decodeMode(response, status_.control_mode, error)) {
     return false;
   }
-  return status_.control_mode == mode;
+  if (status_.control_mode != mode) {
+    error = "EDFA confirmed a different control mode";
+    return false;
+  }
+  error.clear();
+  return true;
 }
 
 bool EdfaSerialController::setOutputSetpoint(const OpticalPowerSetpoint& setpoint, std::string& error) {
@@ -125,7 +144,8 @@ bool EdfaSerialController::setOutputSetpoint(const OpticalPowerSetpoint& setpoin
     error = "EDFA confirmed a different output setpoint";
     return false;
   }
-  status_.setpoint = setpoint;
+  status_.setpoint = {confirmed_dbm, OpticalPowerUnit::Dbm};
+  error.clear();
   return true;
 }
 
@@ -142,12 +162,20 @@ bool EdfaSerialController::setOutputEnabled(bool enabled, std::string& error) {
     return false;
   }
   if (confirmed != enabled) {
-    error = "EDFA activation state was not confirmed";
+    error = enabled
+        ? "EDFA rejected activation; verify the front-panel key is ON and the device is in normal state"
+        : "EDFA shutdown state was not confirmed";
     return false;
   }
   status_.output_enabled = enabled;
   status_.device.running = enabled;
+  std::string telemetry_error;
+  const bool telemetry_refreshed = refreshReading(telemetry_error);
   status_.device.detail = enabled ? "EDFA output enabled" : "EDFA output disabled";
+  if (!telemetry_refreshed) {
+    status_.device.detail += " | telemetry refresh failed: " + telemetry_error;
+  }
+  error.clear();
   return true;
 }
 
@@ -207,6 +235,38 @@ bool EdfaSerialController::refreshReading(std::string& error) {
     return false;
   }
   status_.measured_output_dbm = reading.output_power_dbm;
+  status_.measured_input_dbm = reading.input_power_dbm;
+  status_.measured_current_ma = reading.current_ma;
+  status_.telemetry_valid = true;
+  error.clear();
+  return true;
+}
+
+bool EdfaSerialController::refreshDeviceState(std::string& error) {
+  if (!refreshReading(error)) {
+    return false;
+  }
+
+  EdfaPacket response;
+  if (!transact(EdfaProtocol::queryMode(), response, error) ||
+      !EdfaProtocol::decodeMode(response, status_.control_mode, error)) {
+    return false;
+  }
+
+  double target_dbm = 0.0;
+  if (!transact(EdfaProtocol::queryTargetPower(), response, error) ||
+      !EdfaProtocol::decodePowerDbm(response, target_dbm, error)) {
+    return false;
+  }
+  status_.setpoint = {target_dbm, OpticalPowerUnit::Dbm};
+
+  bool output_enabled = false;
+  if (!transact(EdfaProtocol::queryActivation(), response, error) ||
+      !EdfaProtocol::decodeActivation(response, output_enabled, error)) {
+    return false;
+  }
+  status_.output_enabled = output_enabled;
+  status_.device.running = output_enabled;
   error.clear();
   return true;
 }

@@ -1,5 +1,7 @@
 #include "drivers/simulator/fake_mcu.h"
 
+#include "drivers/mcu/mcu_protocol.h"
+
 namespace fmcw {
 
 std::string FakeMcuController::name() const { return "Fake MEMS MCU"; }
@@ -16,6 +18,8 @@ bool FakeMcuController::configure(const SystemConfig& config, std::string& error
     return false;
   }
   config_ = config.mcu;
+  waveform_sample_rate_hz_ = config.scan.scanner_sample_rate_hz;
+  loaded_waveform_.reset();
   status_ = {};
   status_.device.detail = config_.enabled ? "MCU simulator configured" : "MCU disabled by profile";
   configured_ = true;
@@ -41,22 +45,60 @@ void FakeMcuController::disconnect() {
   status_.device.connected = false;
   status_.device.ready = !config_.enabled;
   status_.device.running = false;
+  status_.waveform_points = 0;
+  status_.marker_rising_edges = 0;
+  status_.waveform_sample_rate_hz = 0.0;
   status_.scan_enabled = false;
+  loaded_waveform_.reset();
+  status_.last_ack.clear();
   status_.device.detail = config_.enabled ? "MCU simulator disconnected" : "MCU bypass active";
 }
 
-bool FakeMcuController::uploadWaveform(const std::vector<McuWaveformFrame>& frames, std::string& error) {
+bool FakeMcuController::uploadWaveform(const std::vector<McuWaveformFrame>& frames, std::string& error,
+                                       const McuUploadProgressCallback& progress) {
   std::lock_guard<std::mutex> lock(mutex_);
+  const auto total_points = static_cast<std::uint32_t>(frames.size());
   if (!config_.enabled || !status_.device.connected || status_.scan_enabled || frames.empty() || frames.size() > 15000U) {
     error = "MCU waveform upload requires a connected idle MCU and 1..15000 points";
+    if (progress) {
+      progress(McuUploadProgress{McuUploadStage::Failed, 0, total_points, error});
+    }
     return false;
   }
-  status_.waveform_points = static_cast<std::uint32_t>(frames.size());
+  const auto pending_waveform = McuProtocol::snapshotForUploadedWaveform(
+      frames, waveform_sample_rate_hz_);
+  if (!pending_waveform) {
+    error = "MCU waveform requires finite X/Y commands and at least one B-trigger marker";
+    if (progress) {
+      progress(McuUploadProgress{McuUploadStage::Failed, 0, total_points, error});
+    }
+    return false;
+  }
+  if (progress) {
+    progress(McuUploadProgress{McuUploadStage::Clearing, 0, total_points,
+                               "Clearing simulated MCU waveform memory"});
+    progress(McuUploadProgress{McuUploadStage::Sending, total_points, total_points,
+                               "Sending simulated MCU waveform points"});
+    progress(McuUploadProgress{McuUploadStage::Verifying, total_points, total_points,
+                               "Verifying simulated MCU waveform"});
+  }
+  status_.waveform_points = total_points;
+  status_.marker_rising_edges = static_cast<std::uint32_t>(pending_waveform->logical_marker_indices.size());
+  status_.waveform_sample_rate_hz = pending_waveform->sample_rate_hz;
+  loaded_waveform_ = pending_waveform;
   status_.last_ack = "ACK:LOAD_DONE," + std::to_string(frames.size());
   status_.device.ready = true;
   status_.device.detail = "MCU simulator waveform loaded";
+  if (progress) {
+    progress(McuUploadProgress{McuUploadStage::Complete, total_points, total_points, status_.last_ack});
+  }
   error.clear();
   return true;
+}
+
+McuWaveformSnapshotPtr FakeMcuController::loadedWaveform() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return loaded_waveform_;
 }
 
 bool FakeMcuController::startScan(std::string& error) {
@@ -78,7 +120,8 @@ bool FakeMcuController::stopScan(std::string& error) {
   status_.scan_enabled = false;
   status_.device.running = false;
   status_.last_ack = "ACK:STOP";
-  status_.device.detail = config_.enabled ? "MCU simulator stopped" : "MCU bypass active";
+  status_.device.ready = !config_.enabled || status_.waveform_points > 0U;
+  status_.device.detail = config_.enabled ? "MCU simulator stopped; waveform retained" : "MCU bypass active";
   error.clear();
   return true;
 }

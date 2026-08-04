@@ -18,6 +18,7 @@ class QLabel;
 class QLineEdit;
 class QListWidget;
 class QPlainTextEdit;
+class QProgressBar;
 class QPushButton;
 class QSlider;
 class QSpinBox;
@@ -61,7 +62,16 @@ class MainWindow final : public QMainWindow {
   void loadConfigToControls(const SystemConfig& config, bool mark_pending = false);
   void populateDigitizerCapabilities(QString profile_id, double preferred_rate_hz,
                                      double preferred_range_volts, std::uint32_t preferred_impedance);
+  bool refreshDigitizerBoardModel();
+  void updateDigitizerBoardDisplay();
+  void refreshEdfaSerialPorts(QString preferred_port);
+  void refreshMcuSerialPorts(QString preferred_port);
+  void updateEdfaStatusDisplay();
   void updateRuntimeSourceControls();
+  void updateMcuWaveformControls();
+  void updateMcuUploadProgress(McuUploadProgress progress);
+  void updateMcuStatusDisplay();
+  void updateControlAvailability();
   void updateDerivedAcquisitionLabels();
   void updatePeakBinLimits();
   void updateLivePlotSubscription();
@@ -84,11 +94,15 @@ class MainWindow final : public QMainWindow {
   QString platform_name_;
   ApplicationController* controller_ = nullptr;
   SystemConfig config_;
+  SystemConfig controls_config_;
   RuntimeStatus runtime_status_;
   bool config_dirty_ = false;
   bool restart_dirty_ = false;
   bool loading_controls_ = false;
   bool freeze_live_ = false;
+  bool mcu_uploading_ = false;
+  McuUploadProgress mcu_upload_progress_state_;
+  QElapsedTimer mcu_upload_elapsed_timer_;
   QElapsedTimer generated_frame_rate_timer_;
   QElapsedTimer stop_stage_elapsed_timer_;
   std::uint64_t generated_frame_rate_count_ = 0;
@@ -146,7 +160,10 @@ class MainWindow final : public QMainWindow {
   QLineEdit* replay_file_ = nullptr;
   QToolButton* replay_browse_ = nullptr;
   QCheckBox* replay_loop_ = nullptr;
-  QComboBox* board_profile_ = nullptr;
+  QLabel* board_model_ = nullptr;
+  QString board_profile_id_;
+  QString alazar_detection_detail_;
+  bool alazar_board_detected_ = false;
   QLabel* board_address_ = nullptr;
   QComboBox* sample_rate_ = nullptr;
   QSpinBox* sample_point_ = nullptr;
@@ -166,11 +183,18 @@ class MainWindow final : public QMainWindow {
   QDoubleSpinBox* sweep_bandwidth_ = nullptr;
   QDoubleSpinBox* sweep_rate_ = nullptr;
   QComboBox* edfa_mode_ = nullptr;
-  QLineEdit* edfa_port_ = nullptr;
+  QComboBox* edfa_port_ = nullptr;
+  QToolButton* edfa_port_refresh_ = nullptr;
   QComboBox* edfa_control_mode_ = nullptr;
   QDoubleSpinBox* edfa_setpoint_ = nullptr;
   QSpinBox* edfa_warmup_ = nullptr;
   QPushButton* edfa_output_button_ = nullptr;
+  QLabel* edfa_connection_status_ = nullptr;
+  QLabel* edfa_activation_status_ = nullptr;
+  QLabel* edfa_target_status_ = nullptr;
+  QLabel* edfa_input_status_ = nullptr;
+  QLabel* edfa_output_status_ = nullptr;
+  QLabel* edfa_current_status_ = nullptr;
 
   QDoubleSpinBox* x_start_ = nullptr;
   QDoubleSpinBox* x_end_ = nullptr;
@@ -186,8 +210,14 @@ class MainWindow final : public QMainWindow {
   QLabel* frame_sync_state_ = nullptr;
   QCheckBox* bidirectional_ = nullptr;
   QCheckBox* mcu_enabled_ = nullptr;
-  QLineEdit* mcu_port_ = nullptr;
+  QComboBox* mcu_port_ = nullptr;
+  QToolButton* mcu_port_refresh_ = nullptr;
+  QComboBox* mcu_waveform_source_ = nullptr;
+  QLineEdit* mcu_waveform_file_ = nullptr;
+  QToolButton* mcu_waveform_browse_ = nullptr;
+  QSpinBox* mcu_trigger_shift_ = nullptr;
   QPushButton* upload_waveform_button_ = nullptr;
+  QProgressBar* mcu_upload_progress_ = nullptr;
   QLabel* mcu_waveform_state_ = nullptr;
 
   QComboBox* fft_backend_ = nullptr;

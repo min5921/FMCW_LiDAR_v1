@@ -220,6 +220,39 @@ AlazarDigitizer::~AlazarDigitizer() { disconnect(); }
 
 bool AlazarDigitizer::sdkAvailable() { return FMCW_HAS_ALAZAR_SDK != 0; }
 
+AlazarBoardDetection AlazarDigitizer::detectConnectedBoard() {
+  AlazarBoardDetection detection;
+  detection.sdk_available = sdkAvailable();
+#if FMCW_HAS_ALAZAR_SDK
+  const auto board = AlazarGetBoardBySystemID(kAlazarSystemId, kAlazarBoardId);
+  if (board == nullptr) {
+    detection.detail = "No Alazar board detected at System 1 / Board 1";
+    return detection;
+  }
+
+  detection.board_present = true;
+  detection.sdk_board_kind = static_cast<std::uint32_t>(AlazarGetBoardKind(board));
+  const auto* capabilities =
+      findDigitizerBoardCapabilitiesBySdkBoardKind(detection.sdk_board_kind);
+  if (capabilities == nullptr) {
+    detection.detail = "Detected Alazar board kind " +
+        std::to_string(detection.sdk_board_kind) +
+        ", but it is not in the supported 12-bit AUX trigger-enable model list";
+    return detection;
+  }
+
+  detection.supported = true;
+  detection.profile_id = capabilities->profile_id;
+  detection.display_name = capabilities->display_name;
+  detection.detail = capabilities->display_name +
+      " auto-detected at System 1 / Board 1";
+#else
+  detection.detail =
+      "Alazar SDK support is not built. Set ALAZAR_SDK_ROOT and reconfigure CMake";
+#endif
+  return detection;
+}
+
 std::string AlazarDigitizer::name() const { return "AlazarTech ATS AutoDMA digitizer"; }
 
 DigitizerTelemetry AlazarDigitizer::telemetry() const {

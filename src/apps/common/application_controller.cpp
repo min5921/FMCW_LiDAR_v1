@@ -97,21 +97,20 @@ class RuntimeWorker final : public QObject {
       session_->disconnect();
     }
     connected_ = false;
+    mcu_waveform_revision_ = 0;
     state_ = configured_ ? OperationState::Configured : OperationState::Disconnected;
     emitLog("INFO", "Device", "Runtime devices disconnected");
     publishStatus("Disconnected");
     emit commandCompleted("Disconnect", "Runtime devices disconnected");
   }
 
-  void startRuntime(SystemConfig config) {
+  void startRuntime() {
     if (running_) {
       reject("Start", "Acquisition is already running");
       return;
     }
-
-    QString error;
-    if (!configureRuntime(config, error)) {
-      fail("Start", error);
+    if (!configured_ || session_ == nullptr || processing_ == nullptr) {
+      reject("Start", "Apply Setup before starting acquisition");
       return;
     }
     if (!connected_) {
@@ -121,6 +120,14 @@ class RuntimeWorker final : public QObject {
         return;
       }
       connected_ = true;
+    }
+
+    const auto preflight = session_->telemetry();
+    if (config_.mcu.enabled &&
+        (!preflight.mcu.device.connected || !preflight.mcu.device.ready ||
+         preflight.mcu.waveform_points == 0U || mcu_waveform_revision_ != config_revision_)) {
+      reject("Start", "Upload the MCU waveform after the latest Apply Setup before starting");
+      return;
     }
 
     storage_.reset();
@@ -296,21 +303,39 @@ class RuntimeWorker final : public QObject {
   }
 
   void updateProcessingRuntime(ProcessingConfig config) {
-    if (!running_ || processing_ == nullptr) {
-      reject("Processing update", "Runtime processing updates require an active acquisition");
+    if (!configured_ || processing_ == nullptr) {
+      reject("Processing update", "Apply Setup before updating processing settings");
       return;
     }
     std::string error;
-    ++processing_revision_;
-    if (!processing_->updateRuntimeConfig(config, processing_revision_, error)) {
-      --processing_revision_;
+    const auto next_revision = processing_revision_ + 1U;
+    if (running_) {
+      if (!processing_->updateRuntimeConfig(config, next_revision, error)) {
+        reject("Processing update", qString(error));
+        return;
+      }
+      processing_revision_ = next_revision;
+      config_.processing = config;
+      emitLog("INFO", "Processing", "Peak and preprocessing settings queued for the next frame boundary");
+      publishStatus("Runtime processing settings updated");
+      emit commandCompleted("Processing update", "Settings apply on the next processed frame");
+      return;
+    }
+
+    auto candidate = config_;
+    candidate.processing = config;
+    auto replacement = std::make_unique<ProcessingService>(createFftBackend(config.fft_backend));
+    if (!replacement->configure(candidate, next_revision, error)) {
       reject("Processing update", qString(error));
       return;
     }
+    replacement->setSelectedRecordIndex(selected_record_index_);
+    processing_ = std::move(replacement);
+    processing_revision_ = next_revision;
     config_.processing = config;
-    emitLog("INFO", "Processing", "Peak and preprocessing settings queued for the next frame boundary");
-    publishStatus("Runtime processing settings updated");
-    emit commandCompleted("Processing update", "Settings apply on the next processed frame");
+    emitLog("INFO", "Processing", "Processing settings updated without reconnecting devices");
+    publishStatus("Processing settings updated; device state preserved");
+    emit commandCompleted("Processing update", "Settings updated without device reconnect");
   }
 
   void setSelectedAScanRuntime(std::uint32_t record_index) {
@@ -344,44 +369,131 @@ class RuntimeWorker final : public QObject {
 
   void setEdfaOutputRuntime(bool enabled) {
     std::string error;
-    if (adapters_.edfa == nullptr || !adapters_.edfa->setOutputEnabled(enabled, error)) {
+    if (adapters_.edfa == nullptr) {
+      reject("EDFA output", "EDFA controller is unavailable");
+      return;
+    }
+    if (enabled &&
+        (!adapters_.edfa->setControlMode(config_.edfa.control_mode, error) ||
+         !adapters_.edfa->setOutputSetpoint(config_.edfa.output_setpoint, error) ||
+         !adapters_.edfa->setOutputEnabled(true, error))) {
+      std::string ignored;
+      adapters_.edfa->emergencyOff(ignored);
       reject("EDFA output", qString(error));
+      publishStatus("EDFA output enable failed");
+      return;
+    }
+    if (!enabled && !adapters_.edfa->setOutputEnabled(false, error)) {
+      reject("EDFA output", qString(error));
+      publishStatus("EDFA output disable failed");
       return;
     }
     emitLog(enabled ? "WARNING" : "INFO", "EDFA",
-            enabled ? "EDFA output enabled independently of acquisition" : "EDFA output disabled");
+            enabled
+                ? QString("EDFA APC output enabled at %1 dBm")
+                      .arg(config_.edfa.output_setpoint.value, 0, 'f', 1)
+                : "EDFA output disabled");
     publishStatus(enabled ? "EDFA output enabled" : "EDFA output disabled");
     emit commandCompleted("EDFA output", enabled ? "Output enabled" : "Output disabled");
   }
 
   void uploadMcuWaveformRuntime() {
+    const auto report = [this](McuUploadStage stage, std::uint32_t completed,
+                               std::uint32_t total, const QString& detail) {
+      emit mcuUploadProgress(McuUploadProgress{
+          stage, completed, total, detail.toStdString()});
+    };
+    report(McuUploadStage::Preparing, 0, 0, "Preparing configured waveform");
     if (!connected_) {
+      report(McuUploadStage::Failed, 0, 0, "Connect the runtime before uploading a waveform");
       reject("MCU waveform", "Connect the runtime before uploading a waveform");
       return;
     }
     if (!config_.mcu.enabled) {
+      report(McuUploadStage::Complete, 0, 0, "MCU bypass active");
       emit commandCompleted("MCU waveform", "MCU is disabled; bypass remains ready");
       return;
     }
-    const auto x_count = derivedAScanCount(config_);
-    const auto y_count = config_.scan.y_line_count;
-    const auto point_count = derivedFramePointCount(config_);
     std::string error;
-    auto frames = McuProtocol::buildFullFrameWaveform(config_, error);
+    McuWaveformInfo waveform_info;
+    auto frames = McuProtocol::buildConfiguredWaveform(config_, waveform_info, error);
     if (frames.empty()) {
+      report(McuUploadStage::Failed, 0, 0, qString(error));
       reject("MCU waveform", qString(error));
       return;
     }
-    if (adapters_.mcu == nullptr || !adapters_.mcu->uploadWaveform(frames, error)) {
+    if (waveform_info.marker_rising_edges != config_.scan.y_line_count) {
+      const auto message = QString("Waveform contains %1 B-trigger rising edges, but B-scans / frame is %2")
+                               .arg(waveform_info.marker_rising_edges)
+                               .arg(config_.scan.y_line_count);
+      report(McuUploadStage::Failed, 0, waveform_info.output_point_count, message);
+      reject("MCU waveform", message);
+      return;
+    }
+    if (adapters_.mcu == nullptr) {
+      report(McuUploadStage::Failed, 0, waveform_info.output_point_count,
+             "MCU controller is not available");
+      reject("MCU waveform", "MCU controller is not available");
+      return;
+    }
+    const auto trigger_shift_us = static_cast<double>(waveform_info.trigger_shift_samples) *
+        1.0e6 / waveform_info.output_sample_rate_hz;
+    const auto trigger_shift_summary =
+        QString("B-trigger offset %1 samples (%2 us)")
+            .arg(waveform_info.trigger_shift_samples)
+            .arg(trigger_shift_us, 0, 'f', 1);
+    emitLog("INFO", "MCU",
+            QString("Uploading %1 points to %2 | %3")
+                .arg(waveform_info.output_point_count)
+                .arg(qString(adapters_.mcu->name()))
+                .arg(trigger_shift_summary));
+    bool failure_reported = false;
+    const auto progress = [this, &failure_reported](const McuUploadProgress& update) {
+      failure_reported = failure_reported || update.stage == McuUploadStage::Failed;
+      emit mcuUploadProgress(update);
+    };
+    if (!adapters_.mcu->uploadWaveform(frames, error, progress)) {
+      if (!failure_reported) {
+        report(McuUploadStage::Failed, 0, waveform_info.output_point_count, qString(error));
+      }
       reject("MCU waveform", qString(error));
       return;
     }
-    emitLog("INFO", "MCU", QString("Uploaded one full frame: %1 A-scans x %2 B-scans = %3 points")
-                                  .arg(x_count)
-                                  .arg(y_count)
-                                  .arg(point_count));
+    mcu_waveform_revision_ = config_revision_;
+    const auto loaded_status = adapters_.mcu->status();
+    if (waveform_info.source == McuWaveformSource::LegacyXymFile) {
+      auto message = QString("Uploaded legacy X/Y/M waveform: %1 source points @ %2 Hz -> %3 points @ %4 Hz | "
+                             "%5 B-trigger edges")
+                         .arg(waveform_info.source_point_count)
+                         .arg(waveform_info.source_sample_rate_hz, 0, 'g', 10)
+                         .arg(waveform_info.output_point_count)
+                         .arg(waveform_info.output_sample_rate_hz, 0, 'g', 10)
+                         .arg(waveform_info.marker_rising_edges);
+      if (waveform_info.resampled) {
+        message += " | resampled";
+      }
+      message += QString(" | command range X [%1, %2], Y [%3, %4] | direction from waveform | %5 | %6")
+                     .arg(waveform_info.minimum_x_command, 0, 'g', 6)
+                     .arg(waveform_info.maximum_x_command, 0, 'g', 6)
+                     .arg(waveform_info.minimum_y_command, 0, 'g', 6)
+                     .arg(waveform_info.maximum_y_command, 0, 'g', 6)
+                     .arg(trigger_shift_summary)
+                     .arg(qString(loaded_status.last_ack));
+      emitLog("INFO", "MCU", message);
+    } else {
+      emitLog("INFO", "MCU",
+              QString("Uploaded generated raster: %1 points | %2 B-trigger edges | %3")
+                  .arg(waveform_info.output_point_count)
+                  .arg(waveform_info.marker_rising_edges)
+                  .arg(trigger_shift_summary));
+    }
     publishStatus("MCU waveform loaded");
-    emit commandCompleted("MCU waveform", QString("%1-point full-frame waveform uploaded").arg(point_count));
+    emit commandCompleted("MCU waveform",
+                          QString("%1-point waveform uploaded | %2 B-triggers | %3 | %4")
+                              .arg(waveform_info.output_point_count)
+                              .arg(waveform_info.marker_rising_edges)
+                              .arg(trigger_shift_summary)
+                              .arg(qString(loaded_status.last_ack)));
   }
 
   void captureSegmentationSnapshotRuntime() {
@@ -416,6 +528,7 @@ class RuntimeWorker final : public QObject {
   void bscanReady(fmcw::BScanSnapshotPtr snapshot);
   void pointCloudReady(fmcw::PointCloudSnapshotPtr snapshot);
   void segmentationSnapshotReady(fmcw::WaveformSnapshotPtr snapshot);
+  void mcuUploadProgress(fmcw::McuUploadProgress progress);
   void logMessage(QString level, QString source, QString message);
   void commandFailed(QString command, QString message);
   void commandCompleted(QString command, QString message);
@@ -481,6 +594,7 @@ class RuntimeWorker final : public QObject {
     config_ = config;
     config_revision_ = next_revision;
     processing_revision_ = next_revision;
+    mcu_waveform_revision_ = 0;
     configured_ = true;
     state_ = OperationState::Configured;
 
@@ -739,6 +853,7 @@ class RuntimeWorker final : public QObject {
     status.processing_revision = processing_revision_;
     status.detail = detail;
     status.source_name = qString(toString(active_source_));
+    status.edfa_port = qString(config_.edfa.port);
     status.active_operation = active_operation_;
     AcquisitionTelemetrySnapshot telemetry;
     if (session_ != nullptr) {
@@ -751,11 +866,24 @@ class RuntimeWorker final : public QObject {
     status.digitizer_ready = telemetry.digitizer.device.ready;
     status.edfa_ready = telemetry.edfa.device.ready;
     status.edfa_bypassed = telemetry.edfa.bypassed;
+    status.edfa_connected = telemetry.edfa.device.connected;
     status.edfa_output_enabled = telemetry.edfa.output_enabled;
+    status.edfa_telemetry_valid = telemetry.edfa.telemetry_valid;
+    status.edfa_target_dbm = telemetry.edfa.setpoint.value;
+    status.edfa_current_ma = telemetry.edfa.measured_current_ma;
+    status.edfa_input_dbm = telemetry.edfa.measured_input_dbm;
+    status.edfa_output_dbm = telemetry.edfa.measured_output_dbm;
+    status.edfa_device_name = adapters_.edfa == nullptr ? QString() : qString(adapters_.edfa->name());
+    status.edfa_control_mode = qString(toString(telemetry.edfa.control_mode)).toUpper();
+    status.edfa_detail = qString(telemetry.edfa.device.detail);
     status.mcu_ready = telemetry.mcu.device.ready;
     status.mcu_bypassed = !config_.mcu.enabled;
-    status.mcu_waveform_loaded = telemetry.mcu.waveform_points > 0U;
+    status.mcu_scan_active = telemetry.mcu.scan_enabled;
+    status.mcu_waveform_loaded = telemetry.mcu.device.ready && telemetry.mcu.waveform_points > 0U &&
+        mcu_waveform_revision_ == config_revision_;
     status.mcu_waveform_points = telemetry.mcu.waveform_points;
+    status.mcu_last_ack = qString(telemetry.mcu.last_ack);
+    status.mcu_detail = qString(telemetry.mcu.device.detail);
     status.mcu_frame_time_ms = telemetry.mcu.waveform_points == 0U || !(config_.scan.scanner_sample_rate_hz > 0.0)
         ? 0.0
         : static_cast<double>(telemetry.mcu.waveform_points) * 1000.0 / config_.scan.scanner_sample_rate_hz;
@@ -848,6 +976,7 @@ class RuntimeWorker final : public QObject {
   OperationState state_ = OperationState::Disconnected;
   std::uint64_t config_revision_ = 0;
   std::uint64_t processing_revision_ = 0;
+  std::uint64_t mcu_waveform_revision_ = 0;
   std::uint32_t selected_record_index_ = 0;
   int active_live_plot_index_ = -1;
   WaveformSnapshotPtr last_waveform_snapshot_;
@@ -868,6 +997,7 @@ class RuntimeWorker final : public QObject {
 
 ApplicationController::ApplicationController(QString platform_name, QObject* parent) : QObject(parent) {
   qRegisterMetaType<RuntimeStatus>();
+  qRegisterMetaType<McuUploadProgress>();
   qRegisterMetaType<WaveformSnapshotPtr>();
   qRegisterMetaType<FftSnapshotPtr>();
   qRegisterMetaType<ScanLineSnapshotPtr>();
@@ -897,6 +1027,8 @@ ApplicationController::ApplicationController(QString platform_name, QObject* par
           Qt::DirectConnection);
   connect(worker_, &RuntimeWorker::segmentationSnapshotReady, this,
           &ApplicationController::segmentationSnapshotReady);
+  connect(worker_, &RuntimeWorker::mcuUploadProgress, this,
+          &ApplicationController::mcuUploadProgressChanged);
   connect(worker_, &RuntimeWorker::logMessage, this, &ApplicationController::logMessage);
   connect(worker_, &RuntimeWorker::commandFailed, this, &ApplicationController::commandFailed);
   connect(worker_, &RuntimeWorker::commandCompleted, this, &ApplicationController::commandCompleted);
@@ -1022,9 +1154,8 @@ void ApplicationController::disconnectSystem() {
   QMetaObject::invokeMethod(worker_, &RuntimeWorker::disconnectRuntime, Qt::QueuedConnection);
 }
 
-void ApplicationController::startSystem(const SystemConfig& config) {
-  QMetaObject::invokeMethod(worker_, [worker = worker_, config] { worker->startRuntime(config); },
-                            Qt::QueuedConnection);
+void ApplicationController::startSystem() {
+  QMetaObject::invokeMethod(worker_, &RuntimeWorker::startRuntime, Qt::QueuedConnection);
 }
 
 void ApplicationController::stopSystem() {

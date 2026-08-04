@@ -27,6 +27,14 @@ elif [[ -f "${root_dir}/SOURCE_REVISION.txt" ]]; then
   revision="$(head -n 1 "${root_dir}/SOURCE_REVISION.txt")"
 fi
 
+cmake_version_output="$(cmake --version)"
+cmake_version="${cmake_version_output%%$'\n'*}"
+cuda_version=""
+if command -v nvcc >/dev/null 2>&1; then
+  cuda_version_output="$(nvcc --version)"
+  cuda_version="${cuda_version_output##*$'\n'}"
+fi
+
 {
   printf 'FMCW LiDAR Jetson Release\n'
   printf 'Built UTC: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -36,9 +44,9 @@ fi
     printf 'Device: %s\n' "$(tr -d '\0' </proc/device-tree/model)"
   fi
   printf 'Kernel: %s\n' "$(uname -r)"
-  printf 'CMake: %s\n' "$(cmake --version | head -n 1)"
-  if command -v nvcc >/dev/null 2>&1; then
-    printf 'CUDA: %s\n' "$(nvcc --version | tail -n 1)"
+  printf 'CMake: %s\n' "${cmake_version}"
+  if [[ -n "${cuda_version}" ]]; then
+    printf 'CUDA: %s\n' "${cuda_version}"
   fi
 } >"${package_dir}/BUILD_INFO.txt"
 

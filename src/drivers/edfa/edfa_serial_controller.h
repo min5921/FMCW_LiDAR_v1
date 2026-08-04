@@ -28,6 +28,7 @@ class EdfaSerialController final : public IEdfaController {
  private:
   bool transact(const std::vector<std::uint8_t>& command, EdfaPacket& response, std::string& error);
   bool refreshReading(std::string& error);
+  bool refreshDeviceState(std::string& error);
 
   std::shared_ptr<ISerialTransport> transport_;
   mutable std::mutex mutex_;

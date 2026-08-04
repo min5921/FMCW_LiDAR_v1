@@ -1,1 +1,7 @@
 *.sh text eol=lf
+
+# Keep STM32Cube vendor-generated sources byte-compatible with upstream releases.
+src/firmware/mcu/FMCW_LiDAR_MCU/Drivers/** -whitespace
+src/firmware/mcu/FMCW_LiDAR_MCU/Core/Startup/** -whitespace
+src/firmware/mcu/FMCW_LiDAR_MCU/.mxproject -whitespace
+src/firmware/mcu/FMCW_LiDAR_MCU/*.ld -whitespace

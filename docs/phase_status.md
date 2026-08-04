@@ -107,7 +107,7 @@ Status: done
 - Versioned `FMCW` UDP point packets carry raster frame ID, config revision, timestamp, segment indices, and little-endian XYZ/intensity/velocity arrays.
 - A bounded asynchronous sender assembles complete raster frames and applies `latest_frame`, `preserve_frames`, or `stop_sending` queue policy without network I/O in the acquisition or processing loop.
 - Live View includes a Qt/OpenGL-backed 3D point-cloud tab with color modes, rotate, pan, zoom, reset, point size, accumulation, freeze, and CSV export.
-- B-scan snapshots publish at completed line boundaries; point-cloud snapshots publish only for complete raster frames and remain unchanged while the next frame is assembled.
+- Scan-line snapshots publish at completed line boundaries. B-scan and point-cloud snapshots publish only for complete raster frames and remain unchanged while the next frame is assembled.
 - Storage / UDP exposes packet version, points per packet, sender queue, backpressure policy, send FPS, packet count, queue use, and dropped-frame telemetry.
 
 Verification:
@@ -150,7 +150,7 @@ Phase 7.2 software verification:
 - Release CTest passed 5/5, including batch lifetime, finite worker shutdown, adapter factory, replay batch, and processing batch tests.
 - The global STOP regression test fixes the safety order as MCU trigger off, digitizer abort/stop, then controlled EDFA output off.
 - The packaged GUI simulator delivered 141 DMA batches / 9,024 records with queue 0/32 and no DMA drop or trigger miss.
-- `build/package/FMCW_LiDAR/FMCW_LiDAR.exe` matches the Release build SHA-256 `7ADB64661441A87C748D6D7B8D48EF36204588DB8791766D5895A08303DB2BB6`.
+- `build/package/FMCW_LiDAR/FMCW_LiDAR.exe` matches the Release build SHA-256 `CB99F1B6816CE59CCBF9ED33C7FACBDF3DCFDF6C7370F236F105BCD47F298728`.
 - ATS9371 was not connected, so the 10-minute hardware acceptance remains pending and Phase 7.2 stays in progress.
 - Software implementation commit: `3cfcea3`
 
@@ -223,9 +223,9 @@ ATS record-length and legacy XYZIV contract audit (2026-07-15):
 
 Complete-frame point-cloud publication refinement (2026-07-15):
 
-- B-scan continues to publish every completed scan line, but the 3D point cloud now publishes only after all configured raster lines are complete.
+- B-scan and 3D point-cloud snapshots publish together only after all configured raster lines are complete.
 - During assembly of the next raster, the last complete immutable point-cloud frame remains visible; partial rows never replace it.
-- The 3D widget rejects incomplete and duplicate snapshot pointers, preventing both line-by-line unfolding and repeated Accumulate insertion of the same frame.
+- The B-scan and 3D widgets reject incomplete snapshots, preventing line-by-line unfolding; duplicate snapshot pointers are not dispatched to the GUI.
 - Raster mapping remains legacy compatible: record index advances X within a B-scan and B-scan line index advances the Y scanner angle. The completed cloud may therefore span vertical Z according to the configured Y field of view.
 - Release CTest passed 5/5, including incomplete/complete/next-frame boundary assertions and the explicit CUDA/FFTW processing parity test.
 - Packaged GUI verification showed `Waiting for complete raster frame` at DMA 1 and switched only to `Frame 25 complete | 1600 points` after a full 64 x 25 raster was available.
@@ -411,3 +411,148 @@ Jetson Qt 6.2 dark-theme portability (2026-07-23):
   retained dark backgrounds and readable enabled/disabled controls. The
   refreshed package passed `--smoke-test`; its EXE SHA-256 is
   `A870F2F6119B2F6914C84C5926D5672480CCB5AD2BA255C01014E3A119E58AE0`.
+
+MCU firmware baseline (2026-07-27):
+
+- The active importable CubeMX/CubeIDE project is now
+  `src/firmware/mcu/FMCW_LiDAR_MCU`; `legacy/MEMS_control_v3` remains the
+  comparison baseline.
+- The obsolete TIM1 200 kHz-to-400 kHz path and PE9/PE14 assignment are absent
+  from the active `.ioc`, generated initialization, and user startup code.
+- TIM2 CH1/CH3 remain independent MEMS mirror PWM outputs. TIM6 remains the
+  100 kHz waveform point clock, PA9 is the B-scan marker, and PA11 is the
+  fail-low Mirrorcle output enable.
+- UART parsing and blocking replies run in the main loop through a bounded
+  receive ring. UART4 priority 0 preempts TIM6 priority 1.
+- START resets the TIM6 phase before enabling playback. STOP disables output
+  and marker before returning its ACK. Marker threshold handling is consistent
+  for both frame load APIs, and UART numeric overflow is rejected.
+- STM32CubeIDE 2.0.0 Debug and Release builds passed with 0 errors and 0 warnings. Physical
+  MEMS PWM, marker width/position, raster motion, and Alazar alignment remain
+  hardware acceptance work.
+
+Legacy MCU waveform and Jetson dependency hardening (2026-07-27):
+
+- Scan / MCU now supports the legacy `sps` plus X/Y/M text format and the
+  generated raster as explicit waveform sources. The packaged default asset is
+  `config/waveforms/mems_xym_100ksps.txt`.
+- The active legacy asset matches the supplied source SHA-256, contains 10,388
+  points at 100 kS/s, and produces 12 B-trigger rising edges. Upload rejects a
+  marker-edge count that differs from the configured B-scans/frame.
+- The converter retains the legacy differential DAC mapping. A non-100 kS/s
+  source uses X/Y linear and M nearest-neighbor conversion to the fixed TIM6
+  100 kHz rate; the 15,000-point firmware limit remains enforced.
+- Jetson Qt and cuFFT dependency searches no longer use early-exit grep/head
+  pipelines under `set -Eeuo pipefail`. cuFFT checks both Jetson target and
+  lib64 paths, follows `/usr/local/cuda` symlinks with `find -L`, and reports
+  the detected library path. A missing Alazar device node remains warning-only.
+- Windows MSVC Release and CTest passed 9/9. All Jetson Bash scripts passed
+  `bash -n`, and the source bundle was regenerated. Native 20-run dependency
+  and clean CUDA build verification remain to be run on the AGX Orin.
+- Packaged Windows EXE SHA-256 is
+  `A7306824E2E95B539B758790A15318E9F433898B99392A27EFE9031B36A3FDE4`.
+
+Complete-frame B-scan publication (2026-07-28):
+
+- Scan-line aggregation continues for every 998-record DMA buffer, but the
+  immutable `BScanSnapshot` is now published only when all configured raster
+  lines are complete. Partial work buffers are never exposed to the heatmap.
+- While the next raster is assembled, Live View retains the previous complete
+  B-scan. The B-scan and point-cloud pointers are replaced together at the
+  complete-frame boundary.
+- The heatmap reports `Frame N complete` and the full line count. Simulator
+  rendering verified a complete 998 x 25 image without line-by-line unfolding.
+- Windows MSVC Release and CTest passed 9/9, including CPU FFTW, CUDA cuFFT,
+  and continuous real-time paths. The refreshed packaged EXE passed
+  `--smoke-test`; its SHA-256 is
+  `D444211E50D9D7F95A73CA2B43E7FB6355A91F1AD66BE542826EBF978E5C28DB`.
+- The Jetson source folder and ZIP were regenerated from the shared source;
+  `SOURCE_MANIFEST.sha256` verification reported zero mismatches.
+
+MCU B-trigger timing compensation (2026-07-28):
+
+- Hardware START testing showed that TIM6 priority 0 could starve the active
+  main-loop ACK and UART receive path. The active CubeMX `.ioc` and generated
+  MSP source therefore assign priority 0 to UART4 and priority 1 to TIM6.
+  This correction is applied only to the active firmware project.
+- Scan / MCU exposes the existing `scan.trigger_shift_samples` setting as
+  `B-trigger offset`. Zero preserves the source M timing, a negative value
+  advances it, and a positive value delays it at 10 us per MCU sample.
+- Offset processing circularly shifts only the converted M/B-trigger bits at
+  upload time. X/Y DAC words and the legacy M threshold remain unchanged, and
+  marker rising-edge validation is evaluated across the repeating boundary.
+- Windows MSVC Release and CTest passed 9/9. STM32 Debug and Release both built
+  successfully; sizes were 47,212/100/303,020 and 27,236/100/303,020 bytes for
+  text/data/BSS respectively.
+- The refreshed Windows package passed `--smoke-test`; its EXE SHA-256 is
+  `72AE37283C0F792B4284A5420E7CD33FD4347460589658226A8737EC422FFDB2`.
+  The regenerated Jetson source manifest reported zero mismatches.
+- Oscilloscope verification of the physical PA9 edge relative to the fast-axis
+  waveform remains required; software verification does not determine the
+  final hardware compensation value.
+
+Profile staging and automatic Alazar model detection (2026-07-28):
+
+- Loaded YAML is retained as the controls/staged configuration while the last
+  successfully applied runtime configuration remains separate. `Apply Setup`
+  can no longer incorrectly report no changes immediately after profile load.
+- The command-bar profile name follows the YAML file base name on load/save.
+- The Digitizer page no longer exposes a manual board-model selector. Hardware
+  mode resolves System 1 / Board 1 with `AlazarGetBoardKind`, displays the model
+  read-only, and repopulates sampling/range/alignment controls from that model's
+  capability. Simulator and Replay retain the profile's emulated model.
+- The Windows SDK test detected ATS9371 at System 1 / Board 1. Release build,
+  packaged Qt smoke startup, and CTest passed 9/9. The shared Jetson source
+  folder and ZIP were regenerated with zero source-manifest mismatches.
+
+EDFA control and serial-port selection hardening (2026-08-03):
+
+- Optional MCU and EDFA hardware are independent from the digitizer source.
+  Simulator and Replay can therefore drive a real serial EDFA while the
+  digitizer remains synthetic or file backed.
+- Laser / EDFA now lists detected Windows COM or Jetson/Linux tty ports in a
+  refreshable combo box. A saved unavailable port remains visible as
+  `not detected`, and dropdown indicators are visible in the dark theme.
+- Controlled output is restricted to the implemented APC schema and supports
+  the device's 0.0 to 30.0 dBm range. Connection reads the actual mode, target,
+  activation, input/output power, and pump current instead of showing local
+  placeholder state.
+- Independent Enable applies and confirms APC mode and the UI setpoint before
+  requesting soft activation. Disconnect, STOP, E-STOP, and rollback all try
+  to confirm output OFF before closing the serial transport.
+- A standalone read-only COM6 probe confirmed the device protocol with APC,
+  target 30.00 dBm, activation OFF, and live current/input/output telemetry.
+  The final GUI readback attempt was blocked before protocol exchange by
+  Win32 access denied because COM6 was owned by another process; the UI now
+  reports this as a port-in-use condition rather than an opaque error 5.
+- Windows MSVC Release and CTest passed 9/9. The standalone Windows test
+  package passed `--smoke-test`; its EXE SHA-256 is
+  `C9B98930E40DE9E2B3D3E61B8C33CD22BC62A26D58218C3938BC5609B5DA5E6D`.
+  The Jetson source package was regenerated and its 553-file manifest had zero
+  mismatches. Optical output activation was intentionally not performed.
+
+Vector waveform trajectory and stable spatial rendering (2026-08-04):
+
+- The uploaded X/Y/M vector is now the authoritative scan trajectory. Original
+  logical M edges anchor acquired lines while offset-adjusted emitted M edges
+  remain a separate PA9 timing contract, so trigger compensation cannot move
+  point coordinates.
+- A 200 kHz A-scan maps to the held 100 kS/s command with no interpolation.
+  Fast axis and direction come from each line's actual X/Y delta. Decreasing
+  lines preserve acquisition commands and angles while B-scan columns reverse
+  exactly once; no additional odd/even reversal is applied to vector input.
+- CPU/FFTW and CUDA/cuFFT share the same trajectory metadata and calibrated
+  Cartesian path. Point cloud and B-scan remain complete-frame publications.
+  The 3D view keeps fixed spatial bounds between frames and refits only for a
+  new session or the operator's Fit View action.
+- Processed storage is now `FMCWPRO2` and records trajectory provenance plus
+  source commands. CSV adds `scan_x_command` and `scan_y_command`; UDP v1 stays
+  binary-compatible XYZIV.
+- Windows MSVC Release and CTest passed 9/9, including the active 10,388-point
+  vector asset, CPU/CUDA, storage v2, UDP, and real-time probe paths. The
+  packaged EXE passed `--smoke-test`; SHA-256 is
+  `BCB88AF5C7DA16CA64FA3E27FE69285C8DD970F4E27C87EE6A856405367D5268`.
+- Jetson shell scripts passed `bash -n`. The regenerated source bundle has a
+  verified 266-file manifest and excludes CubeIDE Debug/Release output and
+  machine-specific indexer state. Physical command-to-angle calibration and
+  PA9-to-Alazar timing remain hardware acceptance work.

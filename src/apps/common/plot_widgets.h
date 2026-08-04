@@ -89,7 +89,8 @@ class HeatmapWidget final : public QWidget {
   explicit HeatmapWidget(QWidget* parent = nullptr);
 
   void setData(std::uint32_t width, std::uint32_t height, const std::vector<float>& values,
-               const std::vector<std::uint8_t>& valid, std::uint32_t completed_lines);
+               const std::vector<std::uint8_t>& valid, std::uint32_t completed_lines,
+               std::uint64_t scan_frame_index);
   void setAutoRange(bool enabled);
   void setManualRange(float minimum, float maximum);
   QPair<float, float> currentRange() const;
@@ -103,6 +104,7 @@ class HeatmapWidget final : public QWidget {
   std::uint32_t width_ = 0;
   std::uint32_t height_ = 0;
   std::uint32_t completed_lines_ = 0;
+  std::uint64_t scan_frame_index_ = 0;
   QVector<float> values_;
   QVector<std::uint8_t> valid_;
   bool auto_range_ = true;

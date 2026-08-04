@@ -13,6 +13,7 @@ fi
 for library_dir in \
   /usr/local/AlazarTech/lib \
   /usr/local/AlazarTech/lib64 \
+  /usr/local/cuda/targets/aarch64-linux/lib \
   /usr/local/cuda/lib64; do
   if [[ -d "${library_dir}" ]]; then
     export LD_LIBRARY_PATH="${library_dir}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
@@ -24,4 +25,5 @@ if [[ -z "${DISPLAY:-}" && -z "${WAYLAND_DISPLAY:-}" ]]; then
   exit 3
 fi
 
+cd -- "${package_dir}"
 exec "${executable}"

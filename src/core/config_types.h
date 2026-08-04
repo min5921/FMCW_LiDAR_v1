@@ -91,10 +91,18 @@ enum class SerialParity {
   Odd,
 };
 
+enum class McuWaveformSource {
+  LegacyXymFile,
+  GeneratedRaster,
+};
+
 struct OpticalPowerSetpoint {
   double value = 10.0;
   OpticalPowerUnit unit = OpticalPowerUnit::Dbm;
 };
+
+inline constexpr double kEdfaMinimumOutputDbm = 0.0;
+inline constexpr double kEdfaMaximumOutputDbm = 30.0;
 
 struct ProfileMetadata {
   std::uint32_t schema_version = kConfigSchemaVersion;
@@ -153,8 +161,8 @@ struct EdfaConfig {
   std::uint32_t timeout_ms = 500;
   EdfaControlMode control_mode = EdfaControlMode::Apc;
   OpticalPowerSetpoint output_setpoint;
-  double output_min_dbm = 0.0;
-  double output_max_dbm = 23.0;
+  double output_min_dbm = kEdfaMinimumOutputDbm;
+  double output_max_dbm = kEdfaMaximumOutputDbm;
   std::uint32_t warmup_delay_ms = 3000;
   bool stop_acquisition_on_disconnect = true;
 };
@@ -234,6 +242,8 @@ struct CalibrationConfig {
 struct McuConfig {
   bool enabled = false;
   std::string port;
+  McuWaveformSource waveform_source = McuWaveformSource::LegacyXymFile;
+  std::string waveform_file = "config/waveforms/mems_xym_100ksps.txt";
   std::uint32_t baud_rate = 115200;
   SerialParity parity = SerialParity::None;
   std::uint32_t stop_bits = 1;
@@ -281,6 +291,7 @@ std::string toString(OpticalPowerUnit value);
 std::string toString(QueueOverflowPolicy value);
 std::string toString(UdpBackpressurePolicy value);
 std::string toString(SerialParity value);
+std::string toString(McuWaveformSource value);
 
 bool fromString(std::string_view text, DigitizerChannel& value);
 bool fromString(std::string_view text, Coupling& value);
@@ -298,5 +309,6 @@ bool fromString(std::string_view text, OpticalPowerUnit& value);
 bool fromString(std::string_view text, QueueOverflowPolicy& value);
 bool fromString(std::string_view text, UdpBackpressurePolicy& value);
 bool fromString(std::string_view text, SerialParity& value);
+bool fromString(std::string_view text, McuWaveformSource& value);
 
 }  // namespace fmcw

@@ -31,8 +31,8 @@
 | Overview | readiness, device status, active profile, session summary, throughput/drop counters | waveform, FFT, B-scan |
 | Live View | Time Domain, FFT, Peak Analysis, Distance/Velocity, B-scan, 3D | hardware setup forms |
 | Digitizer | supported ATS model, fixed System 1 / Board 1, A or B channel, model-specific sample rate/range, DMA, detailed trigger | scanner Start/Stop |
-| Laser / EDFA | laser specification, EDFA none/manual/controlled, setpoint, output safety control | acquisition Start/Stop |
-| Scan / MCU | frame geometry, DMA-derived A-scans/B-scan, operator B-scans/frame, measured DMA rate/frame time, full-frame MCU waveform | local scan Start/Stop |
+| Laser / EDFA | laser specification, EDFA none/manual/controlled, detected serial-port selection, 0~30 dBm APC setpoint, actual device readback, output safety control | acquisition Start/Stop |
+| Scan / MCU | frame geometry, DMA-derived A-scans/B-scan, operator B-scans/frame, measured DMA rate/frame time, full-frame MCU waveform, M-only B-trigger offset | local scan Start/Stop |
 | Processing | FFT backend, window/DC, independent peak threshold/search, segmentation snapshot | FFT spectrum plot |
 | Storage / UDP | raw/processed save, path, queue, UDP endpoint/format | acquisition Start/Stop |
 | System Log | log filtering, alarms, diagnostics export | duplicated setup controls |
@@ -76,14 +76,16 @@ EDFA output on/off는 광 출력 안전 명령이므로 Laser / EDFA 페이지�
 - board capability, sampling rate, sample point, channel, input, DMA, trigger, FFT backend/length, scan, storage 설정은 Running 중 control을 잠근다.
 - restart-required 설정은 global `STOP` 후 수정하고 `Apply Setup`을 누른다.
 - `Apply Setup`은 필요 시 disconnect, configure, reconnect까지 수행하고 Ready에서 멈춘다. 안전을 위해 acquisition을 자동 재시작하지 않는다.
-- Digitizer sampling rate, input range, impedance는 선택한 board capability가 제공하는 ComboBox 값만 허용한다.
-- Digitizer record samples는 선택 모델의 최소값과 32/128-sample resolution을 강제하는 aligned numeric control을 사용하며, 지원되지 않는 typed value는 config에 확정하지 않는다.
+- Digitizer sampling rate, input range, impedance는 자동 감지되거나 profile에 저장된 board capability가 제공하는 ComboBox 값만 허용한다.
+- Digitizer record samples는 해당 모델의 최소값과 32/128-sample resolution을 강제하는 aligned numeric control을 사용하며, 지원되지 않는 typed value는 config에 확정하지 않는다.
 - Alazar System ID와 Board ID는 모두 1로 고정하며 UI에서 변경하지 않는다.
-- `Board model`에는 모델 번호만 표시하고 별도 진단 화면은 두지 않는다. 모델 변경 시 같은 페이지의 setup 선택값만 다시 채운다.
+- 실제 Alazar source의 `Board model`은 SDK에서 자동 감지한 모델 번호를 읽기 전용으로 표시하고 별도 진단 화면이나 수동 모델 선택을 두지 않는다. 감지 모델이 바뀌면 같은 페이지의 setup 선택값을 해당 capability로 다시 채운다. Simulator/Replay는 profile의 모델을 표시한다.
+- profile `Load`는 controls만 staging하고 `Apply Setup` 성공 전까지 applied runtime config를 보존한다. 상단 profile 이름은 저장/불러오기 파일명을 반영한다.
 - A-scans/B-scan은 records per buffer에서 파생하고 B-scans/frame은 사용자가 설정한다.
 - B-scan rate와 period는 Alazar DMA buffer 완료 간격에서 실측하며, measured frame time은 `period * B-scans/frame`으로 계산한다.
 - MCU cycle time은 전체 프레임 파형 point 수와 100 kHz point rate에서 별도로 계산한다.
 - DMA frame time과 MCU cycle time의 차이가 5%를 넘으면 Scan / MCU 페이지에 mismatch warning을 표시한다.
+- B-trigger offset은 MCU sample 단위로 표시하고 `0=원본`, 음수=advance, 양수=delay 의미를 tooltip에 명시한다. 이 값은 X/Y를 움직이지 않고 업로드 M bit에만 적용하며 변경 시 Apply Setup과 재업로드를 요구한다.
 
 ## 4. Qt Software Boundaries
 
@@ -133,7 +135,7 @@ UI는 다음 snapshot만 읽는다.
 | `FftSnapshot` | 20-60 Hz | up/down magnitude arrays, frequency/bin axis, detected peak markers |
 | `PeakAnalysisSnapshot` | per completed scan line | A-scan index, up/down peak index, magnitude, validity |
 | `DistanceVelocitySnapshot` | per completed scan line | pixel, distance, velocity, validity |
-| `BScanSnapshot` | 5-30 Hz | X pixel by B-scan line Z heatmap, min/max, validity mask |
+| `BScanSnapshot` | per complete raster frame, render capped at 5-30 Hz | X pixel by B-scan line Z heatmap, frame index, min/max, validity mask |
 | `PointCloudSnapshot` | per complete raster frame, render capped at 5-30 Hz | XYZ, intensity/velocity color scalar, frame/scan revision |
 | `SegmentationSnapshot` | on demand | one frozen full-period frame and editable segment overlay metadata |
 
@@ -178,12 +180,13 @@ Peak Analysis 탭은 FFT spectrum을 다시 그리지 않는다. 다음 두 plot
 - dense Time Domain trace는 원본 snapshot을 변경하지 않고 화면 가로 픽셀별 min/max 수직선을 batch draw하여 narrow peak와 노이즈 범위를 보존한다. FFT trace는 표시 bin만 integer polyline으로 batch draw하며 live trace에는 antialiasing을 적용하지 않는다.
 - Live View는 1초 집계로 DMA 생성 Hz, GUI 전달 Hz, 실제 data paint Hz, 표시에서 생략된 DMA sequence, paint 전에 합쳐진 GUI update, set/paint p95와 paint max를 보여준다. 이 값은 display 진단이며 acquisition drop과 구분한다.
 - Windows 기본 plot 갱신은 최대 60 Hz, Jetson은 기본 30 Hz로 제한하고 숫자와 상태 telemetry 갱신은 10 Hz로 분리한다. 정지/오류 플래그는 plot cadence에서 가볍게 확인하되 percentile 등 상태 집계는 10 Hz에서만 수행하며, acquisition 및 signal-processing cadence와 독립적이어야 한다.
-- Peak Analysis, Distance/Velocity, B-scan은 scan line 또는 frame aggregation 완료 시 publish한다.
+- Peak Analysis와 Distance/Velocity는 scan line 완료 시 publish한다. B-scan은 모든 line이 채워진 complete raster frame에서만 publish한다.
 - B-scan은 `X Pixel x B Scan` Z heatmap으로 표시한다.
-- 3D point cloud는 partial line을 표시하지 않고 모든 B-scan line이 완료된 raster frame만 교체한다. 다음 frame 수집 중에는 직전 complete frame을 유지한다.
+- B-scan과 3D point cloud는 partial line을 표시하지 않고 모든 B-scan line이 완료된 raster frame만 교체한다. 다음 frame 수집 중에는 직전 complete frame을 유지한다.
 - freeze는 acquisition/processing/storage를 멈추지 않고 화면 snapshot만 고정한다.
 - auto/manual range, cursor readout, plot save를 공통 plot toolbar로 제공한다.
 - 3D는 Qt/OpenGL-backed point renderer를 사용하고 acquisition과 독립 rate로 갱신한다.
+- 3D spatial bounds는 새 session의 첫 complete frame에서 한 번 맞춘 뒤 고정하고, 사용자가 Fit View를 실행할 때만 다시 계산한다. 물체 거리 변화만으로 view center/scale이 움직여서는 안 된다.
 - 3D 기능은 Phase 6의 실제 동작 tab으로 제공하며 빈 tab이나 disabled placeholder를 노출하지 않는다.
 - Processing의 `Batch Diagnostics` 상세 숫자는 Processing page가 보일 때만 Qt label에 반영한다. 다른 page에서는 마지막 표시값을 유지하되 signal processing, latency 계측, queue 감시와 STOP 정책은 계속 동작한다.
 

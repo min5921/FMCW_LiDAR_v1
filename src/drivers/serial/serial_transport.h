@@ -54,5 +54,6 @@ class PlatformSerialTransport final : public ISerialTransport {
 };
 
 std::vector<std::uint8_t> bytesFromString(const std::string& text);
+std::vector<std::string> availableSerialPorts();
 
 }  // namespace fmcw

@@ -7,6 +7,7 @@
 #include "storage/binary_storage.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -629,9 +630,8 @@ void testProcessingServiceSnapshots(const fmcw::SystemConfig& config,
   expect(fft && !fft->up_magnitude_db.empty(), "FFT snapshot is published");
   expect(line && line->distance_m.size() == config.scan.x_pixel_count,
          "completed scan line publishes peak and distance arrays");
-  expect(bscan && bscan->width == config.scan.x_pixel_count && bscan->height == config.scan.y_line_count &&
-             bscan->completed_lines == 1,
-         "completed line updates the X by B-scan forward-depth matrix");
+  expect(!bscan,
+         "an incomplete raster does not expose a partial B-scan image");
 }
 
 void testProcessingServiceBatch(const fmcw::SystemConfig& config,
@@ -847,6 +847,15 @@ void testBinaryStorageAndReplay(const fmcw::SystemConfig& config, fmcw::RawFrame
              std::filesystem::exists(directory / "session.processed.bin") &&
              std::filesystem::exists(directory / "session.processed.json"),
          "binary streams and JSON sidecars are created");
+  {
+    std::ifstream processed_stream(directory / "session.processed.bin", std::ios::binary);
+    std::array<char, 8> magic{};
+    std::uint32_t version = 0U;
+    processed_stream.read(magic.data(), static_cast<std::streamsize>(magic.size()));
+    processed_stream.read(reinterpret_cast<char*>(&version), sizeof(version));
+    expect(processed_stream && std::string(magic.data(), magic.size()) == "FMCWPRO2" && version == 2U,
+           "processed stream declares the trajectory-aware v2 format");
+  }
   fmcw::RawReplayReader replay;
   expect(replay.open(raw_path, error), "raw replay opens the stored stream");
   fmcw::RawFrame replayed;
@@ -972,23 +981,26 @@ void testBscanFrameBoundaryReset() {
 
   publish(1, 0, 0);
   publish(2, 1, 0);
+  expect(!snapshots.latestBScan(),
+         "an incomplete first raster does not publish a B-scan snapshot");
   expect(!snapshots.latestPointCloud(),
          "an incomplete raster does not publish a 3D point-cloud snapshot");
   publish(3, 0, 1);
   publish(4, 1, 1);
   auto bscan = snapshots.latestBScan();
-  expect(bscan && bscan->completed_lines == 2 && bscan->scan_frame_index == 0 &&
+  expect(bscan && bscan->complete && bscan->completed_lines == 2 && bscan->scan_frame_index == 0 &&
              bscan->depth_m[3] == 1.0F,
-         "first raster frame completes both B-scan lines with forward depth");
+         "first complete raster atomically publishes the B-scan depth image");
   const auto cloud = snapshots.latestPointCloud();
   expect(cloud && cloud->complete && cloud->points.size() == 4U && cloud->points[3].valid,
          "completed raster publishes an immutable 3D point-cloud snapshot");
 
   publish(5, 0, 0);
   publish(6, 1, 0);
-  bscan = snapshots.latestBScan();
-  expect(bscan && bscan->completed_lines == 1 && bscan->scan_frame_index == 1 && bscan->valid[2] == 0U,
-         "new raster frame clears rows from the previous B-scan frame");
+  const auto next_bscan = snapshots.latestBScan();
+  expect(next_bscan == bscan && next_bscan->complete && next_bscan->scan_frame_index == 0 &&
+             next_bscan->valid[2] != 0U,
+         "an incomplete next raster keeps the last complete B-scan frame visible");
   const auto next_cloud = snapshots.latestPointCloud();
   expect(next_cloud == cloud && next_cloud->complete && next_cloud->scan_frame_index == 0 &&
              next_cloud->points[3].valid,
@@ -996,6 +1008,11 @@ void testBscanFrameBoundaryReset() {
 
   publish(7, 0, 1);
   publish(8, 1, 1);
+  const auto completed_next_bscan = snapshots.latestBScan();
+  expect(completed_next_bscan && completed_next_bscan != bscan && completed_next_bscan->complete &&
+             completed_next_bscan->scan_frame_index == 1 &&
+             completed_next_bscan->completed_lines == 2,
+         "the B-scan image is replaced exactly once when the next raster frame completes");
   const auto completed_next_cloud = snapshots.latestPointCloud();
   expect(completed_next_cloud && completed_next_cloud != cloud && completed_next_cloud->complete &&
              completed_next_cloud->scan_frame_index == 1 && completed_next_cloud->completed_lines == 2,

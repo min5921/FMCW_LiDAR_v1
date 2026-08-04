@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstring>
+#include <filesystem>
 #include <thread>
 
 #if defined(FMCW_TARGET_WINDOWS)
@@ -24,6 +25,18 @@ namespace {
 
 std::string windowsError(const char* operation) {
   return std::string(operation) + " failed with Win32 error " + std::to_string(GetLastError());
+}
+
+std::string windowsSerialOpenError(const std::string& port, DWORD code) {
+  if (code == ERROR_ACCESS_DENIED || code == ERROR_SHARING_VIOLATION) {
+    return "Serial port " + port +
+        " is already in use or access was denied; close other serial/control software and retry";
+  }
+  if (code == ERROR_FILE_NOT_FOUND || code == ERROR_PATH_NOT_FOUND) {
+    return "Serial port " + port +
+        " is no longer available; refresh the detected port list and select a connected device";
+  }
+  return "Opening serial port " + port + " failed with Win32 error " + std::to_string(code);
 }
 
 std::string normalizedPort(std::string port) {
@@ -63,6 +76,24 @@ std::string posixError(const char* operation) {
   return std::string(operation) + " failed: " + std::strerror(errno);
 }
 
+std::string posixSerialOpenError(const std::string& port, int code) {
+  if (code == EACCES || code == EPERM) {
+    return "Serial port " + port +
+        " permission denied; add the login user to the dialout group, log in again, and retry";
+  }
+  if (code == EBUSY) {
+    return "Serial port " + port +
+        " is already in use; close serial-getty or another application using this UART";
+  }
+  if (code == ENOENT || code == ENODEV) {
+    const bool jetson_uart = port.rfind("/dev/ttyTHS", 0) == 0;
+    return "Serial port " + port + " is not available; " +
+        (jetson_uart ? "enable the Jetson header UART with Jetson-IO and refresh the port list" :
+                       "reconnect the device and refresh the port list");
+  }
+  return "Opening serial port " + port + " failed: " + std::strerror(code);
+}
+
 #endif
 
 }  // namespace
@@ -91,7 +122,7 @@ bool PlatformSerialTransport::open(const SerialSettings& settings, std::string& 
   impl_->handle = CreateFileA(port.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING,
                               FILE_ATTRIBUTE_NORMAL, nullptr);
   if (impl_->handle == INVALID_HANDLE_VALUE) {
-    error = windowsError("CreateFileA(serial)");
+    error = windowsSerialOpenError(settings.port, GetLastError());
     return false;
   }
 
@@ -139,7 +170,7 @@ bool PlatformSerialTransport::open(const SerialSettings& settings, std::string& 
   }
   impl_->fd = ::open(settings.port.c_str(), O_RDWR | O_NOCTTY | O_NONBLOCK);
   if (impl_->fd < 0) {
-    error = posixError("open(serial)");
+    error = posixSerialOpenError(settings.port, errno);
     return false;
   }
   termios tty{};
@@ -340,6 +371,36 @@ bool PlatformSerialTransport::readLine(std::string& line, std::chrono::milliseco
 
 std::vector<std::uint8_t> bytesFromString(const std::string& text) {
   return std::vector<std::uint8_t>(text.begin(), text.end());
+}
+
+std::vector<std::string> availableSerialPorts() {
+  std::vector<std::string> ports;
+#if defined(FMCW_TARGET_WINDOWS)
+  char target[4096]{};
+  for (int index = 1; index <= 256; ++index) {
+    const auto name = "COM" + std::to_string(index);
+    if (QueryDosDeviceA(name.c_str(), target, static_cast<DWORD>(sizeof(target))) != 0U) {
+      ports.push_back(name);
+    }
+  }
+#else
+  std::error_code error;
+  for (const auto& entry : std::filesystem::directory_iterator("/dev", error)) {
+    if (error) {
+      break;
+    }
+    const auto name = entry.path().filename().string();
+    const bool supported = name.rfind("ttyUSB", 0) == 0 || name.rfind("ttyACM", 0) == 0 ||
+        name.rfind("ttyTHS", 0) == 0 || name.rfind("ttyAMA", 0) == 0 ||
+        name.rfind("rfcomm", 0) == 0;
+    if (supported) {
+      ports.push_back(entry.path().string());
+    }
+  }
+#endif
+  std::sort(ports.begin(), ports.end());
+  ports.erase(std::unique(ports.begin(), ports.end()), ports.end());
+  return ports;
 }
 
 }  // namespace fmcw

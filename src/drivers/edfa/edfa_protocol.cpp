@@ -65,6 +65,12 @@ bool EdfaProtocol::parseResponse(const std::vector<std::uint8_t>& bytes, EdfaPac
 
 std::vector<std::uint8_t> EdfaProtocol::queryStatus() { return query(0x00); }
 
+std::vector<std::uint8_t> EdfaProtocol::queryTargetPower() { return query(0x03); }
+
+std::vector<std::uint8_t> EdfaProtocol::queryMode() { return query(0x05); }
+
+std::vector<std::uint8_t> EdfaProtocol::queryActivation() { return query(0x25); }
+
 std::vector<std::uint8_t> EdfaProtocol::setMode(EdfaControlMode mode) {
   std::uint8_t value = 0;
   switch (mode) {

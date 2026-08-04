@@ -26,6 +26,9 @@ class EdfaProtocol {
   static bool parseResponse(const std::vector<std::uint8_t>& bytes, EdfaPacket& packet, std::string& error);
 
   static std::vector<std::uint8_t> queryStatus();
+  static std::vector<std::uint8_t> queryTargetPower();
+  static std::vector<std::uint8_t> queryMode();
+  static std::vector<std::uint8_t> queryActivation();
   static std::vector<std::uint8_t> setMode(EdfaControlMode mode);
   static std::vector<std::uint8_t> setTargetPowerDbm(double dbm);
   static std::vector<std::uint8_t> setActivation(bool enabled);

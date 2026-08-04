@@ -275,6 +275,8 @@ ConfigDocument ConfigProfileCodec::encode(const SystemConfig& config) {
 
   document.setBoolean("mcu.enabled", config.mcu.enabled);
   document.setString("mcu.port", config.mcu.port);
+  document.setString("mcu.waveform_source", toString(config.mcu.waveform_source));
+  document.setString("mcu.waveform_file", config.mcu.waveform_file);
   setUnsigned(document, "mcu.baud_rate", config.mcu.baud_rate);
   document.setString("mcu.parity", toString(config.mcu.parity));
   setUnsigned(document, "mcu.stop_bits", config.mcu.stop_bits);
@@ -414,6 +416,8 @@ bool ConfigProfileCodec::decode(const ConfigDocument& document, SystemConfig& co
 
   readBool(document, "mcu.enabled", config.mcu.enabled, issues, source);
   readString(document, "mcu.port", config.mcu.port, issues, source);
+  readEnum(document, "mcu.waveform_source", config.mcu.waveform_source, issues, source);
+  readString(document, "mcu.waveform_file", config.mcu.waveform_file, issues, source);
   readInteger(document, "mcu.baud_rate", config.mcu.baud_rate, issues, source);
   readEnum(document, "mcu.parity", config.mcu.parity, issues, source);
   readInteger(document, "mcu.stop_bits", config.mcu.stop_bits, issues, source);

@@ -4,6 +4,9 @@
 #include "core/config_profile.h"
 #include "core/config_validation.h"
 #include "core/digitizer_capabilities.h"
+#include "drivers/alazar/alazar_digitizer.h"
+#include "drivers/mcu/mcu_protocol.h"
+#include "drivers/serial/serial_transport.h"
 
 #include <QApplication>
 #include <QAbstractSpinBox>
@@ -26,6 +29,7 @@
 #include <QMessageBox>
 #include <QPalette>
 #include <QPlainTextEdit>
+#include <QProgressBar>
 #include <QPushButton>
 #include <QScrollArea>
 #include <QSignalBlocker>
@@ -53,9 +57,15 @@ namespace {
 
 constexpr int kOverviewPageIndex = 0;
 constexpr int kLivePageIndex = 1;
+constexpr int kLaserEdfaPageIndex = 3;
 constexpr int kScanMcuPageIndex = 4;
 constexpr int kProcessingPageIndex = 5;
 constexpr qint64 kFrameRateSampleIntervalMs = 1000;
+
+enum class SerialPortRole {
+  Mcu,
+  Edfa,
+};
 
 QGroupBox* groupBox(const QString& title, QWidget* parent = nullptr) {
   auto* group = new QGroupBox(title, parent);
@@ -132,6 +142,86 @@ std::filesystem::path fileSystemPath(const QString& path) {
 #else
   return std::filesystem::path(path.toStdString());
 #endif
+}
+
+bool isJetsonPlatform(const QString& platform_name) {
+  return platform_name.compare(QStringLiteral("Jetson"), Qt::CaseInsensitive) == 0;
+}
+
+bool isUsbSerialPort(const QString& port) {
+  return port.startsWith(QStringLiteral("/dev/ttyUSB")) ||
+      port.startsWith(QStringLiteral("/dev/ttyACM"));
+}
+
+int serialPortPriority(const QString& port, const QString& platform_name,
+                       SerialPortRole role) {
+  if (!isJetsonPlatform(platform_name)) {
+    return 0;
+  }
+  if (role == SerialPortRole::Mcu) {
+    if (port == QStringLiteral("/dev/ttyTHS0")) {
+      return 0;
+    }
+    if (port.startsWith(QStringLiteral("/dev/ttyTHS"))) {
+      return 1;
+    }
+    return isUsbSerialPort(port) ? 2 : 3;
+  }
+  if (isUsbSerialPort(port)) {
+    return 0;
+  }
+  return port.startsWith(QStringLiteral("/dev/ttyTHS")) ? 2 : 1;
+}
+
+QString serialPortDisplayText(const QString& port, const QString& platform_name) {
+  if (!isJetsonPlatform(platform_name)) {
+    return port;
+  }
+  if (port == QStringLiteral("/dev/ttyTHS0")) {
+    return QStringLiteral("Jetson 40-pin UART (pins 8/10) | %1").arg(port);
+  }
+  if (port.startsWith(QStringLiteral("/dev/ttyTHS"))) {
+    return QStringLiteral("Jetson onboard UART | %1").arg(port);
+  }
+  if (port.startsWith(QStringLiteral("/dev/ttyUSB"))) {
+    return QStringLiteral("USB UART | %1").arg(port);
+  }
+  if (port.startsWith(QStringLiteral("/dev/ttyACM"))) {
+    return QStringLiteral("USB CDC UART | %1").arg(port);
+  }
+  return port;
+}
+
+void populateSerialPortCombo(QComboBox* combo, std::vector<std::string> ports,
+                             QString preferred_port, const QString& platform_name,
+                             SerialPortRole role) {
+  std::stable_sort(ports.begin(), ports.end(), [&](const std::string& lhs,
+                                                   const std::string& rhs) {
+    const auto lhs_port = QString::fromStdString(lhs);
+    const auto rhs_port = QString::fromStdString(rhs);
+    const auto lhs_priority = serialPortPriority(lhs_port, platform_name, role);
+    const auto rhs_priority = serialPortPriority(rhs_port, platform_name, role);
+    return lhs_priority == rhs_priority ? lhs_port < rhs_port : lhs_priority < rhs_priority;
+  });
+
+  const QSignalBlocker blocker(combo);
+  combo->clear();
+  combo->addItem(QStringLiteral("Select serial port"), QString());
+  for (const auto& port : ports) {
+    const auto value = QString::fromStdString(port);
+    combo->addItem(serialPortDisplayText(value, platform_name), value);
+  }
+
+  int selected_index = preferred_port.isEmpty() ? 0 : combo->findData(preferred_port);
+  if (!preferred_port.isEmpty() && selected_index < 0) {
+    combo->addItem(QStringLiteral("%1 | not detected")
+                       .arg(serialPortDisplayText(preferred_port, platform_name)),
+                   preferred_port);
+    selected_index = combo->count() - 1;
+  }
+  combo->setCurrentIndex(std::max(selected_index, 0));
+  combo->setToolTip(QStringLiteral("%1 serial port(s) detected")
+                        .arg(static_cast<qulonglong>(ports.size())));
 }
 
 QString sampleRateText(double sample_rate_hz) {
@@ -291,7 +381,6 @@ QString darkStyleSheet() {
     }
     QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus { border-color: #35b2a3; }
     QLineEdit:disabled, QComboBox:disabled, QSpinBox:disabled, QDoubleSpinBox:disabled { background: #171e21; color: #708086; border-color: #2a3438; }
-    QComboBox::drop-down { border: none; width: 24px; }
     QComboBox QAbstractItemView { background: #182125; color: #e1e8ea; border: 1px solid #425158; selection-background-color: #275f5a; }
     QCheckBox { color: #d6dfe1; spacing: 7px; }
     QCheckBox::indicator { width: 15px; height: 15px; border: 1px solid #53666d; border-radius: 2px; background: #12191d; }
@@ -299,6 +388,16 @@ QString darkStyleSheet() {
     QSlider::groove:horizontal { height: 4px; background: #344248; border-radius: 2px; }
     QSlider::sub-page:horizontal { background: #35b2a3; border-radius: 2px; }
     QSlider::handle:horizontal { width: 14px; margin: -5px 0; background: #dce7e8; border: 1px solid #54c1b4; border-radius: 7px; }
+    QProgressBar {
+      min-height: 22px;
+      border: 1px solid #3d4c52;
+      border-radius: 3px;
+      background: #12191d;
+      color: #dce5e7;
+      text-align: center;
+      font-weight: 600;
+    }
+    QProgressBar::chunk { background: #238b7b; }
     QTabWidget::pane { border: 1px solid #303c41; background: #192226; }
     QWidget#plotSurface { background-color: #151e22; color: #dce5e7; }
     QTabBar::tab {
@@ -396,6 +495,7 @@ MainWindow::MainWindow(QString platform_name, QWidget* parent)
   if (platform_name_.compare(QStringLiteral("Jetson"), Qt::CaseInsensitive) == 0) {
     config_.ui.plot_update_hz = 30.0;
     config_.processing.fft_backend = FftBackendKind::Cuda;
+    config_.mcu.port = "/dev/ttyTHS0";
   }
   setWindowTitle(QString("FMCW LiDAR v%1 - %2").arg(QString::fromStdString(versionString()), platform_name_));
   setMinimumSize(1180, 720);
@@ -700,7 +800,7 @@ QWidget* MainWindow::buildLivePage() {
   auto* accumulate = new QCheckBox("Accumulate", point_cloud_page);
   auto* reset_camera = new QToolButton(point_cloud_page);
   reset_camera->setIcon(style()->standardIcon(QStyle::SP_BrowserReload));
-  reset_camera->setToolTip("Reset 3D camera");
+  reset_camera->setToolTip("Fit the current cloud and reset the 3D camera");
   auto* save_cloud = new QToolButton(point_cloud_page);
   save_cloud->setIcon(style()->standardIcon(QStyle::SP_DialogSaveButton));
   save_cloud->setToolTip("Save current point cloud as CSV");
@@ -751,7 +851,7 @@ QWidget* MainWindow::buildLivePage() {
     } else if (live_tabs_->currentIndex() == 4) {
       heatmap = bscan_plot_;
     } else {
-      statusBar()->showMessage("3D view uses automatic spatial bounds", 3000);
+      statusBar()->showMessage("Use Fit View to update the fixed 3D spatial bounds", 3000);
       return;
     }
     const auto current = line_plot != nullptr ? line_plot->currentRange() : heatmap->currentRange();
@@ -820,12 +920,14 @@ QWidget* MainWindow::buildDigitizerPage() {
   replay_path_layout->addWidget(replay_file_, 1);
   replay_path_layout->addWidget(replay_browse_);
   replay_loop_ = new QCheckBox("Loop at end", board);
-  board_profile_ = new QComboBox(board);
-  for (const auto& capability : digitizerBoardCapabilities()) {
-    board_profile_->addItem(QString::fromStdString(capability.display_name),
-                            QString::fromStdString(capability.profile_id));
-  }
+  board_model_ = new QLabel("Detecting board", board);
+  board_model_->setWordWrap(true);
+  board_model_->setProperty("statusKind", "neutral");
+  board_model_->setToolTip(
+      "Alazar hardware is detected automatically at System 1 / Board 1. "
+      "Simulator and replay use the model stored in the loaded profile.");
   board_address_ = new QLabel("System 1 / Board 1 | fixed", board);
+  board_address_->setWordWrap(true);
   board_address_->setProperty("statusKind", "neutral");
   digitizer_channel_ = new QComboBox(board);
   digitizer_channel_->addItems({"Channel A", "Channel B"});
@@ -846,7 +948,7 @@ QWidget* MainWindow::buildDigitizerPage() {
   board_form->addRow("Runtime source", acquisition_source_);
   board_form->addRow("Replay file", replay_path);
   board_form->addRow("Replay mode", replay_loop_);
-  board_form->addRow("Board model", board_profile_);
+  board_form->addRow("Board model", board_model_);
   board_form->addRow("Board address", board_address_);
   board_form->addRow("Input channel", digitizer_channel_);
   board_form->addRow("Sampling rate", sample_rate_);
@@ -900,8 +1002,8 @@ QWidget* MainWindow::buildDigitizerPage() {
   layout->setColumnStretch(1, 1);
   layout->setRowStretch(1, 1);
   restart_required_controls_.append(QList<QWidget*>{acquisition_source_, replay_file_, replay_browse_, replay_loop_,
-      board_profile_, digitizer_channel_, sample_rate_, sample_point_,
-      input_range_, impedance_, coupling_, records_per_buffer_, dma_buffer_count_, trigger_slope_,
+      digitizer_channel_, sample_rate_, sample_point_, input_range_, impedance_, coupling_,
+      records_per_buffer_, dma_buffer_count_, trigger_slope_,
       trigger_delay_, pre_trigger_});
   return wrapInScrollArea(content);
 }
@@ -934,12 +1036,22 @@ QWidget* MainWindow::buildLaserEdfaPage() {
   tuneForm(edfa_form);
   edfa_mode_ = new QComboBox(edfa);
   edfa_mode_->addItems({"None / Bypass", "Manual", "Controlled"});
-  edfa_port_ = new QLineEdit(edfa);
-  edfa_port_->setPlaceholderText(platform_name_ == "Windows" ? "COM3" : "/dev/ttyUSB0");
+  auto* edfa_port_row = new QWidget(edfa);
+  auto* edfa_port_layout = new QHBoxLayout(edfa_port_row);
+  edfa_port_layout->setContentsMargins(0, 0, 0, 0);
+  edfa_port_layout->setSpacing(6);
+  edfa_port_ = new QComboBox(edfa_port_row);
+  edfa_port_->setSizeAdjustPolicy(QComboBox::AdjustToContents);
+  edfa_port_refresh_ = new QToolButton(edfa_port_row);
+  edfa_port_refresh_->setIcon(style()->standardIcon(QStyle::SP_BrowserReload));
+  edfa_port_refresh_->setToolTip("Refresh detected serial ports");
+  edfa_port_layout->addWidget(edfa_port_, 1);
+  edfa_port_layout->addWidget(edfa_port_refresh_);
+  refreshEdfaSerialPorts(QString::fromStdString(config_.edfa.port));
   edfa_control_mode_ = new QComboBox(edfa);
-  edfa_control_mode_->addItems({"APC", "ACC", "AGC"});
+  edfa_control_mode_->addItem("APC | Output power", static_cast<int>(EdfaControlMode::Apc));
   edfa_setpoint_ = new QDoubleSpinBox(edfa);
-  edfa_setpoint_->setRange(0.0, 23.0);
+  edfa_setpoint_->setRange(kEdfaMinimumOutputDbm, kEdfaMaximumOutputDbm);
   edfa_setpoint_->setDecimals(1);
   edfa_setpoint_->setSuffix(" dBm");
   edfa_warmup_ = new QSpinBox(edfa);
@@ -947,19 +1059,37 @@ QWidget* MainWindow::buildLaserEdfaPage() {
   edfa_warmup_->setSuffix(" ms");
   edfa_output_button_ = new QPushButton("Enable Output", edfa);
   edfa_output_button_->setToolTip("Independent optical output safety control");
+  auto statusLabel = [edfa] {
+    auto* label = new QLabel("Waiting for connection", edfa);
+    label->setWordWrap(true);
+    label->setProperty("statusKind", "neutral");
+    return label;
+  };
+  edfa_connection_status_ = statusLabel();
+  edfa_activation_status_ = statusLabel();
+  edfa_target_status_ = statusLabel();
+  edfa_input_status_ = statusLabel();
+  edfa_output_status_ = statusLabel();
+  edfa_current_status_ = statusLabel();
   edfa_form->addRow("Mode", edfa_mode_);
-  edfa_form->addRow("Serial port", edfa_port_);
+  edfa_form->addRow("Serial port", edfa_port_row);
   edfa_form->addRow("Control", edfa_control_mode_);
   edfa_form->addRow("Output setpoint", edfa_setpoint_);
   edfa_form->addRow("Warm-up", edfa_warmup_);
   edfa_form->addRow("Optical output", edfa_output_button_);
+  edfa_form->addRow("Connection", edfa_connection_status_);
+  edfa_form->addRow("Soft activation", edfa_activation_status_);
+  edfa_form->addRow("Device target", edfa_target_status_);
+  edfa_form->addRow("Input power", edfa_input_status_);
+  edfa_form->addRow("Output power", edfa_output_status_);
+  edfa_form->addRow("Pump current", edfa_current_status_);
   layout->addWidget(laser, 0, 0);
   layout->addWidget(edfa, 0, 1);
   layout->setColumnStretch(0, 1);
   layout->setColumnStretch(1, 1);
   layout->setRowStretch(1, 1);
   restart_required_controls_.append(QList<QWidget*>{sweep_bandwidth_, sweep_rate_,
-      edfa_mode_, edfa_port_, edfa_control_mode_, edfa_setpoint_, edfa_warmup_});
+      edfa_mode_, edfa_port_, edfa_port_refresh_, edfa_control_mode_, edfa_setpoint_, edfa_warmup_});
   return wrapInScrollArea(content);
 }
 
@@ -993,10 +1123,10 @@ QWidget* MainWindow::buildScanMcuPage() {
   frame_time_ = new QLabel("Waiting for DMA | measured at runtime", geometry);
   frame_time_->setProperty("statusKind", "neutral");
   bidirectional_ = new QCheckBox("Bidirectional raster", geometry);
-  geometry_form->addRow("X start", x_start_);
-  geometry_form->addRow("X end", x_end_);
-  geometry_form->addRow("Y start", y_start_);
-  geometry_form->addRow("Y end", y_end_);
+  geometry_form->addRow("X at command min", x_start_);
+  geometry_form->addRow("X at command max", x_end_);
+  geometry_form->addRow("Y at command min", y_start_);
+  geometry_form->addRow("Y at command max", y_end_);
   geometry_form->addRow("A-scans / B-scan", a_scan_count_);
   geometry_form->addRow("B-scans / frame", y_lines_);
   geometry_form->addRow("Positions / frame", frame_point_count_);
@@ -1008,8 +1138,40 @@ QWidget* MainWindow::buildScanMcuPage() {
   auto* mcu_form = new QFormLayout(mcu);
   tuneForm(mcu_form);
   mcu_enabled_ = new QCheckBox("Use MCU scan and trigger controller", mcu);
-  mcu_port_ = new QLineEdit(mcu);
-  mcu_port_->setPlaceholderText(platform_name_ == "Windows" ? "COM4" : "/dev/ttyACM0");
+  auto* mcu_port_row = new QWidget(mcu);
+  auto* mcu_port_layout = new QHBoxLayout(mcu_port_row);
+  mcu_port_layout->setContentsMargins(0, 0, 0, 0);
+  mcu_port_layout->setSpacing(6);
+  mcu_port_ = new QComboBox(mcu_port_row);
+  mcu_port_->setSizeAdjustPolicy(QComboBox::AdjustToContents);
+  mcu_port_refresh_ = new QToolButton(mcu_port_row);
+  mcu_port_refresh_->setIcon(style()->standardIcon(QStyle::SP_BrowserReload));
+  mcu_port_refresh_->setToolTip("Refresh detected serial ports");
+  mcu_port_layout->addWidget(mcu_port_, 1);
+  mcu_port_layout->addWidget(mcu_port_refresh_);
+  refreshMcuSerialPorts(QString::fromStdString(config_.mcu.port));
+  mcu_waveform_source_ = new QComboBox(mcu);
+  mcu_waveform_source_->addItem("Legacy X/Y/M file",
+                                static_cast<int>(McuWaveformSource::LegacyXymFile));
+  mcu_waveform_source_->addItem("Generated raster",
+                                static_cast<int>(McuWaveformSource::GeneratedRaster));
+  auto* waveform_file_row = new QWidget(mcu);
+  auto* waveform_file_layout = new QHBoxLayout(waveform_file_row);
+  waveform_file_layout->setContentsMargins(0, 0, 0, 0);
+  waveform_file_layout->setSpacing(6);
+  mcu_waveform_file_ = new QLineEdit(waveform_file_row);
+  mcu_waveform_file_->setPlaceholderText("Select a text file: sps, then X Y M rows");
+  mcu_waveform_browse_ = new QToolButton(waveform_file_row);
+  mcu_waveform_browse_->setIcon(style()->standardIcon(QStyle::SP_DirOpenIcon));
+  mcu_waveform_browse_->setToolTip("Select legacy X/Y/M waveform file");
+  waveform_file_layout->addWidget(mcu_waveform_file_, 1);
+  waveform_file_layout->addWidget(mcu_waveform_browse_);
+  mcu_trigger_shift_ = new QSpinBox(mcu);
+  mcu_trigger_shift_->setRange(-14999, 14999);
+  mcu_trigger_shift_->setSuffix(" samples");
+  mcu_trigger_shift_->setToolTip(
+      "Fine adjustment applied only to the uploaded M/B-trigger markers. "
+      "Negative advances and positive delays the trigger; one MCU sample is 10 us.");
   mcu_point_rate_ = new QLabel("100 kHz | firmware TIM6", mcu);
   mcu_point_rate_->setProperty("statusKind", "neutral");
   mcu_frame_time_ = new QLabel("16.000 ms | 1600 points / frame", mcu);
@@ -1017,22 +1179,33 @@ QWidget* MainWindow::buildScanMcuPage() {
   frame_sync_state_ = new QLabel("Waiting for DMA timing", mcu);
   frame_sync_state_->setProperty("statusKind", "neutral");
   upload_waveform_button_ = new QPushButton("Upload Waveform", mcu);
+  mcu_upload_progress_ = new QProgressBar(mcu);
+  mcu_upload_progress_->setRange(0, 100);
+  mcu_upload_progress_->setValue(0);
+  mcu_upload_progress_->setFormat("Idle");
   mcu_waveform_state_ = new QLabel("MCU bypass active", mcu);
+  mcu_waveform_state_->setWordWrap(true);
   mcu_waveform_state_->setProperty("statusKind", "neutral");
   mcu_form->addRow("Controller", mcu_enabled_);
-  mcu_form->addRow("Serial port", mcu_port_);
+  mcu_form->addRow("Serial port", mcu_port_row);
+  mcu_form->addRow("Waveform source", mcu_waveform_source_);
+  mcu_form->addRow("X/Y/M file", waveform_file_row);
+  mcu_form->addRow("B-trigger offset", mcu_trigger_shift_);
   mcu_form->addRow("Point rate", mcu_point_rate_);
-  mcu_form->addRow("Cycle / frame", mcu_frame_time_);
+  mcu_form->addRow("Cycle / waveform", mcu_frame_time_);
   mcu_form->addRow("DMA / MCU sync", frame_sync_state_);
   mcu_form->addRow("Full-frame waveform", upload_waveform_button_);
-  mcu_form->addRow("Readiness", mcu_waveform_state_);
+  mcu_form->addRow("Upload progress", mcu_upload_progress_);
+  mcu_form->addRow("Current status", mcu_waveform_state_);
   layout->addWidget(geometry, 0, 0);
   layout->addWidget(mcu, 0, 1);
   layout->setColumnStretch(0, 1);
   layout->setColumnStretch(1, 1);
   layout->setRowStretch(1, 1);
   restart_required_controls_.append(QList<QWidget*>{x_start_, x_end_, y_start_, y_end_, y_lines_, bidirectional_,
-      mcu_enabled_, mcu_port_, upload_waveform_button_});
+      mcu_enabled_, mcu_port_, mcu_port_refresh_, mcu_waveform_source_, mcu_waveform_file_,
+      mcu_waveform_browse_, mcu_trigger_shift_,
+      upload_waveform_button_});
   return wrapInScrollArea(content);
 }
 
@@ -1160,11 +1333,7 @@ QWidget* MainWindow::buildProcessingPage() {
       return;
     }
     const auto updated = configFromControls();
-    if (runtime_status_.running) {
-      controller_->updateProcessing(updated.processing);
-    } else {
-      controller_->applyConfig(updated);
-    }
+    controller_->updateProcessing(updated.processing);
   });
   return content;
 }
@@ -1278,7 +1447,14 @@ void MainWindow::connectUi() {
           [this](int page_index) {
             updateLivePlotSubscription();
             if (page_index == kScanMcuPageIndex) {
+              if (!runtime_status_.running) {
+                refreshMcuSerialPorts(mcu_port_->currentData().toString());
+              }
               updateDerivedAcquisitionLabels();
+            }
+            if (page_index == kLaserEdfaPageIndex && !runtime_status_.running) {
+              refreshEdfaSerialPorts(edfa_port_->currentData().toString());
+              updateEdfaStatusDisplay();
             }
             if (page_index == kProcessingPageIndex) {
               updateProcessingTelemetryLabels();
@@ -1295,6 +1471,12 @@ void MainWindow::connectUi() {
       controller_->disconnectSystem();
       return;
     }
+    if (static_cast<AcquisitionSource>(acquisition_source_->currentData().toInt()) ==
+            AcquisitionSource::Alazar &&
+        !refreshDigitizerBoardModel()) {
+      QMessageBox::warning(this, "Alazar board detection", alazar_detection_detail_);
+      return;
+    }
     if (validateControls(true)) {
       controller_->connectSystem(configFromControls());
     }
@@ -1304,8 +1486,16 @@ void MainWindow::connectUi() {
       controller_->stopSystem();
       return;
     }
+    if (mcu_uploading_) {
+      statusBar()->showMessage("START is locked until the MCU waveform upload finishes", 5000);
+      return;
+    }
+    if (config_dirty_) {
+      statusBar()->showMessage("Apply Setup before START", 5000);
+      return;
+    }
     if (validateControls(true)) {
-      controller_->startSystem(configFromControls());
+      controller_->startSystem();
     }
   });
   connect(emergency_button_, &QPushButton::clicked, this, [this] {
@@ -1317,9 +1507,42 @@ void MainWindow::connectUi() {
     }
   });
   connect(edfa_output_button_, &QPushButton::clicked, this, [this] {
-    controller_->setEdfaOutput(!runtime_status_.edfa_output_enabled);
+    const bool enable = !runtime_status_.edfa_output_enabled;
+    if (enable) {
+      const auto answer = QMessageBox::warning(
+          this, "Enable EDFA optical output",
+          QString("Enable APC output at %1 dBm?\n\n"
+                  "Confirm the optical path is enclosed or safely terminated and the EDFA key is ON.")
+              .arg(edfa_setpoint_->value(), 0, 'f', 1),
+          QMessageBox::Yes | QMessageBox::Cancel, QMessageBox::Cancel);
+      if (answer != QMessageBox::Yes) {
+        return;
+      }
+    }
+    controller_->setEdfaOutput(enable);
   });
-  connect(upload_waveform_button_, &QPushButton::clicked, controller_, &ApplicationController::uploadMcuWaveform);
+  connect(edfa_port_refresh_, &QToolButton::clicked, this, [this] {
+    refreshEdfaSerialPorts(edfa_port_->currentData().toString());
+  });
+  connect(edfa_mode_, &QComboBox::currentIndexChanged, this, [this] {
+    updateEdfaStatusDisplay();
+  });
+  connect(edfa_port_, &QComboBox::currentIndexChanged, this, [this] {
+    updateEdfaStatusDisplay();
+  });
+  connect(mcu_port_refresh_, &QToolButton::clicked, this, [this] {
+    refreshMcuSerialPorts(mcu_port_->currentData().toString());
+  });
+  connect(upload_waveform_button_, &QPushButton::clicked, this, [this] {
+    if (restart_dirty_) {
+      QMessageBox::information(this, "MCU waveform",
+                               "Apply Setup and reconnect before uploading the selected waveform.");
+      return;
+    }
+    updateMcuUploadProgress(McuUploadProgress{
+        McuUploadStage::Preparing, 0, 0, "Preparing configured waveform"});
+    controller_->uploadMcuWaveform();
+  });
   connect(freeze_button_, &QToolButton::toggled, this, [this](bool checked) {
     freeze_live_ = checked;
     freeze_button_->setIcon(style()->standardIcon(checked ? QStyle::SP_MediaPlay : QStyle::SP_MediaPause));
@@ -1328,27 +1551,51 @@ void MainWindow::connectUi() {
   });
 
   connect(controller_, &ApplicationController::statusChanged, this, &MainWindow::updateStatus);
+  connect(controller_, &ApplicationController::mcuUploadProgressChanged,
+          this, &MainWindow::updateMcuUploadProgress);
   connect(controller_, &ApplicationController::logMessage, this, &MainWindow::appendLog);
   connect(controller_, &ApplicationController::commandFailed, this, [this](const QString& command, const QString& message) {
+    if (command == "MCU waveform" && mcu_uploading_) {
+      auto failed = mcu_upload_progress_state_;
+      failed.stage = McuUploadStage::Failed;
+      failed.detail = message.toStdString();
+      updateMcuUploadProgress(std::move(failed));
+    }
     statusBar()->showMessage(QString("%1 failed: %2").arg(command, message), 8000);
   });
   connect(controller_, &ApplicationController::commandCompleted, this,
           [this](const QString& command, const QString& message) {
             statusBar()->showMessage(QString("%1: %2").arg(command, message), 5000);
             if (command == "Processing update") {
-              config_.processing = configFromControls().processing;
+              const auto candidate = configFromControls();
+              config_.processing = candidate.processing;
+              controls_config_.processing = candidate.processing;
               config_dirty_ = restart_dirty_;
               validateControls();
             } else if (command == "Apply configuration" || command == "Connect" || command == "Start") {
               config_ = configFromControls();
+              controls_config_ = config_;
               config_dirty_ = false;
               restart_dirty_ = false;
+              if (command != "Start") {
+                updateMcuUploadProgress(McuUploadProgress{});
+              }
               if (!runtime_status_.running) {
                 digitizer_lock_state_->setText("READY | board settings applied");
                 digitizer_lock_state_->setProperty("statusKind", "ready");
                 repolish(digitizer_lock_state_);
               }
+              updateMcuWaveformControls();
+              updateMcuStatusDisplay();
               validateControls();
+            } else if (command == "MCU waveform" && mcu_uploading_) {
+              auto complete = mcu_upload_progress_state_;
+              complete.stage = McuUploadStage::Complete;
+              complete.completed_points = complete.total_points;
+              complete.detail = message.toStdString();
+              updateMcuUploadProgress(std::move(complete));
+            } else if (command == "Disconnect") {
+              updateMcuUploadProgress(McuUploadProgress{});
             }
           });
   connect(controller_, &ApplicationController::waveformReady, this, [this](WaveformSnapshotPtr snapshot) {
@@ -1404,9 +1651,9 @@ void MainWindow::connectUi() {
                                 {"Velocity (m/s)", ownedPlotValues(std::move(velocity)), QColor("#ad4e61")}});
   });
   connect(controller_, &ApplicationController::bscanReady, this, [this](BScanSnapshotPtr snapshot) {
-    if (isLivePlotActive(4) && snapshot != nullptr) {
+    if (isLivePlotActive(4) && snapshot != nullptr && snapshot->complete) {
       bscan_plot_->setData(snapshot->width, snapshot->height, snapshot->depth_m, snapshot->valid,
-                           snapshot->completed_lines);
+                           snapshot->completed_lines, snapshot->scan_frame_index);
     }
   });
   connect(controller_, &ApplicationController::pointCloudReady, this, [this](PointCloudSnapshotPtr snapshot) {
@@ -1447,33 +1694,46 @@ void MainWindow::connectUi() {
           });
 
   const QList<QObject*> config_controls = {
-      acquisition_source_, replay_file_, replay_loop_, board_profile_, digitizer_channel_, sample_rate_,
+      acquisition_source_, replay_file_, replay_loop_, digitizer_channel_, sample_rate_,
       sample_point_, records_per_buffer_, dma_buffer_count_,
       input_range_, impedance_, coupling_, trigger_slope_, trigger_delay_, pre_trigger_,
       sweep_bandwidth_, sweep_rate_, edfa_mode_, edfa_port_,
       edfa_control_mode_, edfa_setpoint_, edfa_warmup_, x_start_, x_end_, y_start_, y_end_, y_lines_,
-      bidirectional_, mcu_enabled_, mcu_port_, fft_backend_, window_function_, dc_removal_,
+      bidirectional_, mcu_enabled_, mcu_port_, mcu_waveform_source_, mcu_waveform_file_, mcu_trigger_shift_,
+      fft_backend_, window_function_, dc_removal_,
       peak_threshold_, peak_start_, peak_end_,
       period_start_, up_start_, up_length_, down_start_, down_length_, guard_samples_, fft_length_,
       raw_enabled_, processed_enabled_,
       output_directory_, storage_queue_, split_size_, udp_enabled_, udp_ip_, udp_port_, udp_points_, udp_version_,
       udp_queue_, udp_policy_};
   const QList<QObject*> runtime_controls = {dc_removal_, peak_threshold_, peak_start_, peak_end_};
-  connect(board_profile_, &QComboBox::currentIndexChanged, this, [this] {
-    populateDigitizerCapabilities(
-        board_profile_->currentData().toString(),
-        sample_rate_->currentData().toDouble(),
-        input_range_->currentData().toDouble(),
-        impedance_->count() > 0 ? impedance_->currentData().toUInt() : 0U);
-  });
   connect(acquisition_source_, &QComboBox::currentIndexChanged,
-          this, [this] { updateRuntimeSourceControls(); });
+          this, [this] {
+            if (static_cast<AcquisitionSource>(acquisition_source_->currentData().toInt()) ==
+                AcquisitionSource::Alazar) {
+              refreshDigitizerBoardModel();
+            }
+            updateRuntimeSourceControls();
+          });
   connect(replay_browse_, &QToolButton::clicked, this, [this] {
     const auto path = QFileDialog::getOpenFileName(
         this, "Select raw replay", replay_file_->text(),
         "FMCW raw recording (*.raw.*.bin *.bin)");
     if (!path.isEmpty()) {
       replay_file_->setText(path);
+    }
+  });
+  connect(mcu_waveform_source_, &QComboBox::currentIndexChanged, this, [this] {
+    updateMcuWaveformControls();
+    updateDerivedAcquisitionLabels();
+  });
+  connect(mcu_waveform_browse_, &QToolButton::clicked, this, [this] {
+    const auto current_path = mcu_waveform_file_->text().trimmed();
+    const auto path = QFileDialog::getOpenFileName(
+        this, "Select legacy X/Y/M waveform", current_path,
+        "X/Y/M waveform (*.txt *.xym);;All files (*)");
+    if (!path.isEmpty()) {
+      mcu_waveform_file_->setText(QFileInfo(path).absoluteFilePath());
     }
   });
   connect(records_per_buffer_, &QSpinBox::valueChanged, this, [this] { updateDerivedAcquisitionLabels(); });
@@ -1530,6 +1790,8 @@ void MainWindow::markDirty() {
   if (navigation_ != nullptr && navigation_->currentRow() == kProcessingPageIndex) {
     updateProcessingTelemetryLabels();
   }
+  updateMcuWaveformControls();
+  updateMcuStatusDisplay();
   validateControls();
 }
 
@@ -1577,8 +1839,9 @@ bool MainWindow::validateControls(bool show_dialog) {
       : QString("Click to view validation details.\n\n%1").arg(tooltip));
   repolish(validation_button_);
   start_stop_button_->setEnabled(runtime_status_.state != OperationState::Stopping &&
-                                 (runtime_status_.running || (errors == 0 && !config_dirty_)));
-  apply_button_->setEnabled(!runtime_status_.running && errors == 0);
+                                 (runtime_status_.running ||
+                                  (!mcu_uploading_ && errors == 0 && !config_dirty_)));
+  apply_button_->setEnabled(!runtime_status_.running && !mcu_uploading_ && errors == 0);
   if (show_dialog && errors > 0) {
     QMessageBox::warning(this, "Configuration validation", tooltip);
   }
@@ -1629,13 +1892,13 @@ void MainWindow::showValidationDetails() {
 }
 
 SystemConfig MainWindow::configFromControls() const {
-  auto config = config_;
+  auto config = controls_config_;
   config.profile.name = profile_combo_->currentText().toStdString();
   config.runtime.acquisition_source =
       static_cast<AcquisitionSource>(acquisition_source_->currentData().toInt());
   config.runtime.replay_file = replay_file_->text().trimmed().toStdString();
   config.runtime.replay_loop = replay_loop_->isChecked();
-  config.digitizer.board_profile = board_profile_->currentData().toString().toStdString();
+  config.digitizer.board_profile = board_profile_id_.toStdString();
   if (const auto* capabilities =
           findDigitizerBoardCapabilities(config.digitizer.board_profile)) {
     config.digitizer.fifo_only_streaming =
@@ -1661,11 +1924,12 @@ SystemConfig MainWindow::configFromControls() const {
   config.laser.sweep_bandwidth_hz = sweep_bandwidth_->value();
   config.laser.sweep_rate_hz = sweep_rate_->value();
   config.edfa.mode = static_cast<EdfaMode>(edfa_mode_->currentIndex());
-  config.edfa.port = edfa_port_->text().trimmed().toStdString();
-  config.edfa.control_mode = edfa_control_mode_->currentIndex() == 0 ? EdfaControlMode::Apc
-      : edfa_control_mode_->currentIndex() == 1 ? EdfaControlMode::Acc : EdfaControlMode::Agc;
+  config.edfa.port = edfa_port_->currentData().toString().trimmed().toStdString();
+  config.edfa.control_mode = EdfaControlMode::Apc;
   config.edfa.output_setpoint.value = edfa_setpoint_->value();
   config.edfa.output_setpoint.unit = OpticalPowerUnit::Dbm;
+  config.edfa.output_min_dbm = kEdfaMinimumOutputDbm;
+  config.edfa.output_max_dbm = kEdfaMaximumOutputDbm;
   config.edfa.warmup_delay_ms = static_cast<std::uint32_t>(edfa_warmup_->value());
   config.scan.x_start_deg = x_start_->value();
   config.scan.x_end_deg = x_end_->value();
@@ -1677,7 +1941,11 @@ SystemConfig MainWindow::configFromControls() const {
   config.digitizer.a_scan_count = derivedAScanCount(config);
   config.digitizer.b_scan_count = config.scan.y_line_count;
   config.mcu.enabled = mcu_enabled_->isChecked();
-  config.mcu.port = mcu_port_->text().trimmed().toStdString();
+  config.mcu.port = mcu_port_->currentData().toString().trimmed().toStdString();
+  config.mcu.waveform_source = static_cast<McuWaveformSource>(
+      mcu_waveform_source_->currentData().toInt());
+  config.mcu.waveform_file = mcu_waveform_file_->text().trimmed().toStdString();
+  config.scan.trigger_shift_samples = mcu_trigger_shift_->value();
   config.processing.fft_backend =
       platform_name_.compare(QStringLiteral("Jetson"), Qt::CaseInsensitive) == 0
       ? FftBackendKind::Cuda
@@ -1791,12 +2059,92 @@ void MainWindow::populateDigitizerCapabilities(QString profile_id, double prefer
   updateDerivedAcquisitionLabels();
 }
 
+bool MainWindow::refreshDigitizerBoardModel() {
+  if (static_cast<AcquisitionSource>(acquisition_source_->currentData().toInt()) !=
+      AcquisitionSource::Alazar) {
+    alazar_board_detected_ = false;
+    alazar_detection_detail_.clear();
+    updateDigitizerBoardDisplay();
+    return true;
+  }
+
+  const auto detection = AlazarDigitizer::detectConnectedBoard();
+  alazar_board_detected_ = detection.supported;
+  alazar_detection_detail_ = QString::fromStdString(detection.detail);
+  if (!detection.supported) {
+    updateDigitizerBoardDisplay();
+    return false;
+  }
+
+  const auto detected_profile = QString::fromStdString(detection.profile_id);
+  const auto profile_changed = board_profile_id_ != detected_profile;
+  const auto preferred_rate = sample_rate_->currentData().toDouble();
+  const auto preferred_range = input_range_->currentData().toDouble();
+  const auto preferred_impedance = impedance_->count() > 0
+      ? impedance_->currentData().toUInt()
+      : 0U;
+  const auto preferred_record_samples = static_cast<std::uint32_t>(sample_point_->value());
+
+  board_profile_id_ = detected_profile;
+  populateDigitizerCapabilities(board_profile_id_, preferred_rate, preferred_range,
+                                preferred_impedance);
+  static_cast<RecordLengthSpinBox*>(sample_point_)->setSupportedValue(preferred_record_samples);
+  updateDigitizerBoardDisplay();
+
+  if (profile_changed && !loading_controls_) {
+    markRestartDirty();
+  }
+  if (profile_changed || loading_controls_) {
+    appendLog("INFO", "Digitizer", alazar_detection_detail_);
+  }
+  return true;
+}
+
+void MainWindow::updateDigitizerBoardDisplay() {
+  if (board_model_ == nullptr || board_address_ == nullptr) {
+    return;
+  }
+  const auto source = static_cast<AcquisitionSource>(acquisition_source_->currentData().toInt());
+  const auto* capabilities = findDigitizerBoardCapabilities(board_profile_id_.toStdString());
+  const auto model = capabilities == nullptr
+      ? QString("Unknown profile")
+      : QString::fromStdString(capabilities->display_name);
+
+  if (source == AcquisitionSource::Alazar) {
+    if (alazar_board_detected_) {
+      board_model_->setText(QString("%1 | auto-detected").arg(model));
+      board_model_->setProperty("statusKind", "ready");
+      board_address_->setText(QString("System 1 / Board 1 | %1").arg(model));
+      board_address_->setProperty("statusKind", "ready");
+    } else {
+      board_model_->setText("No supported board detected");
+      board_model_->setProperty("statusKind", "error");
+      board_address_->setText(alazar_detection_detail_.isEmpty()
+          ? "System 1 / Board 1 | detection pending"
+          : alazar_detection_detail_);
+      board_address_->setProperty("statusKind", "error");
+    }
+  } else if (source == AcquisitionSource::Replay) {
+    board_model_->setText(QString("%1 | recording profile").arg(model));
+    board_model_->setProperty("statusKind", "neutral");
+    board_address_->setText("Recorded DMA stream");
+    board_address_->setProperty("statusKind", "neutral");
+  } else {
+    board_model_->setText(QString("%1 | simulator profile").arg(model));
+    board_model_->setProperty("statusKind", "neutral");
+    board_address_->setText("Generated signal batches");
+    board_address_->setProperty("statusKind", "neutral");
+  }
+  repolish(board_model_);
+  repolish(board_address_);
+}
+
 void MainWindow::updateDerivedAcquisitionLabels() {
   if (sample_point_ == nullptr || pre_trigger_ == nullptr || record_length_state_ == nullptr) {
     return;
   }
   const auto* capabilities = findDigitizerBoardCapabilities(
-      board_profile_->currentData().toString().toStdString());
+      board_profile_id_.toStdString());
   const auto sample_points = static_cast<std::uint32_t>(sample_point_->value());
   const QSignalBlocker pre_trigger_blocker(pre_trigger_);
   const auto maximum_pretrigger_from_record = sample_points > kAlazarMinimumPostTriggerSamples
@@ -1856,14 +2204,30 @@ void MainWindow::updateDerivedAcquisitionLabels() {
     dma_bscan_rate_->setText("Waiting for DMA | measured at runtime");
     frame_time_->setText("Waiting for DMA | measured at runtime");
   }
-  const auto point_rate_hz = config_.scan.scanner_sample_rate_hz;
+  const auto point_rate_hz = kMcuWaveformPointRateHz;
   mcu_point_rate_->setText(QString("%1 kHz | firmware TIM6").arg(point_rate_hz / 1000.0, 0, 'g', 6));
-  const auto mcu_frame_time_ms = point_rate_hz > 0.0
-      ? static_cast<double>(frame_points) * 1000.0 / point_rate_hz
-      : 0.0;
-  mcu_frame_time_->setText(QString("%1 ms | %2 points / frame")
-                               .arg(mcu_frame_time_ms, 0, 'f', 3)
-                               .arg(frame_points));
+  const auto waveform_source = static_cast<McuWaveformSource>(
+      mcu_waveform_source_->currentData().toInt());
+  const bool legacy_file = waveform_source == McuWaveformSource::LegacyXymFile;
+  double mcu_frame_time_ms = 0.0;
+  if (legacy_file) {
+    if (runtime_status_.mcu_waveform_loaded && !restart_dirty_) {
+      mcu_frame_time_ms = runtime_status_.mcu_frame_time_ms;
+      mcu_frame_time_->setText(QString("%1 ms | %2 file points")
+                                   .arg(mcu_frame_time_ms, 0, 'f', 3)
+                                   .arg(runtime_status_.mcu_waveform_points));
+    } else {
+      const auto file_name = QFileInfo(mcu_waveform_file_->text()).fileName();
+      mcu_frame_time_->setText(file_name.isEmpty()
+          ? "Select an X/Y/M file"
+          : QString("%1 | cycle derived during upload").arg(file_name));
+    }
+  } else {
+    mcu_frame_time_ms = static_cast<double>(frame_points) * 1000.0 / point_rate_hz;
+    mcu_frame_time_->setText(QString("%1 ms | %2 generated points")
+                                 .arg(mcu_frame_time_ms, 0, 'f', 3)
+                                 .arg(frame_points));
+  }
   if (runtime_status_.dma_bscan_period_ms > 0.0 && mcu_frame_time_ms > 0.0) {
     const auto dma_frame_time_ms = runtime_status_.dma_bscan_period_ms * b_scans;
     const auto difference_percent = std::abs(dma_frame_time_ms - mcu_frame_time_ms) /
@@ -1876,83 +2240,103 @@ void MainWindow::updateDerivedAcquisitionLabels() {
               .arg(mcu_frame_time_ms, 0, 'f', 3));
     setStyledProperty(frame_sync_state_, "statusKind", synchronized ? "ready" : "warn");
   } else {
-    frame_sync_state_->setText("Waiting for DMA timing");
+    frame_sync_state_->setText(legacy_file && !runtime_status_.mcu_waveform_loaded
+        ? "Upload waveform to compare DMA / MCU timing"
+        : "Waiting for DMA timing");
     setStyledProperty(frame_sync_state_, "statusKind", "neutral");
   }
 }
 
 void MainWindow::loadConfigToControls(const SystemConfig& config, bool mark_pending) {
   loading_controls_ = true;
-  config_ = config;
+  auto controls_config = config;
   const bool is_jetson =
       platform_name_.compare(QStringLiteral("Jetson"), Qt::CaseInsensitive) == 0;
   if (is_jetson) {
-    config_.processing.fft_backend = FftBackendKind::Cuda;
+    controls_config.processing.fft_backend = FftBackendKind::Cuda;
   }
+  controls_config_ = std::move(controls_config);
+  if (!mark_pending) {
+    config_ = controls_config_;
+  }
+  const auto& loaded = controls_config_;
+  const QSignalBlocker source_blocker(acquisition_source_);
   profile_combo_->clear();
-  profile_combo_->addItem(QString::fromStdString(config.profile.name));
+  profile_combo_->addItem(QString::fromStdString(loaded.profile.name));
   const auto source_index = acquisition_source_->findData(
-      static_cast<int>(config.runtime.acquisition_source));
+      static_cast<int>(loaded.runtime.acquisition_source));
   acquisition_source_->setCurrentIndex(source_index >= 0 ? source_index : 0);
-  replay_file_->setText(QString::fromStdString(config.runtime.replay_file));
-  replay_loop_->setChecked(config.runtime.replay_loop);
-  updateRuntimeSourceControls();
-  const auto profile_index = board_profile_->findData(QString::fromStdString(config.digitizer.board_profile));
-  board_profile_->setCurrentIndex(profile_index >= 0 ? profile_index : 0);
-  populateDigitizerCapabilities(board_profile_->currentData().toString(), config.digitizer.sample_rate_hz,
-                                config.digitizer.input_range_volts, config.digitizer.impedance_ohms);
-  digitizer_channel_->setCurrentIndex(config.digitizer.channel == DigitizerChannel::A ? 0 : 1);
-  static_cast<RecordLengthSpinBox*>(sample_point_)->setSupportedValue(config.digitizer.sample_point);
-  records_per_buffer_->setValue(static_cast<int>(config.digitizer.records_per_buffer));
-  dma_buffer_count_->setValue(static_cast<int>(config.digitizer.dma_buffer_count));
+  replay_file_->setText(QString::fromStdString(loaded.runtime.replay_file));
+  replay_loop_->setChecked(loaded.runtime.replay_loop);
+  board_profile_id_ = QString::fromStdString(loaded.digitizer.board_profile);
+  if (findDigitizerBoardCapabilities(board_profile_id_.toStdString()) == nullptr &&
+      !digitizerBoardCapabilities().empty()) {
+    board_profile_id_ = QString::fromStdString(digitizerBoardCapabilities().front().profile_id);
+  }
+  populateDigitizerCapabilities(board_profile_id_, loaded.digitizer.sample_rate_hz,
+                                loaded.digitizer.input_range_volts, loaded.digitizer.impedance_ohms);
+  digitizer_channel_->setCurrentIndex(loaded.digitizer.channel == DigitizerChannel::A ? 0 : 1);
+  static_cast<RecordLengthSpinBox*>(sample_point_)->setSupportedValue(loaded.digitizer.sample_point);
+  records_per_buffer_->setValue(static_cast<int>(loaded.digitizer.records_per_buffer));
+  dma_buffer_count_->setValue(static_cast<int>(loaded.digitizer.dma_buffer_count));
   coupling_->setCurrentIndex(0);
-  trigger_slope_->setCurrentIndex(config.digitizer.trigger_slope == TriggerSlope::Rising ? 0 : 1);
-  trigger_delay_->setValue(static_cast<int>(config.digitizer.trigger_delay_samples));
-  pre_trigger_->setValue(static_cast<int>(config.digitizer.pre_trigger_samples));
-  sweep_bandwidth_->setValue(config.laser.sweep_bandwidth_hz);
-  sweep_rate_->setValue(config.laser.sweep_rate_hz);
-  edfa_mode_->setCurrentIndex(static_cast<int>(config.edfa.mode));
-  edfa_port_->setText(QString::fromStdString(config.edfa.port));
-  edfa_control_mode_->setCurrentIndex(config.edfa.control_mode == EdfaControlMode::Apc ? 0
-      : config.edfa.control_mode == EdfaControlMode::Acc ? 1 : 2);
-  edfa_setpoint_->setValue(config.edfa.output_setpoint.value);
-  edfa_warmup_->setValue(static_cast<int>(config.edfa.warmup_delay_ms));
-  x_start_->setValue(config.scan.x_start_deg);
-  x_end_->setValue(config.scan.x_end_deg);
-  y_start_->setValue(config.scan.y_start_deg);
-  y_end_->setValue(config.scan.y_end_deg);
-  y_lines_->setValue(static_cast<int>(config.scan.y_line_count));
-  bidirectional_->setChecked(config.scan.bidirectional);
-  mcu_enabled_->setChecked(config.mcu.enabled);
-  mcu_port_->setText(QString::fromStdString(config.mcu.port));
+  trigger_slope_->setCurrentIndex(loaded.digitizer.trigger_slope == TriggerSlope::Rising ? 0 : 1);
+  trigger_delay_->setValue(static_cast<int>(loaded.digitizer.trigger_delay_samples));
+  pre_trigger_->setValue(static_cast<int>(loaded.digitizer.pre_trigger_samples));
+  sweep_bandwidth_->setValue(loaded.laser.sweep_bandwidth_hz);
+  sweep_rate_->setValue(loaded.laser.sweep_rate_hz);
+  edfa_mode_->setCurrentIndex(static_cast<int>(loaded.edfa.mode));
+  refreshEdfaSerialPorts(QString::fromStdString(loaded.edfa.port));
+  edfa_control_mode_->setCurrentIndex(0);
+  edfa_setpoint_->setValue(loaded.edfa.output_setpoint.value);
+  edfa_warmup_->setValue(static_cast<int>(loaded.edfa.warmup_delay_ms));
+  x_start_->setValue(loaded.scan.x_start_deg);
+  x_end_->setValue(loaded.scan.x_end_deg);
+  y_start_->setValue(loaded.scan.y_start_deg);
+  y_end_->setValue(loaded.scan.y_end_deg);
+  y_lines_->setValue(static_cast<int>(loaded.scan.y_line_count));
+  bidirectional_->setChecked(loaded.scan.bidirectional);
+  mcu_enabled_->setChecked(loaded.mcu.enabled);
+  refreshMcuSerialPorts(QString::fromStdString(loaded.mcu.port));
+  const auto waveform_source_index = mcu_waveform_source_->findData(
+      static_cast<int>(loaded.mcu.waveform_source));
+  mcu_waveform_source_->setCurrentIndex(waveform_source_index >= 0 ? waveform_source_index : 0);
+  mcu_waveform_file_->setText(QString::fromStdString(loaded.mcu.waveform_file));
+  mcu_trigger_shift_->setValue(loaded.scan.trigger_shift_samples);
+  updateMcuWaveformControls();
   fft_backend_->setCurrentIndex(
-      is_jetson ? 0 : (config.processing.fft_backend == FftBackendKind::Fftw ? 0 : 1));
-  window_function_->setCurrentIndex(static_cast<int>(config.chirp_segmentation.window));
-  fft_length_->setValue(static_cast<int>(config.chirp_segmentation.segment_fft_length));
+      is_jetson ? 0 : (loaded.processing.fft_backend == FftBackendKind::Fftw ? 0 : 1));
+  window_function_->setCurrentIndex(static_cast<int>(loaded.chirp_segmentation.window));
+  fft_length_->setValue(static_cast<int>(loaded.chirp_segmentation.segment_fft_length));
   updatePeakBinLimits();
-  dc_removal_->setChecked(config.processing.dc_removal);
-  peak_threshold_->setValue(config.processing.peak_threshold_db);
-  peak_start_->setValue(static_cast<int>(config.processing.peak_search_start_bin));
-  peak_end_->setValue(static_cast<int>(config.processing.peak_search_end_bin));
-  period_start_->setValue(config.chirp_segmentation.trigger_to_period_offset);
-  up_start_->setValue(static_cast<int>(config.chirp_segmentation.up_segment.start_sample));
-  up_length_->setValue(static_cast<int>(config.chirp_segmentation.up_segment.length()));
-  down_start_->setValue(static_cast<int>(config.chirp_segmentation.down_segment.start_sample));
-  down_length_->setValue(static_cast<int>(config.chirp_segmentation.down_segment.length()));
-  guard_samples_->setValue(static_cast<int>(config.chirp_segmentation.guard_samples));
-  raw_enabled_->setChecked(config.storage.raw_enabled);
-  processed_enabled_->setChecked(config.storage.processed_enabled);
-  output_directory_->setText(QString::fromStdString(config.storage.output_directory));
-  storage_queue_->setValue(static_cast<int>(config.storage.queue_capacity));
-  split_size_->setValue(config.storage.split_file_size_gb);
-  udp_enabled_->setChecked(config.udp.enabled);
-  udp_ip_->setText(QString::fromStdString(config.udp.target_ip));
-  udp_port_->setValue(config.udp.target_port);
-  udp_points_->setValue(static_cast<int>(config.udp.packet_point_count));
-  udp_version_->setCurrentIndex(std::max(0, udp_version_->findData(config.udp.packet_format_version)));
-  udp_queue_->setValue(static_cast<int>(config.udp.queue_capacity));
-  udp_policy_->setCurrentIndex(config.udp.backpressure_policy == UdpBackpressurePolicy::LatestFrame ? 0
-      : config.udp.backpressure_policy == UdpBackpressurePolicy::PreserveFrames ? 1 : 2);
+  dc_removal_->setChecked(loaded.processing.dc_removal);
+  peak_threshold_->setValue(loaded.processing.peak_threshold_db);
+  peak_start_->setValue(static_cast<int>(loaded.processing.peak_search_start_bin));
+  peak_end_->setValue(static_cast<int>(loaded.processing.peak_search_end_bin));
+  period_start_->setValue(loaded.chirp_segmentation.trigger_to_period_offset);
+  up_start_->setValue(static_cast<int>(loaded.chirp_segmentation.up_segment.start_sample));
+  up_length_->setValue(static_cast<int>(loaded.chirp_segmentation.up_segment.length()));
+  down_start_->setValue(static_cast<int>(loaded.chirp_segmentation.down_segment.start_sample));
+  down_length_->setValue(static_cast<int>(loaded.chirp_segmentation.down_segment.length()));
+  guard_samples_->setValue(static_cast<int>(loaded.chirp_segmentation.guard_samples));
+  raw_enabled_->setChecked(loaded.storage.raw_enabled);
+  processed_enabled_->setChecked(loaded.storage.processed_enabled);
+  output_directory_->setText(QString::fromStdString(loaded.storage.output_directory));
+  storage_queue_->setValue(static_cast<int>(loaded.storage.queue_capacity));
+  split_size_->setValue(loaded.storage.split_file_size_gb);
+  udp_enabled_->setChecked(loaded.udp.enabled);
+  udp_ip_->setText(QString::fromStdString(loaded.udp.target_ip));
+  udp_port_->setValue(loaded.udp.target_port);
+  udp_points_->setValue(static_cast<int>(loaded.udp.packet_point_count));
+  udp_version_->setCurrentIndex(std::max(0, udp_version_->findData(loaded.udp.packet_format_version)));
+  udp_queue_->setValue(static_cast<int>(loaded.udp.queue_capacity));
+  udp_policy_->setCurrentIndex(loaded.udp.backpressure_policy == UdpBackpressurePolicy::LatestFrame ? 0
+      : loaded.udp.backpressure_policy == UdpBackpressurePolicy::PreserveFrames ? 1 : 2);
+  if (loaded.runtime.acquisition_source == AcquisitionSource::Alazar) {
+    refreshDigitizerBoardModel();
+  }
+  updateDigitizerBoardDisplay();
+  updateRuntimeSourceControls();
   updateDerivedAcquisitionLabels();
   loading_controls_ = false;
   config_dirty_ = mark_pending;
@@ -1974,18 +2358,256 @@ void MainWindow::loadConfigToControls(const SystemConfig& config, bool mark_pend
                                               : "READY | board settings applied");
   digitizer_lock_state_->setProperty("statusKind", mark_pending ? "warn" : "ready");
   repolish(digitizer_lock_state_);
+  updateEdfaStatusDisplay();
   validateControls();
+}
+
+void MainWindow::refreshEdfaSerialPorts(QString preferred_port) {
+  if (edfa_port_ == nullptr) {
+    return;
+  }
+  populateSerialPortCombo(edfa_port_, availableSerialPorts(), std::move(preferred_port),
+                          platform_name_, SerialPortRole::Edfa);
+}
+
+void MainWindow::refreshMcuSerialPorts(QString preferred_port) {
+  if (mcu_port_ == nullptr) {
+    return;
+  }
+  populateSerialPortCombo(mcu_port_, availableSerialPorts(), std::move(preferred_port),
+                          platform_name_, SerialPortRole::Mcu);
+}
+
+void MainWindow::updateEdfaStatusDisplay() {
+  if (edfa_connection_status_ == nullptr) {
+    return;
+  }
+  auto setStatus = [](QLabel* label, const QString& text, const char* kind) {
+    label->setText(text);
+    setStyledProperty(label, "statusKind", kind);
+  };
+  const auto mode = static_cast<EdfaMode>(edfa_mode_->currentIndex());
+  if (mode == EdfaMode::None) {
+    setStatus(edfa_connection_status_, "Not used | bypass", "neutral");
+    setStatus(edfa_activation_status_, "OFF | bypass", "neutral");
+    setStatus(edfa_target_status_, "Not applicable", "neutral");
+    setStatus(edfa_input_status_, "Not applicable", "neutral");
+    setStatus(edfa_output_status_, "Not applicable", "neutral");
+    setStatus(edfa_current_status_, "Not applicable", "neutral");
+    return;
+  }
+  if (mode == EdfaMode::Manual) {
+    setStatus(edfa_connection_status_, "Manual operator control", "neutral");
+    setStatus(edfa_activation_status_, "Not controlled by software", "neutral");
+    setStatus(edfa_target_status_, "Session metadata only", "neutral");
+    setStatus(edfa_input_status_, "No serial readback", "neutral");
+    setStatus(edfa_output_status_, "No serial readback", "neutral");
+    setStatus(edfa_current_status_, "No serial readback", "neutral");
+    return;
+  }
+
+  const auto selected_port = edfa_port_->currentData().toString();
+  const auto connected_port = runtime_status_.edfa_port.isEmpty()
+      ? selected_port : runtime_status_.edfa_port;
+  setStatus(edfa_connection_status_, runtime_status_.edfa_connected
+                ? QString("Connected | %1 | %2")
+                      .arg(connected_port, runtime_status_.edfa_device_name)
+                : QString("Disconnected | %1")
+                      .arg(selected_port.isEmpty() ? "no port" : selected_port),
+             runtime_status_.edfa_connected ? "ready" : "warn");
+  setStatus(edfa_activation_status_, runtime_status_.edfa_output_enabled
+                ? "ON | device confirmed"
+                : runtime_status_.edfa_connected ? "OFF | device confirmed" : "Unknown",
+            runtime_status_.edfa_output_enabled ? "warn" :
+                runtime_status_.edfa_connected ? "ready" : "neutral");
+  if (!runtime_status_.edfa_telemetry_valid) {
+    setStatus(edfa_target_status_, "Waiting for device readback", "neutral");
+    setStatus(edfa_input_status_, "Waiting for device readback", "neutral");
+    setStatus(edfa_output_status_, "Waiting for device readback", "neutral");
+    setStatus(edfa_current_status_, "Waiting for device readback", "neutral");
+    return;
+  }
+  setStatus(edfa_target_status_,
+            QString("%1 dBm | %2")
+                .arg(runtime_status_.edfa_target_dbm, 0, 'f', 2)
+                .arg(runtime_status_.edfa_control_mode), "ready");
+  setStatus(edfa_input_status_, QString("%1 dBm").arg(runtime_status_.edfa_input_dbm, 0, 'f', 2), "ready");
+  setStatus(edfa_output_status_, QString("%1 dBm").arg(runtime_status_.edfa_output_dbm, 0, 'f', 2),
+            runtime_status_.edfa_output_enabled ? "ready" : "neutral");
+  setStatus(edfa_current_status_, QString("%1 mA").arg(runtime_status_.edfa_current_ma, 0, 'f', 0), "ready");
 }
 
 void MainWindow::updateRuntimeSourceControls() {
   const auto source = static_cast<AcquisitionSource>(acquisition_source_->currentData().toInt());
   const bool replay = source == AcquisitionSource::Replay;
-  replay_file_->setEnabled(replay && !runtime_status_.running);
-  replay_browse_->setEnabled(replay && !runtime_status_.running);
-  replay_loop_->setEnabled(replay && !runtime_status_.running);
-  board_address_->setText(source == AcquisitionSource::Alazar
-      ? "System 1 / Board 1 | fixed"
-      : source == AcquisitionSource::Replay ? "Recorded DMA stream" : "Generated signal batches");
+  const bool editable = !runtime_status_.running && !mcu_uploading_;
+  replay_file_->setEnabled(replay && editable);
+  replay_browse_->setEnabled(replay && editable);
+  replay_loop_->setEnabled(replay && editable);
+  updateDigitizerBoardDisplay();
+  updateMcuWaveformControls();
+}
+
+void MainWindow::updateMcuWaveformControls() {
+  if (mcu_waveform_source_ == nullptr || mcu_waveform_file_ == nullptr ||
+      mcu_waveform_browse_ == nullptr) {
+    return;
+  }
+  const auto source = static_cast<McuWaveformSource>(mcu_waveform_source_->currentData().toInt());
+  const bool file_mode = source == McuWaveformSource::LegacyXymFile;
+  const bool editable = !runtime_status_.running && !mcu_uploading_;
+  mcu_waveform_file_->setEnabled(file_mode && editable);
+  mcu_waveform_browse_->setEnabled(file_mode && editable);
+  bidirectional_->setText(file_mode ? "Direction encoded in X/Y" : "Bidirectional raster");
+  bidirectional_->setEnabled(!file_mode && editable);
+  bidirectional_->setToolTip(file_mode
+      ? "The uploaded X/Y order defines increasing and decreasing scan lines."
+      : "Reverse the generated fast-axis command on alternating scan lines.");
+  upload_waveform_button_->setEnabled(editable && runtime_status_.connected &&
+                                      mcu_enabled_->isChecked() && !restart_dirty_);
+  mcu_waveform_file_->setToolTip(file_mode
+      ? "Header: sps <rate>. Remaining rows: normalized X Y and marker M."
+      : "Generated raster uses A-scans per B-scan and B-scans per frame.");
+}
+
+void MainWindow::updateMcuUploadProgress(McuUploadProgress progress) {
+  mcu_upload_progress_state_ = std::move(progress);
+  const auto stage = mcu_upload_progress_state_.stage;
+  const bool active = stage == McuUploadStage::Preparing || stage == McuUploadStage::Clearing ||
+      stage == McuUploadStage::Sending || stage == McuUploadStage::Verifying;
+  if (active && !mcu_upload_elapsed_timer_.isValid()) {
+    mcu_upload_elapsed_timer_.start();
+  }
+  mcu_uploading_ = active;
+
+  const auto completed = mcu_upload_progress_state_.completed_points;
+  const auto total = mcu_upload_progress_state_.total_points;
+  const auto detail = QString::fromStdString(mcu_upload_progress_state_.detail);
+  const auto points = [](std::uint32_t value) {
+    return QLocale().toString(static_cast<qulonglong>(value));
+  };
+
+  switch (stage) {
+    case McuUploadStage::Idle:
+      mcu_upload_progress_->setRange(0, 100);
+      mcu_upload_progress_->setValue(0);
+      mcu_upload_progress_->setFormat("Idle");
+      break;
+    case McuUploadStage::Preparing:
+      mcu_upload_progress_->setRange(0, 0);
+      mcu_upload_progress_->setFormat("Preparing waveform");
+      mcu_waveform_state_->setText(detail.isEmpty() ? "Preparing waveform" : detail);
+      setStyledProperty(mcu_waveform_state_, "statusKind", "neutral");
+      break;
+    case McuUploadStage::Clearing:
+      mcu_upload_progress_->setRange(0, 0);
+      mcu_upload_progress_->setFormat("Clearing MCU memory");
+      mcu_waveform_state_->setText("Clearing previous waveform | waiting for ACK:CLR");
+      setStyledProperty(mcu_waveform_state_, "statusKind", "warn");
+      break;
+    case McuUploadStage::Sending: {
+      mcu_upload_progress_->setRange(0, std::max(1, static_cast<int>(total)));
+      mcu_upload_progress_->setValue(static_cast<int>(completed));
+      mcu_upload_progress_->setFormat("Sending %p%");
+      const auto remaining = total > completed ? total - completed : 0U;
+      QString eta = "ETA calculating";
+      if (completed > 0U && mcu_upload_elapsed_timer_.isValid() &&
+          mcu_upload_elapsed_timer_.elapsed() >= 250) {
+        const auto elapsed_seconds = static_cast<double>(mcu_upload_elapsed_timer_.elapsed()) / 1000.0;
+        const auto points_per_second = static_cast<double>(completed) / elapsed_seconds;
+        if (points_per_second > 0.0) {
+          eta = QString("ETA %1 s").arg(static_cast<double>(remaining) / points_per_second, 0, 'f', 1);
+        }
+      }
+      mcu_waveform_state_->setText(QString("Sending | %1 / %2 points | %3 remaining | %4")
+                                       .arg(points(completed), points(total), points(remaining), eta));
+      setStyledProperty(mcu_waveform_state_, "statusKind", "warn");
+      break;
+    }
+    case McuUploadStage::Verifying:
+      mcu_upload_progress_->setRange(0, std::max(1, static_cast<int>(total)));
+      mcu_upload_progress_->setValue(static_cast<int>(total));
+      mcu_upload_progress_->setFormat("Sent 100% | Verifying");
+      mcu_waveform_state_->setText("Verifying | waiting for ACK:LOAD_DONE and point-count match");
+      setStyledProperty(mcu_waveform_state_, "statusKind", "warn");
+      break;
+    case McuUploadStage::Complete:
+      mcu_upload_progress_->setRange(0, std::max(100, static_cast<int>(total)));
+      mcu_upload_progress_->setValue(std::max(100, static_cast<int>(total)));
+      mcu_upload_progress_->setFormat("Upload complete");
+      mcu_waveform_state_->setText(detail.isEmpty() ? "Ready | waveform verified" :
+                                                    QString("Ready | %1").arg(detail));
+      setStyledProperty(mcu_waveform_state_, "statusKind", "ready");
+      mcu_upload_elapsed_timer_.invalidate();
+      break;
+    case McuUploadStage::Failed:
+      mcu_upload_progress_->setRange(0, std::max(1, static_cast<int>(total)));
+      mcu_upload_progress_->setValue(static_cast<int>(std::min(completed, total)));
+      mcu_upload_progress_->setFormat("Upload failed");
+      mcu_waveform_state_->setText(detail.isEmpty() ? "Upload failed" : QString("Error | %1").arg(detail));
+      setStyledProperty(mcu_waveform_state_, "statusKind", "error");
+      mcu_upload_elapsed_timer_.invalidate();
+      break;
+  }
+  updateControlAvailability();
+  validateControls();
+}
+
+void MainWindow::updateMcuStatusDisplay() {
+  if (mcu_uploading_) {
+    return;
+  }
+  if (mcu_upload_progress_state_.stage == McuUploadStage::Failed && runtime_status_.connected) {
+    return;
+  }
+  if (restart_dirty_) {
+    setStatusText(mcu_waveform_state_, "Setup changed | Apply Setup, then upload waveform", false);
+    return;
+  }
+  if (runtime_status_.mcu_bypassed) {
+    setStatusText(mcu_waveform_state_, "MCU bypass active", true, true);
+    return;
+  }
+  if (runtime_status_.mcu_scan_active) {
+    setStatusText(mcu_waveform_state_,
+                  QString("Running | %1 points | %2")
+                      .arg(runtime_status_.mcu_waveform_points)
+                      .arg(runtime_status_.mcu_last_ack),
+                  true);
+    return;
+  }
+  if (runtime_status_.mcu_waveform_loaded) {
+    setStatusText(mcu_waveform_state_,
+                  QString("Ready | %1 points | %2 ms | %3")
+                      .arg(runtime_status_.mcu_waveform_points)
+                      .arg(runtime_status_.mcu_frame_time_ms, 0, 'f', 3)
+                      .arg(runtime_status_.mcu_last_ack),
+                  runtime_status_.mcu_ready);
+    return;
+  }
+  const auto detail = runtime_status_.mcu_detail.isEmpty()
+      ? (runtime_status_.connected ? QString("Upload required") : QString("MCU disconnected"))
+      : runtime_status_.mcu_detail;
+  setStatusText(mcu_waveform_state_, detail, false);
+  if ((!runtime_status_.connected || mcu_upload_progress_state_.stage == McuUploadStage::Complete) &&
+      mcu_upload_progress_state_.stage != McuUploadStage::Failed) {
+    mcu_upload_progress_state_ = {};
+    mcu_upload_progress_->setRange(0, 100);
+    mcu_upload_progress_->setValue(0);
+    mcu_upload_progress_->setFormat("Idle");
+  }
+}
+
+void MainWindow::updateControlAvailability() {
+  const bool editable = !runtime_status_.running && !mcu_uploading_;
+  connect_button_->setEnabled(editable);
+  load_button_->setEnabled(editable);
+  save_button_->setEnabled(editable);
+  profile_combo_->setEnabled(editable);
+  for (auto* control : restart_required_controls_) {
+    control->setEnabled(editable);
+  }
+  updateRuntimeSourceControls();
 }
 
 void MainWindow::updatePeakBinLimits() {
@@ -2140,10 +2762,24 @@ void MainWindow::updateProcessingTelemetryLabels() {
 }
 
 void MainWindow::applyProfile() {
+  if (mcu_uploading_) {
+    statusBar()->showMessage("Apply Setup is locked until the MCU waveform upload finishes", 5000);
+    return;
+  }
   if (!validateControls(true)) {
     return;
   }
-  controller_->applyConfig(configFromControls());
+  const auto candidate = configFromControls();
+  if (ConfigProfileCodec::toJsonSnapshot(candidate) == ConfigProfileCodec::toJsonSnapshot(config_)) {
+    config_dirty_ = false;
+    restart_dirty_ = false;
+    validateControls();
+    updateMcuWaveformControls();
+    updateMcuStatusDisplay();
+    statusBar()->showMessage("Apply Setup: no changes; current device state preserved", 5000);
+    return;
+  }
+  controller_->applyConfig(candidate);
 }
 
 void MainWindow::loadProfile() {
@@ -2161,7 +2797,9 @@ void MainWindow::loadProfile() {
     QMessageBox::warning(this, "Profile load failed", message);
     return;
   }
-  loadConfigToControls(result.config, true);
+  auto loaded_config = result.config;
+  loaded_config.profile.name = QFileInfo(path).completeBaseName().toStdString();
+  loadConfigToControls(loaded_config, true);
   appendLog("INFO", "Configuration", QString("Loaded profile %1").arg(QFileInfo(path).fileName()));
 }
 
@@ -2173,10 +2811,18 @@ void MainWindow::saveProfile() {
   if (path.isEmpty()) {
     return;
   }
+  auto saved_config = configFromControls();
+  saved_config.profile.name = QFileInfo(path).completeBaseName().toStdString();
   std::string error;
-  if (!ConfigProfileCodec::save(fileSystemPath(path), configFromControls(), error)) {
+  if (!ConfigProfileCodec::save(fileSystemPath(path), saved_config, error)) {
     QMessageBox::critical(this, "Profile save failed", QString::fromStdString(error));
     return;
+  }
+  profile_combo_->clear();
+  profile_combo_->addItem(QString::fromStdString(saved_config.profile.name));
+  controls_config_.profile.name = saved_config.profile.name;
+  if (!config_dirty_) {
+    config_.profile.name = saved_config.profile.name;
   }
   appendLog("INFO", "Configuration", QString("Saved profile %1").arg(QFileInfo(path).fileName()));
 }
@@ -2223,14 +2869,7 @@ void MainWindow::updateStatus(RuntimeStatus status) {
   setStyledProperty(start_stop_button_, "runState",
                     stopping ? "stopping" : runtime_status_.running ? "stop" : "start");
   if (control_state_changed) {
-    connect_button_->setEnabled(!runtime_status_.running);
-    apply_button_->setEnabled(!runtime_status_.running);
-    load_button_->setEnabled(!runtime_status_.running);
-    save_button_->setEnabled(!runtime_status_.running);
-    for (auto* control : restart_required_controls_) {
-      control->setEnabled(!runtime_status_.running);
-    }
-    updateRuntimeSourceControls();
+    updateControlAvailability();
   }
   if (runtime_status_.running) {
     digitizer_lock_state_->setText("LOCKED | press STOP before setup changes");
@@ -2247,7 +2886,9 @@ void MainWindow::updateStatus(RuntimeStatus status) {
       ? QString("READY\n%1").arg(source_name)
       : QString("NOT READY\n%1").arg(source_name));
   overview_edfa_->setText(runtime_status_.edfa_bypassed ? "BYPASS\nNo EDFA" :
-                          runtime_status_.edfa_output_enabled ? "OUTPUT ON" : "READY\nOutput off");
+                          runtime_status_.edfa_output_enabled ? "OUTPUT ON" :
+                          runtime_status_.edfa_connected && runtime_status_.edfa_ready
+                              ? "READY\nOutput off" : "NOT READY\nEDFA disconnected");
   overview_mcu_->setText(runtime_status_.mcu_bypassed ? "BYPASS\nMCU disabled" :
                          runtime_status_.mcu_waveform_loaded
                              ? QString("READY\n%1 points").arg(runtime_status_.mcu_waveform_points)
@@ -2339,19 +2980,17 @@ void MainWindow::updateStatus(RuntimeStatus status) {
                                 .arg(runtime_status_.dma_buffer_drops)
                                 .arg(runtime_status_.trigger_misses)
                                 .arg(runtime_status_.detail));
-  setStatusText(mcu_waveform_state_, runtime_status_.mcu_bypassed ? "MCU bypass active" :
-                runtime_status_.mcu_waveform_loaded
-                    ? QString("Loaded | %1 points | %2 ms/frame")
-                          .arg(runtime_status_.mcu_waveform_points)
-                          .arg(runtime_status_.mcu_frame_time_ms, 0, 'f', 3)
-                    : "Upload required",
-                runtime_status_.mcu_ready, runtime_status_.mcu_bypassed);
+  updateMcuStatusDisplay();
   if (navigation_ != nullptr && navigation_->currentRow() == kScanMcuPageIndex) {
     updateDerivedAcquisitionLabels();
   }
+  updateEdfaStatusDisplay();
   edfa_output_button_->setText(runtime_status_.edfa_output_enabled ? "Disable Output" : "Enable Output");
-  const bool edfa_output_available = runtime_status_.connected && edfa_mode_->currentIndex() == 2 &&
-      !runtime_status_.edfa_bypassed && !runtime_status_.running;
+  const bool edfa_disable_available = runtime_status_.connected && runtime_status_.edfa_output_enabled;
+  const bool edfa_enable_available = runtime_status_.connected && edfa_mode_->currentIndex() == 2 &&
+      runtime_status_.edfa_connected && runtime_status_.edfa_ready &&
+      !runtime_status_.edfa_bypassed && !runtime_status_.running && !restart_dirty_;
+  const bool edfa_output_available = edfa_disable_available || edfa_enable_available;
   if (edfa_output_button_->isEnabled() != edfa_output_available) {
     edfa_output_button_->setEnabled(edfa_output_available);
   }
@@ -2415,9 +3054,9 @@ void MainWindow::saveCurrentView() {
 }
 
 void MainWindow::startDemo() {
-  if (validateControls()) {
+  if (!config_dirty_ && validateControls()) {
     navigation_->setCurrentRow(kLivePageIndex);
-    controller_->startSystem(configFromControls());
+    controller_->startSystem();
   }
 }
 

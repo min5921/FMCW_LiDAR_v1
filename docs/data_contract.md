@@ -13,9 +13,11 @@ One `RawFrame` means:
 
 An Alazar DMA buffer contains the records for one B-scan line. Each record is one A-scan `RawFrame`, and a configured number of completed B-scan lines forms one complete raster frame.
 
-Raster order follows the legacy acquisition contract: record index advances the X position within one B-scan line, and completed B-scan line index advances the Y scanner angle. B-scan may publish each completed line, but the 3D point-cloud snapshot publishes only after every configured line is complete. While the next raster is being assembled, consumers keep the previous complete point-cloud frame.
+`records_per_buffer` is the A-scan count in one B-scan line. The operator sets B-scans per frame, while B-scan rate and period are measured from Alazar DMA buffer completion timestamps. B-scan and 3D point-cloud snapshots publish only after every configured line is complete. While the next frame is being assembled, consumers keep the previous complete frame.
 
-For the active scan contract, `records_per_buffer` is the A-scan count in one B-scan line. The operator sets B-scans per frame. The MCU waveform contains `records_per_buffer * B-scans_per_frame` points, while B-scan rate and period are measured from Alazar DMA buffer completion timestamps.
+For a legacy X/Y/M waveform, each rising edge in the original M sequence is the logical start of one acquired line. Record `i` maps to waveform sample `floor(i * scanner_sample_rate_hz / laser.sweep_rate_hz)` after that logical edge. This is zero-order command sampling; no coordinate interpolation is introduced. The upload-only B-trigger offset moves the emitted M bit but never moves the logical coordinate anchor.
+
+The uploaded X/Y command order is authoritative. Its full-file command minima and maxima map linearly to the four configured angle endpoints. The dominant command delta over an acquired line identifies the fast axis and its increasing/decreasing direction. A decreasing line keeps its original commands and Cartesian angles, but its B-scan column index is reversed exactly once so spatial columns remain left-to-right. No additional odd/even parity reversal is applied to a vector waveform. Generated raster mode uses `records_per_buffer * B_scans_per_frame` points and may apply its configured bidirectional parity.
 
 Runtime metadata also carries `dma_buffer_sequence`, zero-based `record_index_in_buffer`, and `records_in_buffer`. Live Time Domain and FFT snapshots update only when `record_index_in_buffer` matches the operator-selected A-scan. This display filter does not remove frames from processing, peak analysis, B-scan assembly, UDP frame assembly, or raw storage.
 
@@ -52,7 +54,7 @@ Configuration and optical-state history map each revision to the first and last 
 
 One `ProcessedFrame` is the result of processing one full-period `RawFrame` at one scan position. It carries independent up/down FFT magnitude arrays, independently detected peak results, one distance/velocity measurement, and one XYZ point. A peak that does not exceed the threshold is invalid for that A-scan; no value is carried from a previous A-scan. Invalid floating-point peak, distance, velocity, intensity, and XYZ fields are quiet `NaN`, while the integer `discrete_bin` sentinel remains `-1` and validity flags remain false. A valid `peak_bin` is exactly the selected integer `discrete_bin`; this version does not perform peak interpolation.
 
-The final point contract is legacy-compatible XYZIV: X is lateral, Y is forward range, and Z is vertical. Scanner-angle calibration offsets are applied before Cartesian conversion. Point intensity is the mean of the valid up/down peak magnitudes, and point velocity is the calibrated radial velocity. The B-scan matrix stores forward depth (`point.y`); processed storage and UDP preserve all five `x, y, z, intensity, velocity` values.
+The final point contract is legacy-compatible XYZIV: X is lateral, Y is forward range, and Z is vertical. Scanner-angle calibration offsets are applied before Cartesian conversion. Point intensity is the mean of the valid up/down peak magnitudes, and point velocity is the calibrated radial velocity. The B-scan matrix stores forward depth (`point.y`). In-memory points, processed format v2, and point-cloud CSV also preserve the source X/Y command pair. UDP v1 intentionally remains the compatible five-float `x, y, z, intensity, velocity` contract.
 
 FFTW and CUDA/cuFFT consume the same configuration and implement the same ordered signal-processing contract. Backend selection may change execution hardware and memory movement but must not change preprocessing, magnitude scaling, peak selection, distance/velocity, calibration, XYZ, or validity semantics.
 
@@ -63,7 +65,7 @@ Scan-line and B-scan arrays are derived immutable snapshots. They are not embedd
 - `host_timestamp_ns` is the host monotonic timestamp captured when the frame becomes available.
 - `trigger.timestamp_ns` is the hardware trigger timestamp when supported by the board or timing source.
 - Trigger jitter and missed-trigger counters are recorded without changing frame identity.
-- MCU scan indices and angles are attached through `scan_position`; `valid=false` means the position was unavailable, not zero degrees.
+- MCU scan indices, trajectory sample, source commands, calibrated angles, fast axis, and direction are attached through `scan_position`; `valid=false` means the position was unavailable, not zero degrees.
 
 ## Storage Rules
 
@@ -73,7 +75,7 @@ Scan-line and B-scan arrays are derived immutable snapshots. They are not embedd
 - Queue overflow or raw-writer failure requests an acquisition stop and records the responsible queue and last accepted frame ID.
 - Raw files use numbered parts named `<stem>.raw.0000.bin`, `<stem>.raw.0001.bin`, and so on.
 - Replay opened at part `0000` automatically continues through compatible numbered parts.
-- Processed binary and raw/processed JSON sidecars use the same session/config revision identity as the source raw frame.
+- Processed binary v2 uses the `FMCWPRO2` magic and stores scan trajectory provenance and source commands in addition to XYZIV. Raw/processed JSON sidecars use the same session/config revision identity as the source raw frame.
 
 ## UDP Point Packet V1
 
@@ -94,3 +96,5 @@ Each complete raster frame is assembled from all scan positions and split into o
 | 40 | float[5] x N | x, y, z, intensity, velocity |
 
 The maximum v1 datagram payload is 65,507 bytes, so `packet_point_count` is validated in the range 1..3273. The sender runs on its own worker thread and reports queue use, frames/packets sent, send FPS, dropped frames, and send errors.
+
+UDP v1 does not carry scanner command coordinates. A future packet version must use a new version and stride instead of changing the v1 payload in place.

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/config_types.h"
+#include "core/device_interfaces.h"
 #include "core/system_state.h"
 #include "processing/processing_snapshots.h"
 
@@ -38,9 +39,16 @@ struct RuntimeStatus {
   bool digitizer_ready = false;
   bool edfa_ready = false;
   bool edfa_bypassed = true;
+  bool edfa_connected = false;
   bool edfa_output_enabled = false;
+  bool edfa_telemetry_valid = false;
+  double edfa_target_dbm = 0.0;
+  double edfa_current_ma = 0.0;
+  double edfa_input_dbm = 0.0;
+  double edfa_output_dbm = 0.0;
   bool mcu_ready = false;
   bool mcu_bypassed = true;
+  bool mcu_scan_active = false;
   bool mcu_waveform_loaded = false;
   std::uint32_t mcu_waveform_points = 0;
   double mcu_frame_time_ms = 0.0;
@@ -90,9 +98,15 @@ struct RuntimeStatus {
   std::size_t udp_queue_capacity = 0;
   double udp_send_fps = 0.0;
   QString source_name;
+  QString edfa_port;
+  QString edfa_device_name;
+  QString edfa_control_mode;
+  QString edfa_detail;
   QString backend_name;
   QString storage_stop_reason;
   QString active_operation;
+  QString mcu_last_ack;
+  QString mcu_detail;
   QString detail;
 };
 
@@ -111,7 +125,7 @@ class ApplicationController final : public QObject {
   void applyConfig(const SystemConfig& config);
   void connectSystem(const SystemConfig& config);
   void disconnectSystem();
-  void startSystem(const SystemConfig& config);
+  void startSystem();
   void stopSystem();
   void emergencyStop();
   void updateProcessing(const ProcessingConfig& config);
@@ -130,6 +144,7 @@ class ApplicationController final : public QObject {
   void bscanReady(fmcw::BScanSnapshotPtr snapshot);
   void pointCloudReady(fmcw::PointCloudSnapshotPtr snapshot);
   void segmentationSnapshotReady(fmcw::WaveformSnapshotPtr snapshot);
+  void mcuUploadProgressChanged(fmcw::McuUploadProgress progress);
   void logMessage(QString level, QString source, QString message);
   void commandFailed(QString command, QString message);
   void commandCompleted(QString command, QString message);
@@ -160,6 +175,7 @@ class ApplicationController final : public QObject {
 }  // namespace fmcw
 
 Q_DECLARE_METATYPE(fmcw::RuntimeStatus)
+Q_DECLARE_METATYPE(fmcw::McuUploadProgress)
 Q_DECLARE_METATYPE(fmcw::WaveformSnapshotPtr)
 Q_DECLARE_METATYPE(fmcw::FftSnapshotPtr)
 Q_DECLARE_METATYPE(fmcw::ScanLineSnapshotPtr)

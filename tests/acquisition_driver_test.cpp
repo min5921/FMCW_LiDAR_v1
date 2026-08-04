@@ -1,6 +1,8 @@
 #include "core/acquisition_session.h"
 #include "core/continuous_acquisition_worker.h"
+#include "core/digitizer_capabilities.h"
 #include "core/raw_frame_batch_pool.h"
+#include "core/scan_trajectory.h"
 #include "drivers/alazar/alazar_digitizer.h"
 #include "drivers/alazar/alazar_sample_conversion.h"
 #include "drivers/edfa/edfa_protocol.h"
@@ -19,6 +21,7 @@
 #include <cmath>
 #include <cstdint>
 #include <deque>
+#include <filesystem>
 #include <iostream>
 #include <memory>
 #include <mutex>
@@ -121,6 +124,12 @@ class ScriptedSerialTransport final : public fmcw::ISerialTransport {
     if (address == 0x00) {
       queueBytes(edfaResponse(0x00, {0x03, 0xE8, 0x00, 0x00, 0x17, 0x70,
                                      0x23, 0x28, 0x00, 0x00, 0x00, 0x00}));
+    } else if (address == 0x03) {
+      queueBytes(edfaResponse(0x03, {0x23, 0x27}));
+    } else if (address == 0x05) {
+      queueBytes(edfaResponse(0x05, {0x00}));
+    } else if (address == 0x25) {
+      queueBytes(edfaResponse(0x25, {0x00}));
     } else if (address == 0x06) {
       queueBytes(edfaResponse(0x05, {command.at(4)}));
     } else if (address == 0x04) {
@@ -141,7 +150,7 @@ class ScriptedSerialTransport final : public fmcw::ISerialTransport {
     } else if (command == "START\n") {
       lines_.push_back("ACK:START");
     } else if (command == "STOP\n") {
-      lines_.push_back("ACK:STOP");
+      lines_.push_back("ACK:STOP," + std::to_string(data_count_));
     }
   }
 
@@ -273,11 +282,18 @@ class OrderedMcu final : public fmcw::IMcuController {
   }
   void disconnect() override { status_.device = {}; }
   bool uploadWaveform(const std::vector<fmcw::McuWaveformFrame>& frames,
-                      std::string& error) override {
+                      std::string& error,
+                      const fmcw::McuUploadProgressCallback& progress = {}) override {
     status_.waveform_points = static_cast<std::uint32_t>(frames.size());
+    loaded_waveform_ = fmcw::McuProtocol::snapshotForUploadedWaveform(frames, 100000.0);
+    if (progress) {
+      const auto count = static_cast<std::uint32_t>(frames.size());
+      progress({fmcw::McuUploadStage::Complete, count, count, "ACK:LOAD_DONE"});
+    }
     error.clear();
     return true;
   }
+  fmcw::McuWaveformSnapshotPtr loadedWaveform() const override { return loaded_waveform_; }
   bool startScan(std::string& error) override {
     events_.push_back("mcu.start");
     status_.scan_enabled = true;
@@ -300,6 +316,7 @@ class OrderedMcu final : public fmcw::IMcuController {
  private:
   std::vector<std::string>& events_;
   fmcw::McuStatus status_;
+  fmcw::McuWaveformSnapshotPtr loaded_waveform_;
 };
 
 void testMcuProtocol() {
@@ -310,6 +327,9 @@ void testMcuProtocol() {
   const auto loaded = fmcw::McuProtocol::parseResponse("ACK:LOAD_DONE,25");
   expect(loaded.acknowledged && loaded.code == "LOAD_DONE" && loaded.has_count && loaded.count == 25,
          "MCU LOAD_DONE count is parsed");
+  const auto stopped = fmcw::McuProtocol::parseResponse("ACK:STOP,25");
+  expect(stopped.acknowledged && stopped.code == "STOP" && stopped.has_count && stopped.count == 25,
+         "MCU STOP acknowledgement confirms the retained waveform count");
   expect(fmcw::McuProtocol::parseResponse("ERR:BUFFER_FULL").error, "MCU error response is recognized");
 
   fmcw::SystemConfig raster;
@@ -328,11 +348,145 @@ void testMcuProtocol() {
          "MCU waveform does not hold the marker across a B-scan");
   expect(waveform[0].a < waveform[3].a && waveform[4].a > waveform[7].a,
          "bidirectional raster reverses the X waveform on alternating B-scans");
+
+  raster.mcu.waveform_source = fmcw::McuWaveformSource::GeneratedRaster;
+  raster.scan.trigger_shift_samples = -1;
+  fmcw::McuWaveformInfo advanced_info;
+  const auto advanced = fmcw::McuProtocol::buildConfiguredWaveform(
+      raster, advanced_info, waveform_error);
+  expect(waveform_error.empty() && advanced.size() == waveform.size() &&
+             advanced[3].trigger && advanced[7].trigger && advanced[11].trigger &&
+             !advanced[0].trigger && advanced_info.trigger_shift_samples == -1 &&
+             advanced_info.marker_rising_edges == 3U,
+         "negative B-trigger offset advances every marker within the repeating waveform");
+  const bool advanced_dac_unchanged = std::equal(
+      advanced.begin(), advanced.end(), waveform.begin(),
+      [](const fmcw::McuWaveformFrame& shifted, const fmcw::McuWaveformFrame& original) {
+        return shifted.a == original.a && shifted.b == original.b &&
+            shifted.c == original.c && shifted.d == original.d;
+      });
+  expect(advanced_dac_unchanged,
+         "B-trigger offset never shifts or modifies the X/Y DAC waveform");
+  const auto shifted_snapshot = fmcw::McuProtocol::snapshotForUploadedWaveform(
+      advanced, advanced_info.output_sample_rate_hz);
+  expect(shifted_snapshot && shifted_snapshot->logical_marker_indices.front() == 0U &&
+             shifted_snapshot->emitted_marker_indices.front() == 3U,
+         "trigger compensation keeps the logical coordinate anchor separate from the emitted marker");
+
+  raster.scan.trigger_shift_samples = 1;
+  fmcw::McuWaveformInfo delayed_info;
+  const auto delayed = fmcw::McuProtocol::buildConfiguredWaveform(
+      raster, delayed_info, waveform_error);
+  expect(waveform_error.empty() && delayed.size() == waveform.size() &&
+             delayed[1].trigger && delayed[5].trigger && delayed[9].trigger &&
+             !delayed[0].trigger && delayed_info.trigger_shift_samples == 1 &&
+             delayed_info.marker_rising_edges == 3U,
+         "positive B-trigger offset delays every marker without changing the edge count");
+
+  const std::filesystem::path source_root = FMCW_TEST_SOURCE_DIR;
+  fmcw::McuWaveformInfo legacy_info;
+  const auto legacy_waveform = fmcw::McuProtocol::loadLegacyXymWaveform(
+      (source_root / "config" / "waveforms" / "mems_xym_100ksps.txt").string(),
+      legacy_info, waveform_error);
+  expect(waveform_error.empty() && legacy_waveform.size() == 10388U,
+         "active legacy X/Y/M waveform parses all 10388 source points");
+  expect(legacy_info.source_sample_rate_hz == 100000.0 &&
+             legacy_info.output_sample_rate_hz == 100000.0 && !legacy_info.resampled,
+         "100 kS/s source waveform passes through without interpolation");
+  expect(legacy_info.marker_rising_edges == 12U,
+         "legacy M values produce the expected 12 B-trigger rising edges");
+  expect(!legacy_waveform.empty() && legacy_waveform.front().a == legacy_waveform.front().b &&
+             legacy_waveform.front().c == legacy_waveform.front().d,
+         "zero X/Y input maps to balanced differential DAC pairs");
+
+  const auto active_snapshot = fmcw::McuProtocol::snapshotForUploadedWaveform(
+      legacy_waveform, legacy_info.output_sample_rate_hz);
+  fmcw::SystemConfig active_config;
+  active_config.laser.sweep_rate_hz = 200000.0;
+  fmcw::TrajectoryLineContext first_line;
+  fmcw::TrajectoryLineContext second_line;
+  expect(active_snapshot &&
+             fmcw::prepareTrajectoryLine(active_config, *active_snapshot, 0U, 998U, first_line) &&
+             fmcw::prepareTrajectoryLine(active_config, *active_snapshot, 1U, 998U, second_line) &&
+             first_line.fast_axis == fmcw::ScanAxis::Y &&
+             first_line.direction == fmcw::ScanDirection::Increasing &&
+             second_line.fast_axis == fmcw::ScanAxis::Y &&
+             second_line.direction == fmcw::ScanDirection::Decreasing,
+         "active vector asset derives its alternating Y fast-axis order from X/Y commands");
+}
+
+void testVectorTrajectoryMapping() {
+  std::vector<fmcw::McuWaveformFrame> frames;
+  const auto append = [&frames](float x, float y, bool marker) {
+    fmcw::McuWaveformFrame frame;
+    frame.command_x = x;
+    frame.command_y = y;
+    frame.trigger = marker;
+    frame.logical_trigger = marker;
+    frames.push_back(frame);
+  };
+  append(-1.0F, -1.0F, true);
+  append(-1.0F / 3.0F, -1.0F, false);
+  append(1.0F / 3.0F, -1.0F, false);
+  append(1.0F, -1.0F, false);
+  append(1.0F, 1.0F, true);
+  append(1.0F / 3.0F, 1.0F, false);
+  append(-1.0F / 3.0F, 1.0F, false);
+  append(-1.0F, 1.0F, false);
+
+  const auto waveform = fmcw::McuProtocol::snapshotForUploadedWaveform(frames, 100000.0);
+  fmcw::SystemConfig config;
+  config.laser.sweep_rate_hz = 200000.0;
+  config.scan.x_start_deg = -9.0;
+  config.scan.x_end_deg = 9.0;
+  config.scan.y_start_deg = -4.0;
+  config.scan.y_end_deg = 4.0;
+  fmcw::TrajectoryLineContext even_line;
+  fmcw::TrajectoryLineContext odd_line;
+  expect(waveform && fmcw::prepareTrajectoryLine(config, *waveform, 0U, 8U, even_line) &&
+             fmcw::prepareTrajectoryLine(config, *waveform, 1U, 8U, odd_line),
+         "vector trajectory prepares one context per M-triggered B-scan");
+  expect(even_line.fast_axis == fmcw::ScanAxis::X &&
+             even_line.direction == fmcw::ScanDirection::Increasing &&
+             odd_line.fast_axis == fmcw::ScanAxis::X &&
+             odd_line.direction == fmcw::ScanDirection::Decreasing,
+         "vector trajectory derives bidirectional scan direction from command order");
+
+  fmcw::ScanPosition even_first;
+  fmcw::ScanPosition even_second;
+  fmcw::ScanPosition even_last;
+  fmcw::ScanPosition odd_first;
+  fmcw::ScanPosition odd_last;
+  const bool mapped = fmcw::mapTrajectoryRecord(config, *waveform, even_line, 0U, even_first) &&
+      fmcw::mapTrajectoryRecord(config, *waveform, even_line, 1U, even_second) &&
+      fmcw::mapTrajectoryRecord(config, *waveform, even_line, 7U, even_last) &&
+      fmcw::mapTrajectoryRecord(config, *waveform, odd_line, 0U, odd_first) &&
+      fmcw::mapTrajectoryRecord(config, *waveform, odd_line, 7U, odd_last);
+  expect(mapped && even_first.trajectory_sample_index == even_second.trajectory_sample_index,
+         "200 kHz A-scans use the held 100 kS/s command without interpolation");
+  expect(std::abs(even_first.x_angle_deg + 9.0F) < 1.0e-5F &&
+             std::abs(even_last.x_angle_deg - 9.0F) < 1.0e-5F &&
+             even_first.x_index == 0U && even_last.x_index == 7U,
+         "increasing vector line maps command minimum to -9 degrees and maximum to +9 degrees");
+  expect(std::abs(odd_first.x_angle_deg - 9.0F) < 1.0e-5F &&
+             std::abs(odd_last.x_angle_deg + 9.0F) < 1.0e-5F &&
+             odd_first.x_index == 7U && odd_last.x_index == 0U,
+         "decreasing vector line keeps acquisition order while assigning spatial B-scan columns once");
+  expect(even_first.source == fmcw::ScanCoordinateSource::McuTrajectory &&
+             even_first.angle_calibrated && even_first.y_index == 0U && odd_first.y_index == 1U,
+         "mapped records retain command provenance and complete-frame line indices");
 }
 
 void testEdfaProtocol() {
   expect(fmcw::EdfaProtocol::queryStatus() == std::vector<std::uint8_t>({0xEF, 0xEF, 0x02, 0x00, 0xE0}),
          "EDFA status query matches vendor example");
+  expect(fmcw::EdfaProtocol::queryTargetPower() ==
+             std::vector<std::uint8_t>({0xEF, 0xEF, 0x02, 0x03, 0xE3}) &&
+             fmcw::EdfaProtocol::queryMode() ==
+             std::vector<std::uint8_t>({0xEF, 0xEF, 0x02, 0x05, 0xE5}) &&
+             fmcw::EdfaProtocol::queryActivation() ==
+             std::vector<std::uint8_t>({0xEF, 0xEF, 0x02, 0x25, 0x05}),
+         "EDFA target, mode, and activation queries match vendor examples");
   expect(fmcw::EdfaProtocol::setTargetPowerDbm(19.99) ==
              std::vector<std::uint8_t>({0xEF, 0xEF, 0x04, 0x04, 0x23, 0x27, 0x30}),
          "EDFA target power command matches vendor example");
@@ -365,10 +519,26 @@ void testSerialControllers() {
   expect(mcu.configure(mcu_config, error), "MCU serial controller configures");
   expect(mcu.connect(error), "MCU serial controller connects");
   const std::vector<fmcw::McuWaveformFrame> frames{{1, 2, 3, 4, true}, {5, 6, 7, 8, false}};
-  expect(mcu.uploadWaveform(frames, error), "MCU waveform upload completes with count acknowledgement");
+  std::vector<fmcw::McuUploadProgress> upload_progress;
+  expect(mcu.uploadWaveform(frames, error, [&upload_progress](const fmcw::McuUploadProgress& progress) {
+           upload_progress.push_back(progress);
+         }),
+         "MCU waveform upload completes with count acknowledgement");
+  expect(!upload_progress.empty() && upload_progress.front().stage == fmcw::McuUploadStage::Clearing &&
+             upload_progress.back().stage == fmcw::McuUploadStage::Complete &&
+             upload_progress.back().completed_points == frames.size(),
+         "MCU upload progress covers clear, transfer, verification, and completion");
   expect(mcu.status().waveform_points == 2 && mcu.status().device.ready, "MCU telemetry exposes loaded count");
   expect(mcu.startScan(error) && mcu.status().scan_enabled, "MCU START acknowledgement enables scan state");
-  expect(mcu.stopScan(error) && !mcu.status().scan_enabled, "MCU STOP acknowledgement clears scan state");
+  expect(mcu.stopScan(error) && !mcu.status().scan_enabled && mcu.status().device.ready &&
+             mcu.status().waveform_points == frames.size(),
+         "MCU STOP retains the verified waveform and returns to Ready");
+  expect(mcu.startScan(error) && mcu.status().scan_enabled,
+         "MCU restarts after STOP without another waveform upload");
+  expect(mcu.stopScan(error), "MCU stops cleanly after the no-reupload restart");
+  mcu.disconnect();
+  expect(mcu.status().waveform_points == 0 && !mcu.status().device.connected,
+         "MCU disconnect invalidates volatile waveform readiness");
 
   auto edfa_transport = std::make_shared<ScriptedSerialTransport>();
   fmcw::EdfaSerialController edfa(edfa_transport);
@@ -377,14 +547,37 @@ void testSerialControllers() {
   edfa_config.edfa.port = "SCRIPT";
   edfa_config.edfa.output_setpoint = {19.99, fmcw::OpticalPowerUnit::Dbm};
   expect(edfa.configure(edfa_config, error), "EDFA serial controller configures");
-  expect(edfa.connect(error), "EDFA status query confirms connection");
-  expect(edfa.status().measured_output_dbm == 20.0, "EDFA telemetry contains measured output");
+  expect(edfa.connect(error), "EDFA complete state query confirms connection");
+  expect(edfa.status().telemetry_valid && edfa.status().measured_current_ma == 1000.0 &&
+             edfa.status().measured_input_dbm == -10.0 &&
+             edfa.status().measured_output_dbm == 20.0,
+         "EDFA telemetry contains current, input power, and output power");
+  expect(edfa.status().control_mode == fmcw::EdfaControlMode::Apc &&
+             std::abs(edfa.status().setpoint.value - 19.99) < 0.001 &&
+             !edfa.status().output_enabled,
+         "EDFA connection reads actual APC mode, target, and soft activation state");
   expect(!edfa.status().interlock_closed, "undefined vendor interlock state is not inferred from connectivity");
   expect(edfa.setControlMode(fmcw::EdfaControlMode::Apc, error), "EDFA APC mode is confirmed");
   expect(edfa.setOutputSetpoint(edfa_config.edfa.output_setpoint, error), "EDFA output setpoint is confirmed");
   expect(edfa.setOutputEnabled(true, error) && edfa.status().output_enabled,
          "EDFA activation acknowledgement enables output state");
+  edfa.disconnect();
+  expect(!edfa.status().output_enabled && !edfa.status().device.connected,
+         "EDFA disconnect confirms output off before closing the serial transport");
+  expect(edfa.connect(error), "EDFA reconnects after a safe disconnect");
   expect(edfa.emergencyOff(error) && !edfa.status().output_enabled, "EDFA emergency off confirms shutdown");
+}
+
+void testOptionalHardwareAdapterSelection() {
+  auto simulator = fmcw::createRuntimeAdapters(fmcw::AcquisitionSource::Simulator);
+  expect(dynamic_cast<fmcw::EdfaSerialController*>(simulator.edfa.get()) != nullptr &&
+             dynamic_cast<fmcw::McuSerialController*>(simulator.mcu.get()) != nullptr,
+         "simulated digitizer keeps real optional EDFA and MCU serial controllers");
+
+  const auto ports = fmcw::availableSerialPorts();
+  expect(std::is_sorted(ports.begin(), ports.end()) &&
+             std::adjacent_find(ports.begin(), ports.end()) == ports.end(),
+         "serial port discovery returns a stable sorted unique list");
 }
 
 void testFakeFullPeriodSession() {
@@ -581,13 +774,17 @@ void testGlobalStopDeviceOrder() {
   fmcw::AcquisitionSession session(digitizer, edfa, mcu);
   fmcw::SystemConfig config;
   config.edfa.mode = fmcw::EdfaMode::Controlled;
-  config.edfa.port = "ORDERED";
+  config.edfa.port = "ORDERED_EDFA";
   config.edfa.warmup_delay_ms = 0;
   config.mcu.enabled = true;
-  config.mcu.port = "ORDERED";
+  config.mcu.port = "ORDERED_MCU";
   std::string error;
-  expect(session.configure(config, 20, error) && session.connect(error) && session.start(error),
-         "ordered hardware session configures, connects, and starts");
+  expect(session.configure(config, 20, error) && session.connect(error),
+         "ordered hardware session configures and connects");
+  const auto waveform = fmcw::McuProtocol::buildFullFrameWaveform(config, error);
+  expect(!waveform.empty() && mcu.uploadWaveform(waveform, error),
+         "ordered MCU loads the configured frame waveform before Start");
+  expect(session.start(error), "ordered hardware session starts");
   events.clear();
   expect(session.stop(error), "ordered hardware session stops cleanly");
   const std::vector<std::string> expected{
@@ -706,15 +903,17 @@ void testOptionalControlledDevicesAndChannelB() {
   fmcw::SystemConfig config;
   config.digitizer.channel = fmcw::DigitizerChannel::B;
   config.edfa.mode = fmcw::EdfaMode::Controlled;
-  config.edfa.port = "SIM";
+  config.edfa.port = "SIM_EDFA";
   config.edfa.warmup_delay_ms = 0;
   config.mcu.enabled = true;
-  config.mcu.port = "SIM";
+  config.mcu.port = "SIM_MCU";
   std::string error;
 
   expect(session.configure(config, 22, error), "controlled fake session configures");
   expect(session.connect(error), "controlled fake session connects");
-  expect(mcu.uploadWaveform({{1, 2, 3, 4, true}}, error), "fake MCU waveform loads before Start");
+  const auto waveform = fmcw::McuProtocol::buildFullFrameWaveform(config, error);
+  expect(!waveform.empty() && mcu.uploadWaveform(waveform, error),
+         "fake MCU loads the configured frame waveform before Start");
   expect(session.start(error), "controlled EDFA starts, digitizer arms, and MCU scan starts last");
   fmcw::RawFrame frame;
   expect(session.waitForFrame(frame, std::chrono::milliseconds(10), error) == fmcw::FrameWaitResult::FrameReady,
@@ -734,10 +933,10 @@ void testScannerStartFailureRollsBackArmedDevices() {
   fmcw::AcquisitionSession session(digitizer, edfa, mcu);
   fmcw::SystemConfig config;
   config.edfa.mode = fmcw::EdfaMode::Controlled;
-  config.edfa.port = "SIM";
+  config.edfa.port = "SIM_EDFA";
   config.edfa.warmup_delay_ms = 0;
   config.mcu.enabled = true;
-  config.mcu.port = "SIM";
+  config.mcu.port = "SIM_MCU";
   std::string error;
 
   expect(session.configure(config, 23, error) && session.connect(error),
@@ -774,6 +973,35 @@ void testAlazarBuildGate() {
   expect(digitizer.configure(config, error), "no-SDK Alazar adapter still validates and caches configuration");
   expect(!digitizer.connect(error) && error.find("ALAZAR_SDK_ROOT") != std::string::npos,
          "no-SDK Alazar adapter reports an actionable connection error");
+}
+
+void testAlazarBoardDetection() {
+  const auto detection = fmcw::AlazarDigitizer::detectConnectedBoard();
+  std::cout << "Alazar detection: " << detection.detail << '\n';
+  expect(detection.sdk_available == fmcw::AlazarDigitizer::sdkAvailable(),
+         "Alazar board detection reports the build-time SDK state");
+  if (!detection.sdk_available) {
+    expect(!detection.board_present && !detection.supported &&
+               detection.detail.find("ALAZAR_SDK_ROOT") != std::string::npos,
+           "no-SDK board detection remains nonfatal and actionable");
+    return;
+  }
+  if (!detection.board_present) {
+    expect(!detection.supported && detection.profile_id.empty(),
+           "SDK board detection tolerates a machine without hardware");
+    return;
+  }
+  if (!detection.supported) {
+    expect(detection.sdk_board_kind != 0U && detection.profile_id.empty(),
+           "unsupported Alazar hardware is reported without selecting a profile");
+    return;
+  }
+  const auto* capabilities =
+      fmcw::findDigitizerBoardCapabilities(detection.profile_id);
+  expect(capabilities != nullptr &&
+             capabilities->sdk_board_kind == detection.sdk_board_kind &&
+             capabilities->display_name == detection.display_name,
+         "detected Alazar hardware resolves to its supported capability profile");
 }
 
 void testAlazarLeftAlignedSampleConversion() {
@@ -821,8 +1049,10 @@ void testAlazarLeftAlignedSampleConversion() {
 
 int main() {
   testMcuProtocol();
+  testVectorTrajectoryMapping();
   testEdfaProtocol();
   testSerialControllers();
+  testOptionalHardwareAdapterSelection();
   testFakeFullPeriodSession();
   testFakeDmaBatchSession();
   testFakeDmaRingOverflow();
@@ -835,6 +1065,7 @@ int main() {
   testScannerStartFailureRollsBackArmedDevices();
   testFiniteFakeAcquisition();
   testAlazarBuildGate();
+  testAlazarBoardDetection();
   testAlazarLeftAlignedSampleConversion();
 
   if (failures == 0) {

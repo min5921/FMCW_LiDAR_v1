@@ -374,6 +374,17 @@ Disk write, UDP transmission, and Qt paint time은 이 5 ms signal-processing ga
 - marker는 각 B-scan 시작점에서만 출력한다.
 - MCU waveform cycle과 measured Alazar DMA frame time 차이를 검사한다.
 
+### Firmware Baseline (2026-07-27)
+
+- `legacy/MEMS_control_v3`와 분리된 활성 CubeMX 프로젝트를 `src/firmware/mcu/FMCW_LiDAR_MCU`에 만들었다.
+- 이전 200 kHz-to-400 kHz TIM1 경로를 제거하고 TIM2 CH1/CH3를 독립 MEMS mirror PWM으로 유지했다.
+- TIM6 100 kHz waveform 재생, PA9 B-scan marker, PA11 output enable의 역할과 안전 순서를 코드/문서에 고정했다.
+- UART parsing과 ACK를 main loop로 이동하고 UART IRQ priority를 5로 낮춰 TIM6 priority 0 재생을 보호했다.
+- STM32CubeIDE 2.0.0 Debug/Release build는 모두 0 errors, 0 warnings로 통과했다.
+- 실제 MEMS angle, marker timing, full-frame 반복 및 Alazar frame 정합 검증은 계속 pending이다.
+- 현재 TIM6 100 kHz와 998 point/line 조합은 약 100.2 Hz marker를 만들므로 목표 200 Hz에 맞춘 point-rate/line-point contract 결정이 필요하다.
+- 현재 15000-point buffer는 998 point/line에서 최대 15 line이며, 더 큰 frame에는 compact/chunk/generated waveform 설계가 필요하다.
+
 ### Exit Criteria
 
 - physical target의 angle/distance가 calibration tolerance 안에서 3D point와 일치한다.

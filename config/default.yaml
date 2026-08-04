@@ -50,7 +50,7 @@ edfa:
     value: 10
     unit: dbm
   output_min_dbm: 0
-  output_max_dbm: 23
+  output_max_dbm: 30
   warmup_delay_ms: 3000
   stop_acquisition_on_disconnect: true
 scan:
@@ -118,6 +118,8 @@ calibration:
 mcu:
   enabled: false
   port: ""
+  waveform_source: legacy_xym_file
+  waveform_file: "config/waveforms/mems_xym_100ksps.txt"
   baud_rate: 115200
   parity: none
   stop_bits: 1

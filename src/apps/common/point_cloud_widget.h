@@ -48,6 +48,7 @@ class PointCloudWidget final : public QOpenGLWidget, protected QOpenGLFunctions 
   };
 
   void rebuildVertices();
+  void fitSpatialBounds();
 
   std::shared_ptr<const PointCloudSnapshot> snapshot_;
   std::vector<PointXYZI> current_points_;
@@ -66,6 +67,7 @@ class PointCloudWidget final : public QOpenGLWidget, protected QOpenGLFunctions 
   float center_z_ = 0.0F;
   float extent_ = 1.0F;
   bool accumulate_ = false;
+  bool spatial_bounds_valid_ = false;
 };
 
 }  // namespace fmcw

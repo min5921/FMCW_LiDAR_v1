@@ -5,8 +5,6 @@
 #include "drivers/mcu/mcu_serial_controller.h"
 #include "drivers/replay/replay_digitizer.h"
 #include "drivers/simulator/fake_digitizer.h"
-#include "drivers/simulator/fake_edfa.h"
-#include "drivers/simulator/fake_mcu.h"
 
 #include <memory>
 
@@ -17,23 +15,21 @@ RuntimeAdapters createRuntimeAdapters(AcquisitionSource source) {
   switch (source) {
     case AcquisitionSource::Alazar:
       adapters.digitizer = std::make_unique<AlazarDigitizer>();
-      adapters.edfa = std::make_unique<EdfaSerialController>();
-      adapters.mcu = std::make_unique<McuSerialController>();
       adapters.display_name = "AlazarTech hardware";
       break;
     case AcquisitionSource::Replay:
       adapters.digitizer = std::make_unique<ReplayDigitizer>();
-      adapters.edfa = std::make_unique<FakeEdfaController>();
-      adapters.mcu = std::make_unique<FakeMcuController>();
       adapters.display_name = "Raw recording replay";
       break;
     case AcquisitionSource::Simulator:
       adapters.digitizer = std::make_unique<FakeDigitizer>();
-      adapters.edfa = std::make_unique<FakeEdfaController>();
-      adapters.mcu = std::make_unique<FakeMcuController>();
       adapters.display_name = "Signal simulator";
       break;
   }
+  // Optional hardware follows its own profile mode. It must not silently turn
+  // into a simulator merely because the digitizer source is simulated/replayed.
+  adapters.edfa = std::make_unique<EdfaSerialController>();
+  adapters.mcu = std::make_unique<McuSerialController>();
   return adapters;
 }
 

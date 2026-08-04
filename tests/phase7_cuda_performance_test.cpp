@@ -17,6 +17,22 @@ std::uint64_t nowNs() {
       std::chrono::steady_clock::now().time_since_epoch()).count());
 }
 
+void stampRasterLine(fmcw::RawFrameBatch& batch, const fmcw::SystemConfig& config,
+                     std::uint64_t batch_index) {
+  const auto record_count = static_cast<std::uint32_t>(batch.records.size());
+  const auto y = static_cast<std::uint32_t>(batch_index % config.scan.y_line_count);
+  for (std::uint32_t index = 0U; index < record_count; ++index) {
+    auto& metadata = batch.records[index].metadata;
+    metadata.frame_id = batch_index * record_count + index + 1U;
+    metadata.dma_buffer_sequence = batch_index;
+    metadata.record_index_in_buffer = index;
+    metadata.records_in_buffer = record_count;
+    metadata.scan_position.x_index = index;
+    metadata.scan_position.y_index = y;
+    metadata.scan_position.valid = true;
+  }
+}
+
 }  // namespace
 
 int main() {
@@ -66,6 +82,7 @@ int main() {
       mutable_batch->metadata.sequence = batch_index;
       mutable_batch->metadata.completion_timestamp_ns = timestamp_ns;
       mutable_batch->metadata.ownership_ready_timestamp_ns = timestamp_ns;
+      stampRasterLine(*mutable_batch, config, batch_index);
       fmcw::RawFrameBatchPtr batch = mutable_batch;
       if (service.enqueueBatch(std::move(batch), error) !=
           fmcw::ProcessingEnqueueResult::Accepted) {
@@ -112,9 +129,10 @@ int main() {
       status.frames_processed == expected_record_count &&
       callback_count.load() == expected_record_count &&
       valid_point_count.load() == expected_record_count && bscan &&
-      bscan->width == 998U && bscan->completed_lines == 1U;
+      bscan->width == 998U && bscan->complete &&
+      bscan->completed_lines == bscan->height;
   if (!complete) {
-    std::cerr << "Phase 7.3C CUDA benchmark did not preserve every 998-point line\n";
+    std::cerr << "Phase 7.3C CUDA benchmark did not publish a complete raster B-scan frame\n";
     return 1;
   }
   return 0;

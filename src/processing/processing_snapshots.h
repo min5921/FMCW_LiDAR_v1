@@ -57,6 +57,7 @@ struct BScanSnapshot {
   std::uint32_t width = 0;
   std::uint32_t height = 0;
   std::uint32_t completed_lines = 0;
+  bool complete = false;
   std::vector<float> depth_m;
   std::vector<std::uint8_t> valid;
 };

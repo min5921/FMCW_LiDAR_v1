@@ -134,10 +134,14 @@ QualificationResult runQualification(fmcw::FftBackendKind backend_kind) {
   const bool exact_results = processing_status.frames_processed == expected_processed_records &&
       callback_count.load() == expected_processed_records &&
       valid_point_count.load() == expected_processed_records;
-  const bool bscan_complete = processing_status.batches_processed == 0U ||
-      (bscan && bscan->width == 998U && bscan->height == config.scan.y_line_count &&
-       bscan->completed_lines >= 1U && bscan->completed_lines <= bscan->height &&
-       bscan->depth_m.size() == static_cast<std::size_t>(bscan->width) * bscan->height);
+  const bool completed_raster_expected =
+      processing_status.batches_processed >= config.scan.y_line_count;
+  const bool bscan_complete = completed_raster_expected
+      ? (bscan && bscan->complete && bscan->width == 998U &&
+         bscan->height == config.scan.y_line_count &&
+         bscan->completed_lines == bscan->height &&
+         bscan->depth_m.size() == static_cast<std::size_t>(bscan->width) * bscan->height)
+      : !bscan;
   const bool overflow_reported = acquisition_status.failed &&
       (acquisition_status.stop_reason.find("overflow") != std::string::npos ||
        acquisition_status.stop_reason.find("capacity exceeded") != std::string::npos);

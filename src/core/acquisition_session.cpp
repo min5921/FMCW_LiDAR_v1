@@ -1,6 +1,7 @@
 #include "core/acquisition_session.h"
 
 #include "core/config_validation.h"
+#include "core/scan_trajectory.h"
 
 #include <chrono>
 #include <sstream>
@@ -26,24 +27,6 @@ void appendError(std::string& destination, std::string_view source, const std::s
   destination += std::string(source) + ": " + message;
 }
 
-void stampScanPosition(const SystemConfig& config, RawFrame& frame) {
-  const auto zero_based = frame.metadata.frame_id == 0 ? 0 : frame.metadata.frame_id - 1;
-  const auto y = static_cast<std::uint32_t>((zero_based / config.scan.x_pixel_count) % config.scan.y_line_count);
-  auto x = static_cast<std::uint32_t>(zero_based % config.scan.x_pixel_count);
-  if (config.scan.bidirectional && (y % 2U) != 0U) {
-    x = config.scan.x_pixel_count - 1U - x;
-  }
-  frame.metadata.scan_position.x_index = x;
-  frame.metadata.scan_position.y_index = y;
-  frame.metadata.scan_position.x_angle_deg = static_cast<float>(config.scan.x_start_deg +
-      (config.scan.x_end_deg - config.scan.x_start_deg) * static_cast<double>(x) /
-          static_cast<double>(config.scan.x_pixel_count - 1U));
-  frame.metadata.scan_position.y_angle_deg = static_cast<float>(config.scan.y_start_deg +
-      (config.scan.y_end_deg - config.scan.y_start_deg) * static_cast<double>(y) /
-          static_cast<double>(config.scan.y_line_count - 1U));
-  frame.metadata.scan_position.valid = true;
-}
-
 bool validateAndStampFrame(const SystemConfig& config, std::uint64_t config_revision,
                            const EdfaStatus& edfa_status, RawFrame& frame, std::string& error) {
   if (frame.metadata.frame_kind != FrameKind::FullChirpPeriod ||
@@ -59,9 +42,6 @@ bool validateAndStampFrame(const SystemConfig& config, std::uint64_t config_revi
   frame.metadata.optical_state.edfa_output_enabled = edfa_status.output_enabled;
   frame.metadata.optical_state.laser_enabled = true;
   frame.metadata.optical_state.revision = config_revision;
-  if (!frame.metadata.scan_position.valid) {
-    stampScanPosition(config, frame);
-  }
   return true;
 }
 
@@ -70,11 +50,7 @@ bool validateAndStampFrame(const SystemConfig& config, std::uint64_t config_revi
 AcquisitionSession::AcquisitionSession(IDigitizer& digitizer, IEdfaController& edfa, IMcuController& mcu)
     : digitizer_(digitizer), edfa_(edfa), mcu_(mcu) {}
 
-AcquisitionSession::~AcquisitionSession() {
-  std::string ignored;
-  stopDevices(true, ignored);
-  disconnect();
-}
+AcquisitionSession::~AcquisitionSession() { disconnect(); }
 
 bool AcquisitionSession::configure(const SystemConfig& config, std::uint64_t config_revision, std::string& error) {
   if (running_.load()) {
@@ -96,6 +72,8 @@ bool AcquisitionSession::configure(const SystemConfig& config, std::uint64_t con
     return false;
   }
   config_ = config;
+  active_waveform_.reset();
+  scan_line_sequence_ = 0U;
   config_revision_.store(config_revision);
   configured_.store(true);
   error.clear();
@@ -131,6 +109,9 @@ void AcquisitionSession::disconnect() {
   if (running_.load()) {
     std::string ignored;
     stopDevices(true, ignored);
+  } else {
+    std::string ignored;
+    edfa_.emergencyOff(ignored);
   }
   mcu_.disconnect();
   edfa_.disconnect();
@@ -142,6 +123,18 @@ bool AcquisitionSession::start(std::string& error) {
   if (!configured_.load() || !connected_.load() || running_.load()) {
     error = "Acquisition session is not configured and connected, or is already running";
     return false;
+  }
+
+  active_waveform_.reset();
+  scan_line_sequence_ = 0U;
+  if (config_.mcu.enabled) {
+    active_waveform_ = mcu_.loadedWaveform();
+    if (!active_waveform_ || !active_waveform_->valid() ||
+        active_waveform_->logical_marker_indices.size() != config_.scan.y_line_count ||
+        active_waveform_->emitted_marker_indices.size() != config_.scan.y_line_count) {
+      error = "Loaded MCU waveform does not provide one logical and emitted B-trigger per configured scan line";
+      return false;
+    }
   }
 
   if (config_.edfa.mode == EdfaMode::Controlled) {
@@ -191,6 +184,24 @@ FrameWaitResult AcquisitionSession::waitForFrame(RawFrame& frame, std::chrono::m
   if (!validateAndStampFrame(config_, config_revision_.load(), edfa_.status(), frame, error)) {
     return FrameWaitResult::Error;
   }
+  if (active_waveform_) {
+    TrajectoryLineContext line;
+    if (!prepareTrajectoryLine(config_, *active_waveform_, scan_line_sequence_,
+                               frame.metadata.records_in_buffer, line) ||
+        !mapTrajectoryRecord(config_, *active_waveform_, line,
+                             frame.metadata.record_index_in_buffer,
+                             frame.metadata.scan_position)) {
+      error = "Unable to map the acquired record to the loaded MCU trajectory";
+      return FrameWaitResult::Error;
+    }
+    if (frame.metadata.record_index_in_buffer + 1U >= frame.metadata.records_in_buffer) {
+      ++scan_line_sequence_;
+    }
+  } else if (!frame.metadata.scan_position.valid) {
+    stampGeneratedRasterPosition(config_, frame);
+  } else if (config_.runtime.acquisition_source == AcquisitionSource::Replay) {
+    frame.metadata.scan_position.source = ScanCoordinateSource::Replay;
+  }
   error.clear();
   return FrameWaitResult::FrameReady;
 }
@@ -222,6 +233,14 @@ FrameWaitResult AcquisitionSession::waitForBatch(RawFrameBatchPtr& batch,
   const auto record_count = static_cast<std::uint32_t>(mutable_batch->records.size());
   const auto edfa_status = edfa_.status();
   const auto config_revision = config_revision_.load();
+  const auto line_sequence = scan_line_sequence_;
+  TrajectoryLineContext trajectory_line;
+  if (active_waveform_ &&
+      !prepareTrajectoryLine(config_, *active_waveform_, line_sequence,
+                             record_count, trajectory_line)) {
+    error = "Unable to prepare the DMA batch trajectory mapping";
+    return FrameWaitResult::Error;
+  }
   for (std::uint32_t index = 0; index < record_count; ++index) {
     auto& frame = mutable_batch->records[index];
     if (frame.metadata.dma_buffer_sequence != mutable_batch->metadata.sequence ||
@@ -233,7 +252,19 @@ FrameWaitResult AcquisitionSession::waitForBatch(RawFrameBatchPtr& batch,
       }
       return FrameWaitResult::Error;
     }
+    if (active_waveform_) {
+      if (!mapTrajectoryRecord(config_, *active_waveform_, trajectory_line, index,
+                               frame.metadata.scan_position)) {
+        error = "Unable to map the DMA batch to the loaded MCU trajectory";
+        return FrameWaitResult::Error;
+      }
+    } else if (!frame.metadata.scan_position.valid) {
+      stampGeneratedRasterPosition(config_, frame);
+    } else if (config_.runtime.acquisition_source == AcquisitionSource::Replay) {
+      frame.metadata.scan_position.source = ScanCoordinateSource::Replay;
+    }
   }
+  ++scan_line_sequence_;
   mutable_batch->metadata.session_ready_timestamp_ns = nowNs();
   batch = std::move(mutable_batch);
   error.clear();

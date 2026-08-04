@@ -915,6 +915,8 @@ bool CudaSignalPipeline::collectNext(bool wait,
       processed.point.z = measurement.z;
       processed.point.intensity = measurement.intensity;
       processed.point.velocity = measurement.velocity_mps;
+      processed.point.scan_x_command = raw.metadata.scan_position.x_command;
+      processed.point.scan_y_command = raw.metadata.scan_position.y_command;
       processed.point.valid = true;
     }
     if (static_cast<int>(index) == slot.selected_record) {

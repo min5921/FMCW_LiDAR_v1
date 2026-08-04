@@ -56,11 +56,23 @@ void testDefaultsAndRoundTrip() {
   expect(decoded.config.runtime.acquisition_source == fmcw::AcquisitionSource::Simulator &&
              decoded.config.runtime.replay_file.empty() && !decoded.config.runtime.replay_loop,
          "round trip preserves the simulator runtime source defaults");
+  expect(decoded.config.mcu.waveform_source == fmcw::McuWaveformSource::LegacyXymFile &&
+             decoded.config.mcu.waveform_file == "config/waveforms/mems_xym_100ksps.txt",
+         "round trip preserves the packaged legacy X/Y/M waveform selection");
+  auto shifted_trigger = defaults;
+  shifted_trigger.scan.trigger_shift_samples = -7;
+  const auto shifted_trigger_decoded = fmcw::ConfigProfileCodec::decodeYaml(
+      fmcw::ConfigProfileCodec::toYaml(shifted_trigger), "trigger-shift-round-trip");
+  expect(shifted_trigger_decoded.ok() &&
+             shifted_trigger_decoded.config.scan.trigger_shift_samples == -7,
+         "round trip preserves a signed MCU B-trigger offset");
   expect(fmcw::kAlazarExternalTriggerLevelCode == 150U,
          "external trigger retains the fixed SDK level argument");
   expect(decoded.config.laser.sweep_bandwidth_hz == 2.0e9 &&
              decoded.config.laser.sweep_rate_hz == 200.0e3,
          "round trip preserves the two distance-conversion laser inputs");
+  expect(decoded.config.edfa.output_max_dbm == fmcw::kEdfaMaximumOutputDbm,
+         "EDFA output limit supports the hardware 30 dBm maximum");
   expect(fmcw::derivedAScanCount(defaults) == defaults.digitizer.records_per_buffer,
          "A-scan count is derived from records per buffer");
   expect(fmcw::derivedFramePointCount(defaults) == 1600U,
@@ -281,10 +293,26 @@ void testSchemaAndBoardCapabilityValidation() {
   fmcw::SystemConfig oversized_mcu_frame;
   oversized_mcu_frame.mcu.enabled = true;
   oversized_mcu_frame.mcu.port = "COM4";
+  oversized_mcu_frame.mcu.waveform_source = fmcw::McuWaveformSource::GeneratedRaster;
   oversized_mcu_frame.scan.y_line_count = 300;
   oversized_mcu_frame.digitizer.b_scan_count = 300;
   expect(fmcw::ConfigValidator::validate(oversized_mcu_frame).hasErrors(),
          "MCU full-frame waveform cannot exceed the firmware point buffer");
+
+  fmcw::SystemConfig excessive_trigger_shift;
+  excessive_trigger_shift.mcu.enabled = true;
+  excessive_trigger_shift.scan.trigger_shift_samples = 15000;
+  expect(hasIssue(fmcw::ConfigValidator::validate(excessive_trigger_shift),
+                  fmcw::ValidationSeverity::Error, "scan.trigger_shift_samples"),
+         "MCU B-trigger offset cannot exceed the firmware waveform buffer");
+
+  fmcw::SystemConfig missing_mcu_waveform;
+  missing_mcu_waveform.mcu.enabled = true;
+  missing_mcu_waveform.mcu.port = "COM4";
+  missing_mcu_waveform.mcu.waveform_file.clear();
+  expect(hasIssue(fmcw::ConfigValidator::validate(missing_mcu_waveform),
+                  fmcw::ValidationSeverity::Error, "mcu.waveform_file"),
+         "legacy MCU mode requires an X/Y/M waveform path");
 
   fmcw::SystemConfig invalid;
   invalid.digitizer.sample_rate_hz = 750.0e6;
@@ -362,6 +390,26 @@ void testSchemaAndBoardCapabilityValidation() {
   oversized_udp_packet.udp.packet_point_count = 3274;
   expect(fmcw::ConfigValidator::validate(oversized_udp_packet).hasErrors(),
          "UDP v1 point count cannot exceed one maximum-size datagram");
+
+  fmcw::SystemConfig controlled_edfa;
+  controlled_edfa.edfa.mode = fmcw::EdfaMode::Controlled;
+  controlled_edfa.edfa.port = "COM6";
+  controlled_edfa.edfa.output_setpoint = {30.0, fmcw::OpticalPowerUnit::Dbm};
+  expect(!fmcw::ConfigValidator::validate(controlled_edfa).hasErrors(),
+         "controlled APC EDFA accepts the hardware 30 dBm maximum");
+  controlled_edfa.edfa.control_mode = fmcw::EdfaControlMode::Agc;
+  expect(hasIssue(fmcw::ConfigValidator::validate(controlled_edfa),
+                  fmcw::ValidationSeverity::Error, "edfa.control_mode"),
+         "UI-controlled EDFA rejects AGC until a gain setpoint control exists");
+
+  fmcw::SystemConfig shared_serial_port;
+  shared_serial_port.mcu.enabled = true;
+  shared_serial_port.mcu.port = "/dev/ttyTHS0";
+  shared_serial_port.edfa.mode = fmcw::EdfaMode::Controlled;
+  shared_serial_port.edfa.port = shared_serial_port.mcu.port;
+  expect(hasIssue(fmcw::ConfigValidator::validate(shared_serial_port),
+                  fmcw::ValidationSeverity::Error, "serial.port_conflict"),
+         "MCU and controlled EDFA cannot select the same serial port");
 }
 
 void testActiveAndPendingConfiguration() {

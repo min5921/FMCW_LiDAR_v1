@@ -23,6 +23,7 @@ add_executable(fmcw_acquisition_tests
 
 target_link_libraries(fmcw_acquisition_tests PRIVATE fmcw_core)
 target_compile_features(fmcw_acquisition_tests PRIVATE cxx_std_17)
+target_compile_definitions(fmcw_acquisition_tests PRIVATE FMCW_TEST_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
 
 add_test(NAME fmcw_acquisition_tests COMMAND fmcw_acquisition_tests)
 

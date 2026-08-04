@@ -575,18 +575,28 @@ void FakeDigitizer::fillFrame(RawFrame& frame, std::uint64_t frame_id,
 
   const auto zero_based = frame_id - 1;
   const auto y = static_cast<std::uint32_t>((zero_based / config_.scan.x_pixel_count) % config_.scan.y_line_count);
-  auto x = static_cast<std::uint32_t>(zero_based % config_.scan.x_pixel_count);
-  if (config_.scan.bidirectional && (y % 2U) != 0U) {
-    x = config_.scan.x_pixel_count - 1U - x;
-  }
+  const auto step = static_cast<std::uint32_t>(zero_based % config_.scan.x_pixel_count);
+  const bool decreasing = config_.scan.bidirectional && (y % 2U) != 0U;
+  const auto x = decreasing ? config_.scan.x_pixel_count - 1U - step : step;
   metadata.scan_position.x_index = x;
   metadata.scan_position.y_index = y;
+  metadata.scan_position.trajectory_sample_index = static_cast<std::uint32_t>(zero_based);
+  metadata.scan_position.x_command = static_cast<float>(-1.0 +
+      2.0 * static_cast<double>(x) / static_cast<double>(config_.scan.x_pixel_count - 1U));
+  metadata.scan_position.y_command = static_cast<float>(-1.0 +
+      2.0 * static_cast<double>(y) / static_cast<double>(config_.scan.y_line_count - 1U));
   metadata.scan_position.x_angle_deg = static_cast<float>(config_.scan.x_start_deg +
       (config_.scan.x_end_deg - config_.scan.x_start_deg) * static_cast<double>(x) /
           static_cast<double>(config_.scan.x_pixel_count - 1U));
   metadata.scan_position.y_angle_deg = static_cast<float>(config_.scan.y_start_deg +
       (config_.scan.y_end_deg - config_.scan.y_start_deg) * static_cast<double>(y) /
           static_cast<double>(config_.scan.y_line_count - 1U));
+  metadata.scan_position.fast_axis = ScanAxis::X;
+  metadata.scan_position.fast_axis_direction = decreasing
+      ? ScanDirection::Decreasing
+      : ScanDirection::Increasing;
+  metadata.scan_position.source = ScanCoordinateSource::GeneratedRaster;
+  metadata.scan_position.angle_calibrated = true;
   metadata.scan_position.valid = true;
 }
 

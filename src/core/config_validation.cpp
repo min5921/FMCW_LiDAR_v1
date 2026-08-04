@@ -246,10 +246,28 @@ ValidationResult ConfigValidator::validate(const SystemConfig& config) {
         "A-scan count must equal records_per_buffer and B-scan count must equal the configured line count",
         "Derive A-scans from the DMA record count and keep B-scans aligned with scan.y_line_count");
   }
-  if (config.mcu.enabled && derivedFramePointCount(config) > 15000U) {
+  if (config.mcu.enabled && config.mcu.waveform_source == McuWaveformSource::GeneratedRaster &&
+      derivedFramePointCount(config) > 15000U) {
     add(result, ValidationSeverity::Error, "scan.y_line_count",
         "The full-frame MCU waveform exceeds the firmware 15000-point buffer",
         "Reduce records_per_buffer or B-scans per frame");
+  }
+  if (config.mcu.enabled && config.mcu.waveform_source == McuWaveformSource::LegacyXymFile &&
+      config.mcu.waveform_file.empty()) {
+    add(result, ValidationSeverity::Error, "mcu.waveform_file",
+        "Legacy MCU waveform mode requires an X/Y/M file",
+        "Select the waveform text file in Scan / MCU");
+  }
+  if (config.mcu.enabled && (config.scan.trigger_shift_samples <= -15000 ||
+      config.scan.trigger_shift_samples >= 15000)) {
+    add(result, ValidationSeverity::Error, "scan.trigger_shift_samples",
+        "B-trigger offset must fit within the MCU 15000-point waveform buffer",
+        "Use an offset from -14999 to 14999 MCU samples; negative advances and positive delays the trigger");
+  }
+  if (config.mcu.enabled && std::abs(config.scan.scanner_sample_rate_hz - 100000.0) > 1.0e-6) {
+    add(result, ValidationSeverity::Error, "scan.scanner_sample_rate_hz",
+        "The active MCU firmware playback rate is fixed at 100 kHz",
+        "Use 100000 Hz; legacy files are converted to this rate during upload");
   }
 
   if (config.edfa.mode == EdfaMode::None && config.edfa.required_before_start) {
@@ -265,6 +283,11 @@ ValidationResult ConfigValidator::validate(const SystemConfig& config) {
     if (config.edfa.output_min_dbm >= config.edfa.output_max_dbm) {
       add(result, ValidationSeverity::Error, "edfa.output_max_dbm", "EDFA output limits are reversed or equal",
           "Set output_min_dbm below output_max_dbm");
+    }
+    if (config.edfa.control_mode != EdfaControlMode::Apc) {
+      add(result, ValidationSeverity::Error, "edfa.control_mode",
+          "This build supports controlled EDFA output in APC mode only",
+          "Select APC; ACC current and AGC gain controls are not exposed yet");
     }
     const double output_dbm = setpointDbm(config.edfa.output_setpoint);
     if (!std::isfinite(output_dbm) || output_dbm < config.edfa.output_min_dbm || output_dbm > config.edfa.output_max_dbm) {
@@ -308,6 +331,12 @@ ValidationResult ConfigValidator::validate(const SystemConfig& config) {
                              !validSerialStopBits(config.mcu.stop_bits))) {
     add(result, ValidationSeverity::Error, "mcu.port", "Enabled MCU requires a complete serial connection",
         "Set port, baud rate, timeout, and one or two stop bits");
+  }
+  if (config.mcu.enabled && config.edfa.mode == EdfaMode::Controlled &&
+      !config.mcu.port.empty() && config.mcu.port == config.edfa.port) {
+    add(result, ValidationSeverity::Error, "serial.port_conflict",
+        "MCU and controlled EDFA cannot share one serial port",
+        "Use Jetson /dev/ttyTHS0 for the MCU and a separate USB UART port for the EDFA");
   }
 
   const double chirp_period_seconds = derivedRecordPeriodSeconds(config);

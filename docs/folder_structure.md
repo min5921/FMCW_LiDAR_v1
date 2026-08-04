@@ -8,6 +8,7 @@ FMCW_LiDAR/
   config/
     calibration/
     profiles/
+    waveforms/
   data/
     raw/
     processed/
@@ -59,8 +60,11 @@ FMCW_LiDAR/
 - Jetson profile
 - `profiles/`: 사용자/측정 profile
 - `calibration/`
+- `waveforms/`: Windows와 Jetson package에 포함되는 활성 MCU X/Y/M waveform
 
 현재 계층은 `default.yaml` -> `windows.yaml` 또는 `jetson.yaml` -> `profiles/*.yaml` -> `calibration/*.yaml` 순서로 적용한다. 상세 규칙은 `configuration.md`에 있다.
+
+legacy converter에 보관된 원본을 실제 GUI에서 사용할 때는 활성 사본을 `config/waveforms/`에 둔다. 현재 기본 파일은 `mems_xym_100ksps.txt`이며 GUI의 Scan / MCU 페이지에서 다른 파일을 선택할 수도 있다.
 
 ### `data/`
 
@@ -94,6 +98,7 @@ legacy/EDFA-Amplifier-V20240219/
 - 직접 수정하지 않는다.
 - 새 구조로 옮길 때는 `src/`로 복사하거나 새로 정리한다.
 - MCU/STM32 관련 기존 코드는 `legacy/MEMS_control_v3/`에서 참조하고, 새 firmware/protocol 정리는 `src/firmware/mcu/`에 둔다.
+- 활성 CubeMX/CubeIDE 프로젝트는 `src/firmware/mcu/FMCW_LiDAR_MCU/`이며 legacy와 별도 프로젝트 이름을 사용한다.
 - EDFA vendor controller, FTDI driver, command PDF는 `legacy/EDFA-Amplifier-V20240219/`에서 참조하고, 새 EDFA 제어 코드는 `src/drivers/edfa/`에 둔다.
 
 ### `outputs/`
@@ -127,7 +132,7 @@ legacy/EDFA-Amplifier-V20240219/
 - `processing/cuda/`: active CUDA/cuFFT implementation compiled from `.cu`
 - `storage/`: raw writer, processed writer
 - `visualization/`: 2D plot, heatmap, 3D point cloud 공통 로직
-- `firmware/mcu/`: 새 MCU firmware, UART command, MEMS 제어 protocol 정리
+- `firmware/mcu/FMCW_LiDAR_MCU/`: 활성 CubeMX/CubeIDE firmware, UART command, MEMS 제어 protocol
 
 ### `tests/`
 

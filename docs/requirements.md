@@ -148,10 +148,10 @@ UI 선택 기준:
 
 UI에서 다음 항목을 설정할 수 있어야 한다.
 
-- Board model: `ATS9120`, `ATS9130`, `ATS9350/51/52/53`, `ATS9360/62/64`,
-  `ATS9371/73` 중 선택하고 SDK 연결 시 실제 board kind와 일치하는지 검증
-- 별도 보드 진단 화면은 두지 않고 기존 `Board model`에는 모델 번호만 표시한다.
-- 모델 선택을 바꾸면 sampling rate, input range, record/pre-trigger alignment,
+- Board model: SDK 연결 시 System 1 / Board 1의 board kind를 자동 감지하고
+  `ATS9120`, `ATS9130`, `ATS9350/51/52/53`, `ATS9360/62/64`, `ATS9371/73` 지원 목록과 대조
+- 별도 보드 진단 화면이나 수동 모델 선택은 두지 않고 `Board model`에는 자동 감지된 모델 번호만 표시한다.
+- 감지 모델이 바뀌면 sampling rate, input range, record/pre-trigger alignment,
   trigger range 및 AutoDMA flag를 해당 모델의 capability로 다시 설정한다.
 - System ID / Board ID: `1 / 1`로 고정하며 UI 입력에서 제외
 - Channel select: A 또는 B
@@ -255,10 +255,10 @@ UI 설정 항목:
 - EDFA enable/use toggle
 - EDFA mode: none, manual, controlled
 - EDFA required before start: true/false
-- Serial/FTDI port
+- 자동 검색된 Serial/FTDI port 선택과 목록 refresh
 - Baud rate, parity, stop bit, timeout
 - Output on/off
-- Optical output setpoint: mW 또는 dBm
+- Optical output setpoint: 현재 controlled UI는 APC 0.0~30.0 dBm
 - Output limit/min/max
 - Control mode: device command set이 지원하는 ACC/APC/AGC 계열 모드
 - Warm-up delay
@@ -290,18 +290,18 @@ legacy 참고:
 
 스캐너/미러/MTI 관련 설정을 UI에서 제어한다.
 
-- X start angle
-- X end angle
-- Y start angle
-- Y end angle
+- X angle at minimum X command
+- X angle at maximum X command
+- Y angle at minimum Y command
+- Y angle at maximum Y command
 - Scan direction
-- Bidirectional scan enable
+- Bidirectional scan enable for generated raster mode; legacy X/Y/M direction is read from the waveform
 - A-scan count: Digitizer의 `Records per buffer`에서 읽기 전용으로 표시
 - B-scans / frame: 사용자가 직접 설정
 - Positions / frame: `records_per_buffer * B-scans_per_frame`으로 계산하여 읽기 전용 표시
 - DMA B-scan rate/period: Alazar DMA buffer 완료 timestamp 간격에서 실측하여 읽기 전용 표시
 - Measured frame time: `DMA buffer period * B-scans_per_frame`으로 계산하여 읽기 전용 표시
-- Trigger shift
+- B-trigger offset: MCU 100 kHz sample 단위, `0`은 원본 M timing, 음수는 advance, 양수는 delay
 - Scanner port
 - Scanner sample rate
 - Scanner waveform upload/reconnect/readiness
@@ -312,12 +312,14 @@ legacy 참고:
 - Scan / MCU 페이지에는 별도 Start/Stop을 두지 않고 global START/STOP과 연동 상태만 표시한다.
 - Start acquisition 전에 scanner ready, digitizer ready, trigger ready를 모두 확인한다.
 - 현재 MCU firmware의 TIM6 point rate는 100 kHz이며 MCU cycle time은 `full_frame_waveform_points / 100 kHz`로 계산한다.
-- MCU에는 `A-scans_per_B-scan * B-scans_per_frame` 크기의 한 프레임 전체 파형을 업로드한다.
+- generated raster는 `A-scans_per_B-scan * B-scans_per_frame` 크기로 생성한다. legacy X/Y/M은 파일의 전체 vector waveform을 그대로 업로드한다.
 - legacy waveform과 동일하게 각 B-scan 시작점에서만 marker를 출력하고, 모든 waveform point에서 marker를 켜지 않는다.
+- B-trigger offset은 원본 X/Y waveform, 원본 M edge, 좌표 anchor를 수정하지 않고 출력용 M bit만 반복 waveform 안에서 순환 이동한다. 변경은 restart-required이며 waveform을 다시 업로드해야 한다.
 - MCU cycle time은 scanner 파형 검증값이며 Alazar DMA B-scan 속도를 대신하지 않는다.
 - 실측 DMA frame time과 MCU waveform cycle time 차이가 5%를 넘으면 UI에 timing mismatch warning을 표시한다.
 - 스캔 패턴 preview를 2D로 표시한다.
-- bidirectional scan일 때 짝수/홀수 line의 X 방향 반전을 UI에 표시한다.
+- legacy vector waveform은 M rising edge를 line 시작으로 사용하고 각 line의 실제 X/Y 변화량으로 fast axis와 방향을 판정한다. 홀짝 line을 소프트웨어에서 다시 반전하지 않는다.
+- 하강 line은 원본 command/angle 순서를 유지하고 B-scan 공간 column만 한 번 역배치한다. Point cloud는 한 frame 완료 시 갱신하며 view bounds는 자동으로 매 frame 재계산하지 않는다.
 - Stop 순서는 scanner stop, digitizer abort, buffer flush 순서로 안정화한다.
 - Emergency stop 버튼을 제공하고 scanner/laser/digitizer 상태를 즉시 안전 상태로 돌린다.
 
@@ -351,7 +353,7 @@ legacy 참고:
 10. Distance calculation
 11. Velocity calculation
 12. XYZ point 변환
-13. B-scan line heatmap 갱신 및 complete raster frame point-cloud publish
+13. Complete raster frame 단위 B-scan heatmap 및 point-cloud publish
 
 ### 3.5.1 Chirp Segmentation
 
@@ -432,7 +434,7 @@ CPU FFT 요구사항:
 - FFT workload per DMA buffer: 1996 transforms of length 2048
 - B-scan line rate and processing deadline: 200 Hz, 5.00 ms
 
-성능 시간은 DMA completion부터 998번째 distance/velocity/XYZ와 B-scan line snapshot 완성까지 측정한다. ATS sample conversion, ownership copy, segmentation, DC removal, window, FFT, magnitude dBFS, strict peak threshold와 최대 정수 bin 선택, `NaN` validity, geometry 계산을 포함한다. Disk write, UDP transmission, Qt paint는 이 5 ms signal-processing 측정에서 제외하고 별도 subsystem deadline으로 관리한다.
+성능 시간은 DMA completion부터 998번째 distance/velocity/XYZ와 B-scan line aggregation 완성까지 측정한다. ATS sample conversion, ownership copy, segmentation, DC removal, window, FFT, magnitude dBFS, strict peak threshold와 최대 정수 bin 선택, `NaN` validity, geometry 계산을 포함한다. Complete-raster snapshot 공개는 마지막 line에서 수행한다. Disk write, UDP transmission, Qt paint는 이 5 ms signal-processing 측정에서 제외하고 별도 subsystem deadline으로 관리한다.
 
 FFTW와 CUDA는 각각 최소 10분 sustained test에서 모든 batch가 5.00 ms 이내여야 한다. p50/p95/p99/maximum과 deadline miss count를 기록하고, DMA/processing drop, stale result, 지속적인 queue 증가가 하나라도 있으면 불합격이다. Phase 7.3은 두 backend가 각 target platform에서 이 기준을 통과한 뒤에만 완료한다.
 
@@ -495,7 +497,7 @@ UI 기능:
 - Velocity color map
 - Distance color map
 - Rotate/pan/zoom
-- Reset camera
+- Fit current cloud / reset camera
 - Point size 조절
 - Frame freeze
 - Current frame save
@@ -503,12 +505,13 @@ UI 기능:
 
 실시간 3D 요구사항:
 
-- legacy와 동일하게 한 B-scan 내부 record index를 X, B-scan line index를 Y raster 순서로 사용한다.
-- Y scanner angle 범위는 Cartesian Z 방향 시야각으로 나타나므로 완성 cloud는 세로 방향으로 분포할 수 있지만, line별로 위아래로 펼쳐지는 partial animation은 표시하지 않는다.
+- legacy X/Y/M vector mode는 원본 command를 각도 보정 후 Cartesian 좌표로 사용한다. record/line index는 B-scan 공간 배치용이며 실제 X/Y command를 대신하지 않는다.
+- 하강 fast-axis line은 command와 Cartesian 좌표를 바꾸지 않고 B-scan column만 한 번 역배치한다. line별로 위아래로 펼쳐지는 partial animation은 표시하지 않는다.
 - 모든 B-scan line이 완료된 frame만 표시하고 다음 frame 조립 중에는 직전 complete frame을 유지한다.
 - point 수가 많을 때 decimation 또는 level-of-detail를 적용한다.
 - 3D viewer update rate를 acquisition rate와 독립적으로 설정한다.
 - 3D rendering이 느려져도 acquisition/processing/storage는 계속 동작해야 한다.
+- spatial view bounds는 매 frame 자동 재중심화하지 않고 session 동안 고정한다. 사용자가 Fit View를 실행할 때만 현재 cloud에 다시 맞춘다.
 - color map 범위는 auto/manual을 모두 지원한다.
 - point cloud 좌표계, 단위, 카메라 방향을 UI에 표시한다.
 - 저장된 raw 또는 processed frame을 replay하여 동일한 3D viewer에서 확인할 수 있어야 한다.
@@ -775,7 +778,7 @@ UI 요구사항:
 
 ### 3.15 MCU/Firmware Integration
 
-MCU/STM32 기반 MEMS 제어 firmware는 기존 코드를 `legacy/MEMS_control_v3`에 보존하고, 새 버전에서 필요한 protocol, command, build artifact는 `src/firmware/mcu`와 문서로 분리한다.
+MCU/STM32 기반 MEMS 제어 firmware는 기존 코드를 `legacy/MEMS_control_v3`에 보존한다. 활성 CubeMX/CubeIDE 프로젝트는 `src/firmware/mcu/FMCW_LiDAR_MCU`에 두고 protocol, command, source를 legacy와 분리한다. TIM1의 기존 200 kHz-to-400 kHz 변환은 사용하지 않으며, TIM2 CH1/CH3는 독립 MEMS mirror PWM, TIM6는 100 kHz waveform point clock, PA9는 B-scan marker로 사용한다.
 
 MCU UI 요구사항:
 
@@ -800,6 +803,7 @@ Protocol 요구사항:
 
 Timing 요구사항:
 
+- UART4는 TIM6보다 높은 preemption priority를 사용한다. UART ISR은 수신 ring 적재와 STOP fast-path만 수행하고 blocking parsing/ACK는 main loop에서 처리한다. START 이후에도 ACK와 STOP 통신이 유지되어야 하며, B-trigger의 고정 timing은 M-only offset으로 보정한다.
 - MCU MEMS scan timing과 digitizer acquisition frame timing을 같은 session clock 기준으로 기록한다.
 - Laser `up_chirp_only` trigger 방식에서는 digitizer가 full-period buffer를 받고, MCU scan 위치는 해당 period/frame metadata와 매칭되어야 한다.
 - trigger loss, MCU stop, scan underrun이 발생하면 acquisition/processing/storage metadata에 표시한다.

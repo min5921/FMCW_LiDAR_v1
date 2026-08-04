@@ -65,3 +65,12 @@ bash deploy/jetson/build.sh
 ```
 
 The Jetson application is CUDA/cuFFT-only; FFTW remains available for the Windows CPU build.
+
+The Scan / MCU page defaults to the packaged legacy X/Y/M waveform at
+`config/waveforms/mems_xym_100ksps.txt`. Operators can select another X/Y/M file in the GUI;
+the application converts it to the fixed 100 kS/s MCU rate, validates the 15,000-point limit,
+and checks that its B-trigger edge count matches `B-scans / frame` before upload.
+`B-trigger offset` fine-tunes only the uploaded M markers: negative values advance and positive
+values delay the marker in 10 us MCU-sample steps, while zero preserves the source file timing.
+The original M edges remain the coordinate anchors. X/Y command order defines vector-scan
+direction, so legacy bidirectional waveforms are not reversed again by odd/even line parity.

@@ -21,11 +21,11 @@ namespace {
 
 constexpr std::array<char, 8> kRawV1Magic{{'F', 'M', 'C', 'W', 'R', 'A', 'W', '1'}};
 constexpr std::array<char, 8> kRawV2Magic{{'F', 'M', 'C', 'W', 'R', 'A', 'W', '2'}};
-constexpr std::array<char, 8> kProcessedMagic{{'F', 'M', 'C', 'W', 'P', 'R', 'O', '1'}};
+constexpr std::array<char, 8> kProcessedMagic{{'F', 'M', 'C', 'W', 'P', 'R', 'O', '2'}};
 constexpr std::uint32_t kRawRecordMagic = 0x314D5246U;
 constexpr std::uint32_t kRawBlockMagic = 0x32424D46U;
 constexpr std::uint32_t kProcessedRecordMagic = 0x31435250U;
-constexpr std::uint32_t kProcessedFormatVersion = 1U;
+constexpr std::uint32_t kProcessedFormatVersion = 2U;
 
 std::uint64_t utcNowNs() {
   return static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -120,6 +120,11 @@ bool writeSidecar(const std::filesystem::path& path, const WriterOpenOptions& op
          << (finalize_options.end_timestamp_utc_ns == 0U ? utcNowNs() : finalize_options.end_timestamp_utc_ns)
          << ",\n"
          << "  \"stream_type\": \"" << stream_type << "\",\n"
+         << "  \"data_format_version\": "
+         << (std::strcmp(stream_type, "processed") == 0
+                 ? kProcessedFormatVersion
+                 : open_options.raw_stream.format_version)
+         << ",\n"
          << "  \"completed\": " << (finalize_options.completed ? "true" : "false") << ",\n"
          << "  \"stop_reason\": \"" << jsonEscape(finalize_options.stop_reason) << "\",\n"
          << "  \"blocks_written\": " << status.blocks_written << ",\n"
@@ -346,18 +351,32 @@ bool writePeak(std::ostream& stream, const PeakMeasurement& peak) {
 
 bool writeProcessedRecord(std::ostream& stream, const ProcessedFrame& frame) {
   const auto scan_valid = static_cast<std::uint8_t>(frame.scan_position.valid ? 1U : 0U);
+  const auto angle_calibrated = static_cast<std::uint8_t>(
+      frame.scan_position.angle_calibrated ? 1U : 0U);
+  const auto fast_axis = static_cast<std::uint8_t>(frame.scan_position.fast_axis);
+  const auto fast_axis_direction = static_cast<std::uint8_t>(
+      frame.scan_position.fast_axis_direction);
+  const auto coordinate_source = static_cast<std::uint8_t>(frame.scan_position.source);
   const auto measurement_valid = static_cast<std::uint8_t>(frame.measurement_valid ? 1U : 0U);
   const auto point_valid = static_cast<std::uint8_t>(frame.point.valid ? 1U : 0U);
   const auto stop_requested = static_cast<std::uint8_t>(frame.stop_requested ? 1U : 0U);
   return writeScalar(stream, kProcessedRecordMagic) && writeScalar(stream, frame.frame_id) &&
       writeScalar(stream, frame.source_timestamp_ns) && writeScalar(stream, frame.config_revision) &&
       writeScalar(stream, frame.processing_config_revision) && writeScalar(stream, frame.scan_position.x_index) &&
-      writeScalar(stream, frame.scan_position.y_index) && writeScalar(stream, frame.scan_position.x_angle_deg) &&
-      writeScalar(stream, frame.scan_position.y_angle_deg) && writeScalar(stream, scan_valid) &&
+      writeScalar(stream, frame.scan_position.y_index) &&
+      writeScalar(stream, frame.scan_position.trajectory_sample_index) &&
+      writeScalar(stream, frame.scan_position.x_command) &&
+      writeScalar(stream, frame.scan_position.y_command) &&
+      writeScalar(stream, frame.scan_position.x_angle_deg) &&
+      writeScalar(stream, frame.scan_position.y_angle_deg) &&
+      writeScalar(stream, fast_axis) && writeScalar(stream, fast_axis_direction) &&
+      writeScalar(stream, coordinate_source) && writeScalar(stream, angle_calibrated) &&
+      writeScalar(stream, scan_valid) &&
       writePeak(stream, frame.up_peak) && writePeak(stream, frame.down_peak) &&
       writeScalar(stream, frame.distance_m) && writeScalar(stream, frame.velocity_mps) &&
       writeScalar(stream, frame.point.x) && writeScalar(stream, frame.point.y) && writeScalar(stream, frame.point.z) &&
       writeScalar(stream, frame.point.intensity) && writeScalar(stream, frame.point.velocity) &&
+      writeScalar(stream, frame.point.scan_x_command) && writeScalar(stream, frame.point.scan_y_command) &&
       writeScalar(stream, point_valid) && writeScalar(stream, measurement_valid) && writeScalar(stream, stop_requested) &&
       writeScalar(stream, frame.processing_latency_ms) && writeFloatVector(stream, frame.up_fft_magnitude_db) &&
       writeFloatVector(stream, frame.down_fft_magnitude_db) && writeString(stream, frame.processing_note);

@@ -47,6 +47,13 @@ JetPack/Ubuntu 버전에 맞는 새 CMake를 먼저 설치한다.
 CUDA와 cuFFT는 반드시 JetPack에 포함된 버전을 사용한다. `nvcc` 또는
 `libcufft.so`가 없으면 빌드 스크립트가 즉시 중단된다.
 
+cuFFT 검사는 Jetson 표준 위치인
+`/usr/local/cuda/targets/aarch64-linux/lib/libcufft.so`와
+`/usr/local/cuda/lib64/libcufft.so`를 먼저 확인하고, 이후 심볼릭 링크를 따라가는
+`find -L /usr/local/cuda` 검색을 사용한다. 성공 시 감지된 실제 경로를 출력한다.
+`set -Eeuo pipefail`에서 SIGPIPE로 결과가 흔들리지 않도록 의존성 판정에는
+`producer | grep -q` 형식을 사용하지 않는다.
+
 ## 4. AlazarTech 준비
 
 실제 ATS 보드를 사용할 경우 현재 JetPack kernel과 맞는 AlazarTech ARM64 driver와
@@ -81,6 +88,20 @@ Jetson 빌드는 `FMCW_WITH_FFTW=OFF`, `FMCW_WITH_CUDA=ON`,
 bash deploy/jetson/build.sh
 ```
 
+의존성 검사를 반복 확인하고 clean build를 수행하려면 다음 순서로 실행한다.
+
+```bash
+for i in {1..20}; do
+  bash deploy/jetson/check_dependencies.sh || exit 1
+done
+
+rm -rf build/jetson-release
+bash deploy/jetson/build.sh
+```
+
+Alazar SDK header와 `libATSApi.so`가 감지되었지만 device node가 없을 때 표시되는
+경고는 CUDA/cuFFT 오류가 아니다. 이 항목은 warning으로 유지되며 빌드를 중단하지 않는다.
+
 스크립트는 다음을 순서대로 수행한다.
 
 1. ARM64, CMake, Ninja, Qt 6.2 이상, CUDA/cuFFT, Alazar SDK 점검
@@ -113,10 +134,20 @@ sudo usermod -aG dialout "$USER"
 
 그룹 변경은 로그아웃 후 다시 로그인해야 반영된다.
 
+AGX Orin에서는 MCU를 J30 40핀 헤더의 UART1에 직접 연결한다. 물리 핀 8은
+Jetson TX이므로 MCU RX에, 핀 10은 Jetson RX이므로 MCU TX에 연결하고 GND를
+공통으로 연결한다. GUI에는 이 포트가
+`Jetson 40-pin UART (pins 8/10) | /dev/ttyTHS0`으로 표시된다. EDFA는 별도의
+USB-FTDI 장치(`/dev/ttyUSB*`)를 선택해야 하며 MCU와 같은 포트를 선택하면
+설정 검증이 Apply와 Connect를 차단한다. UART 장치가 보이지 않으면 Jetson-IO로
+J30 UART1 기능을 활성화한 뒤 재부팅한다. `check_dependencies.sh`는
+`FMCW_JETSON_MCU_UART`의 존재 여부와 현재 사용자의 읽기/쓰기 권한을 경고로
+진단하며, 선택 장치가 없어도 빌드는 중단하지 않는다.
+
 ## 8. 최초 검증 순서
 
 1. `Simulator + CUDA`로 Qt UI와 CUDA backend 확인
-2. 선택한 ATS 모델의 driver/device node 확인
+2. System 1 / Board 1에서 자동 감지된 ATS 모델과 driver/device node 확인
 3. `AlazarTech ATS + CUDA`로 짧은 DMA 확인
 4. 4992 sample x 998 record, 200 Hz 조건의 batch 처리 확인
 5. MCU/EDFA를 하나씩 활성화

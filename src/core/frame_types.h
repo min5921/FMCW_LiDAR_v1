@@ -47,6 +47,24 @@ enum class DigitizerChannel {
   B,
 };
 
+enum class ScanAxis : std::uint8_t {
+  Unknown,
+  X,
+  Y,
+};
+
+enum class ScanDirection : std::uint8_t {
+  Unknown,
+  Increasing,
+  Decreasing,
+};
+
+enum class ScanCoordinateSource : std::uint8_t {
+  GeneratedRaster,
+  McuTrajectory,
+  Replay,
+};
+
 struct SegmentRange {
   // Half-open sample interval: [start_sample, end_sample_exclusive).
   std::uint32_t start_sample = 0;
@@ -80,8 +98,15 @@ struct TriggerMetadata {
 struct ScanPosition {
   std::uint32_t x_index = 0;
   std::uint32_t y_index = 0;
+  std::uint32_t trajectory_sample_index = 0;
+  float x_command = 0.0F;
+  float y_command = 0.0F;
   float x_angle_deg = 0.0F;
   float y_angle_deg = 0.0F;
+  ScanAxis fast_axis = ScanAxis::Unknown;
+  ScanDirection fast_axis_direction = ScanDirection::Unknown;
+  ScanCoordinateSource source = ScanCoordinateSource::GeneratedRaster;
+  bool angle_calibrated = false;
   bool valid = false;
 };
 
@@ -283,6 +308,8 @@ struct PointXYZI {
   float z = std::numeric_limits<float>::quiet_NaN();
   float intensity = std::numeric_limits<float>::quiet_NaN();
   float velocity = std::numeric_limits<float>::quiet_NaN();
+  float scan_x_command = std::numeric_limits<float>::quiet_NaN();
+  float scan_y_command = std::numeric_limits<float>::quiet_NaN();
   bool valid = false;
 };
 

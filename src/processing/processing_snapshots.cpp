@@ -138,6 +138,7 @@ void ProcessingSnapshotStore::publishUnlocked(const RawFrame& raw,
                 std::numeric_limits<float>::quiet_NaN());
       std::fill(bscan_work_.valid.begin(), bscan_work_.valid.end(), 0U);
       bscan_work_.completed_lines = 0U;
+      bscan_work_.complete = false;
       bscan_work_.scan_frame_index = scan_frame_index_;
       std::fill(point_cloud_work_.points.begin(), point_cloud_work_.points.end(), PointXYZI{});
       point_cloud_work_.completed_lines = 0U;
@@ -179,15 +180,18 @@ void ProcessingSnapshotStore::publishUnlocked(const RawFrame& raw,
   }
   bscan_work_.last_frame_id = processed.frame_id;
   bscan_work_.processing_config_revision = processed.processing_config_revision;
-  bscan_work_.completed_lines = std::min(height_, bscan_work_.completed_lines + 1U);
-  std::atomic_store_explicit(
-      &bscan_, std::make_shared<const BScanSnapshot>(bscan_work_),
-      std::memory_order_release);
+  const auto previous_completed_lines = bscan_work_.completed_lines;
+  bscan_work_.completed_lines = std::min(height_, previous_completed_lines + 1U);
+  bscan_work_.complete = bscan_work_.completed_lines == height_;
   point_cloud_work_.last_frame_id = processed.frame_id;
   point_cloud_work_.processing_config_revision = processed.processing_config_revision;
   point_cloud_work_.completed_lines = bscan_work_.completed_lines;
-  point_cloud_work_.complete = point_cloud_work_.completed_lines == height_;
-  if (point_cloud_work_.complete) {
+  point_cloud_work_.complete = bscan_work_.complete;
+  const bool frame_just_completed = previous_completed_lines < height_ && bscan_work_.complete;
+  if (frame_just_completed) {
+    std::atomic_store_explicit(
+        &bscan_, std::make_shared<const BScanSnapshot>(bscan_work_),
+        std::memory_order_release);
     std::atomic_store_explicit(
         &point_cloud_, std::make_shared<const PointCloudSnapshot>(point_cloud_work_),
         std::memory_order_release);

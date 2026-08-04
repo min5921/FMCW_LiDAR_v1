@@ -203,6 +203,8 @@ PointXYZI toPoint(float distance_m, float velocity_mps, float intensity_db,
   point.z = static_cast<float>(-distance_m * std::sin(y_angle));
   point.intensity = intensity_db;
   point.velocity = velocity_mps;
+  point.scan_x_command = position.x_command;
+  point.scan_y_command = position.y_command;
   point.valid = true;
   return point;
 }

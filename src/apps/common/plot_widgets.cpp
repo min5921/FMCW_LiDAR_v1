@@ -472,10 +472,12 @@ HeatmapWidget::HeatmapWidget(QWidget* parent) : QWidget(parent) {
 }
 
 void HeatmapWidget::setData(std::uint32_t width, std::uint32_t height, const std::vector<float>& values,
-                            const std::vector<std::uint8_t>& valid, std::uint32_t completed_lines) {
+                            const std::vector<std::uint8_t>& valid, std::uint32_t completed_lines,
+                            std::uint64_t scan_frame_index) {
   width_ = width;
   height_ = height;
   completed_lines_ = completed_lines;
+  scan_frame_index_ = scan_frame_index;
   values_ = QVector<float>(values.begin(), values.end());
   valid_ = QVector<std::uint8_t>(valid.begin(), valid.end());
   update();
@@ -503,6 +505,7 @@ void HeatmapWidget::clear() {
   width_ = 0;
   height_ = 0;
   completed_lines_ = 0;
+  scan_frame_index_ = 0;
   values_.clear();
   valid_.clear();
   update();
@@ -517,7 +520,7 @@ void HeatmapWidget::paintEvent(QPaintEvent* event) {
   if (width_ == 0U || height_ == 0U || static_cast<std::size_t>(values_.size()) < expected) {
     drawAxisTicks(painter, *this, 0.0, 1.0, 0.0, 1.0, false);
     painter.setPen(palette().color(QPalette::PlaceholderText));
-    painter.drawText(area, Qt::AlignCenter, "Waiting for completed scan lines");
+    painter.drawText(area, Qt::AlignCenter, "Waiting for a complete raster frame");
     return;
   }
 
@@ -562,9 +565,9 @@ void HeatmapWidget::paintEvent(QPaintEvent* event) {
                 static_cast<double>(height_ - 1U), 0.0, true, true);
   painter.setPen(palette().color(QPalette::Text));
   painter.drawText(QRectF(area.left(), 10, area.width(), 24), Qt::AlignRight | Qt::AlignVCenter,
-                   QString("%1 / %2 lines   Depth %3 to %4 m")
+                   QString("Frame %1 complete | %2 lines | Depth %3 to %4 m")
+                       .arg(scan_frame_index_ + 1U)
                        .arg(completed_lines_)
-                       .arg(height_)
                        .arg(minimum, 0, 'f', 3)
                        .arg(maximum, 0, 'f', 3));
 }

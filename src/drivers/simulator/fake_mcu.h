@@ -13,7 +13,9 @@ class FakeMcuController final : public IMcuController {
   bool connect(std::string& error) override;
   void disconnect() override;
   bool configure(const SystemConfig& config, std::string& error) override;
-  bool uploadWaveform(const std::vector<McuWaveformFrame>& frames, std::string& error) override;
+  bool uploadWaveform(const std::vector<McuWaveformFrame>& frames, std::string& error,
+                      const McuUploadProgressCallback& progress = {}) override;
+  McuWaveformSnapshotPtr loadedWaveform() const override;
   bool startScan(std::string& error) override;
   bool stopScan(std::string& error) override;
   bool emergencyStop(std::string& error) override;
@@ -22,6 +24,8 @@ class FakeMcuController final : public IMcuController {
   mutable std::mutex mutex_;
   McuConfig config_;
   McuStatus status_;
+  McuWaveformSnapshotPtr loaded_waveform_;
+  double waveform_sample_rate_hz_ = 0.0;
   bool configured_ = false;
 };
 

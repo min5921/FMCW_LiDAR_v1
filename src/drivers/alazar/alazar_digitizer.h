@@ -7,6 +7,16 @@
 
 namespace fmcw {
 
+struct AlazarBoardDetection {
+  bool sdk_available = false;
+  bool board_present = false;
+  bool supported = false;
+  std::uint32_t sdk_board_kind = 0;
+  std::string profile_id;
+  std::string display_name;
+  std::string detail;
+};
+
 class AlazarDigitizer final : public IDigitizer {
  public:
   AlazarDigitizer();
@@ -16,6 +26,7 @@ class AlazarDigitizer final : public IDigitizer {
   AlazarDigitizer& operator=(const AlazarDigitizer&) = delete;
 
   static bool sdkAvailable();
+  static AlazarBoardDetection detectConnectedBoard();
 
   std::string name() const override;
   DigitizerTelemetry telemetry() const override;
