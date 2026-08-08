@@ -290,10 +290,10 @@ legacy 참고:
 
 스캐너/미러/MTI 관련 설정을 UI에서 제어한다.
 
-- X angle at minimum X command
-- X angle at maximum X command
-- Y angle at minimum Y command
-- Y angle at maximum Y command
+- Azimuth at minimum fast-axis command
+- Azimuth at maximum fast-axis command
+- Elevation at minimum slow-axis command
+- Elevation at maximum slow-axis command
 - Scan direction
 - Bidirectional scan enable for generated raster mode; legacy X/Y/M direction is read from the waveform
 - A-scan count: Digitizer의 `Records per buffer`에서 읽기 전용으로 표시
@@ -314,12 +314,12 @@ legacy 참고:
 - 현재 MCU firmware의 TIM6 point rate는 100 kHz이며 MCU cycle time은 `full_frame_waveform_points / 100 kHz`로 계산한다.
 - generated raster는 `A-scans_per_B-scan * B-scans_per_frame` 크기로 생성한다. legacy X/Y/M은 파일의 전체 vector waveform을 그대로 업로드한다.
 - legacy waveform과 동일하게 각 B-scan 시작점에서만 marker를 출력하고, 모든 waveform point에서 marker를 켜지 않는다.
-- B-trigger offset은 원본 X/Y waveform, 원본 M edge, 좌표 anchor를 수정하지 않고 출력용 M bit만 반복 waveform 안에서 순환 이동한다. 변경은 restart-required이며 waveform을 다시 업로드해야 한다.
+- B-trigger offset은 원본 X/Y waveform과 원본 M edge를 provenance로 보존하고 출력용 M bit만 반복 waveform 안에서 순환 이동한다. 실제 digitizer가 보는 emitted M edge를 acquired line과 좌표의 anchor로 사용한다. 변경은 restart-required이며 waveform을 다시 업로드해야 한다.
 - MCU cycle time은 scanner 파형 검증값이며 Alazar DMA B-scan 속도를 대신하지 않는다.
 - 실측 DMA frame time과 MCU waveform cycle time 차이가 5%를 넘으면 UI에 timing mismatch warning을 표시한다.
 - 스캔 패턴 preview를 2D로 표시한다.
-- legacy vector waveform은 M rising edge를 line 시작으로 사용하고 각 line의 실제 X/Y 변화량으로 fast axis와 방향을 판정한다. 홀짝 line을 소프트웨어에서 다시 반전하지 않는다.
-- 하강 line은 원본 command/angle 순서를 유지하고 B-scan 공간 column만 한 번 역배치한다. Point cloud는 한 frame 완료 시 갱신하며 view bounds는 자동으로 매 frame 재계산하지 않는다.
+- legacy vector waveform은 emitted M rising edge를 line 시작으로 사용하고 각 line의 실제 X/Y 변화량으로 fast axis와 방향을 판정한다. 홀짝 line을 소프트웨어에서 임의로 반전하지 않는다.
+- 하강 line은 B-scan 공간 column인 `x_index`에서 한 번만 역배치한다. azimuth는 정렬된 `x_index`, elevation은 `y_index`에서 계산하며 원본 X/Y command와 trajectory sample index는 provenance로 보존한다. Point cloud는 한 frame 완료 시 갱신하며 view bounds는 자동으로 매 frame 재계산하지 않는다.
 - Stop 순서는 scanner stop, digitizer abort, buffer flush 순서로 안정화한다.
 - Emergency stop 버튼을 제공하고 scanner/laser/digitizer 상태를 즉시 안전 상태로 돌린다.
 
@@ -416,9 +416,9 @@ CPU FFT 요구사항:
 - 각 A-scan의 UP/DOWN peak는 이전 A-scan과 독립적으로 search range 안의 최대값을 검출한다.
 - 현재 version은 peak interpolation이나 sub-bin estimation을 사용하지 않고 threshold를 초과하는 최대 정수 FFT bin을 사용한다.
 - threshold를 초과하는 peak가 없으면 이전 값을 유지하지 않고 해당 결과를 invalid로 기록하며, 모든 실수형 peak 및 측정값을 `NaN`으로 전달한다.
-- 유효한 peak pair는 distance와 velocity calibration을 거친 뒤 legacy와 동일한 `X lateral, Y forward, Z vertical` Cartesian 좌표로 변환하고 최종 point에 `x, y, z, intensity, velocity`를 모두 기록한다.
+- 유효한 peak pair는 distance와 velocity calibration을 거친 뒤 일반적인 ROS/RViz right-handed LiDAR 좌표계인 `X forward, Y left, Z up`으로 변환하고 최종 point에 `x, y, z, intensity, velocity`를 모두 기록한다.
 - Cartesian 변환 전에 calibration profile의 `x_angle_offset_deg`, `y_angle_offset_deg`를 scanner angle에 더한다.
-- B-scan depth map은 legacy heatmap과 동일하게 Cartesian forward depth인 `point.y`를 사용하며, 3D/processed storage/UDP는 전체 XYZIV를 유지한다.
+- B-scan depth map은 Cartesian forward depth인 `point.x`를 사용하며, 3D/processed storage/UDP는 같은 `X forward, Y left, Z up` XYZIV를 유지한다.
 - 설정 변경이 처리 결과에 반영된 frame 번호를 기록한다.
 - raw replay 모드에서도 동일한 processing pipeline을 사용한다.
 - GPU FFT와 CPU FFT 결과 차이를 검증하는 regression test를 제공한다.
@@ -461,7 +461,7 @@ Live View plot 소유권:
 
 - FFT spectrum은 FFT 탭에서만 표시한다.
 - Peak Analysis는 FFT를 중복 표시하지 않고 Peak Index vs A-scan과 Peak Value dB vs A-scan을 표시한다.
-- B-scan은 `X Pixel x B Scan` Z heatmap으로 표시하며 distance trend line으로 대체하지 않는다.
+- B-scan은 `X Pixel x B Scan` forward-depth heatmap으로 표시하며 distance trend line으로 대체하지 않는다.
 
 UI 기능:
 
@@ -501,12 +501,13 @@ UI 기능:
 - Point size 조절
 - Frame freeze
 - Current frame save
-- Accumulate frames option
+- X/Y/Z reference-axis visibility option
 
 실시간 3D 요구사항:
 
-- legacy X/Y/M vector mode는 원본 command를 각도 보정 후 Cartesian 좌표로 사용한다. record/line index는 B-scan 공간 배치용이며 실제 X/Y command를 대신하지 않는다.
-- 하강 fast-axis line은 command와 Cartesian 좌표를 바꾸지 않고 B-scan column만 한 번 역배치한다. line별로 위아래로 펼쳐지는 partial animation은 표시하지 않는다.
+- point cloud 좌표계는 `+X forward, +Y left, +Z up`인 ROS/RViz LiDAR convention으로 고정한다.
+- legacy X/Y/M vector mode의 azimuth/elevation은 B-scan과 동일하게 정렬된 `x_index`/`y_index`와 설정 각도 범위에서 계산한다. 원본 command는 궤적 provenance와 방향 판정에 사용하고 Cartesian 방향을 두 번째로 적용하지 않는다.
+- 하강 fast-axis line은 B-scan column과 point-cloud azimuth를 같은 `x_index`에서 한 번만 역배치한다. line별로 위아래로 펼쳐지는 partial animation은 표시하지 않는다.
 - 모든 B-scan line이 완료된 frame만 표시하고 다음 frame 조립 중에는 직전 complete frame을 유지한다.
 - point 수가 많을 때 decimation 또는 level-of-detail를 적용한다.
 - 3D viewer update rate를 acquisition rate와 독립적으로 설정한다.
@@ -600,6 +601,12 @@ Raw data 저장 기능을 추가한다.
 - raw 저장과 processed 저장을 독립적으로 켜고 끌 수 있어야 한다.
 - raw 저장 기본 정책은 고속 binary streaming이다.
 - raw writer는 큰 연속 block 단위로 쓰고, metadata는 별도 JSON sidecar로 저장한다.
+- 신규 DMA-block raw는 v3로 저장하고 trajectory provenance 및 ROS/RViz 좌표 계약을 보존한다. 구형 v1/v2는 sidecar가 표준 좌표계를 명시한 경우만 replay하며, 그 외에는 명시적 변환을 요구한다.
+- replay reader는 메모리 할당 전에 record/sample 산술, metadata 크기, 남은 파일 길이와 allocation cap을 검증하고 손상 파일을 오류로 종료한다.
+- raw stream open 시 `<stem>.setup.yaml`에 전체 setup snapshot을 즉시 저장하고 JSON sidecar에서 해당 파일과 `ros_x_forward_y_left_z_up` 좌표계를 참조한다.
+- legacy X/Y/M waveform을 사용한 recording은 적용된 waveform 파일을 session directory에 복사하고 setup에는 session-relative 경로를 기록한다.
+- GUI에서 raw part를 선택하면 setup YAML을 자동으로 읽어 ATS board profile, digitizer, laser/chirp, scanner, calibration, processing 설정을 pending controls에 복원한다. 과거 recording은 JSON `config_snapshot`으로 fallback한다.
+- replay setup 복원 시 실제 MCU/EDFA 출력, UDP, raw/processed 재기록은 안전을 위해 끄고 사용자가 `Apply Setup`으로 적용한다.
 - 파일 header에는 magic, version, endian, sample type, channel, sample rate, record length, frame count를 포함한다.
 
 파일 포맷 후보:
@@ -723,6 +730,7 @@ UI 요구사항:
 필수 기능:
 
 - 저장된 raw data replay
+- raw와 함께 저장된 setup 및 scanner waveform 자동 복원
 - 저장된 processed frame replay
 - synthetic FMCW signal generator
 - fake digitizer mode

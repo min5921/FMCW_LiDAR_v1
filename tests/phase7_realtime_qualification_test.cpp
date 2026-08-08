@@ -15,6 +15,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <string_view>
 #include <utility>
 
 #ifndef FMCW_QUALIFICATION_DURATION_SECONDS
@@ -33,6 +34,38 @@ struct QualificationResult {
   bool functional = false;
   bool hard_pass = false;
 };
+
+enum class BackendSelection {
+  All,
+  Fftw,
+  Cuda,
+};
+
+struct QualificationOptions {
+  BackendSelection backend = BackendSelection::All;
+  bool enforce_hard_pass = FMCW_QUALIFICATION_ENFORCE_HARD_PASS != 0;
+};
+
+bool parseOptions(int argc, char* argv[], QualificationOptions& options) {
+  for (int index = 1; index < argc; ++index) {
+    const std::string_view argument(argv[index]);
+    if (argument == "--strict") {
+      options.enforce_hard_pass = true;
+    } else if (argument == "--backend=all") {
+      options.backend = BackendSelection::All;
+    } else if (argument == "--backend=fftw") {
+      options.backend = BackendSelection::Fftw;
+    } else if (argument == "--backend=cuda") {
+      options.backend = BackendSelection::Cuda;
+    } else {
+      std::cerr << "Unknown qualification option: " << argument << '\n'
+                << "Usage: " << argv[0]
+                << " [--backend=all|fftw|cuda] [--strict]\n";
+      return false;
+    }
+  }
+  return true;
+}
 
 QualificationResult runQualification(fmcw::FftBackendKind backend_kind) {
   auto config = fmcw::makeAts9371QualificationSimulatorConfig();
@@ -182,15 +215,19 @@ QualificationResult runQualification(fmcw::FftBackendKind backend_kind) {
             << " p95_ms=" << processing_status.batch_latency_p95_ms
             << " p99_ms=" << processing_status.batch_latency_p99_ms
             << " max_ms=" << processing_status.maximum_batch_latency_ms
+            << " max_seq=" << processing_status.maximum_batch_latency_sequence
             << " max_ownership_ms=" << processing_status.maximum_ownership_copy_latency_ms
             << " max_signal_ms=" << processing_status.maximum_signal_processing_latency_ms
             << " max_wakeup_ms=" << processing_status.maximum_latency.acquisition_wakeup_ms
+            << " max_wakeup_seq="
+            << processing_status.maximum_acquisition_wakeup_latency_sequence
             << " max_materialize_ms="
             << processing_status.maximum_latency.digitizer_materialization_ms
             << " max_session_ms=" << processing_status.maximum_latency.session_validation_ms
             << " max_dispatch_ms=" << processing_status.maximum_latency.enqueue_dispatch_ms
             << " max_queue_ms=" << processing_status.maximum_latency.queue_wait_ms
             << " max_compute_ms=" << processing_status.maximum_latency.compute_ms
+            << " max_compute_seq=" << processing_status.maximum_compute_latency_sequence
             << " deadline_misses=" << processing_status.batch_deadline_misses
             << " stop_reason=\"" << acquisition_status.stop_reason << "\"";
   if (!session_stop_error.empty()) {
@@ -208,21 +245,31 @@ QualificationResult runQualification(fmcw::FftBackendKind backend_kind) {
 
 }  // namespace
 
-int main() {
-  const auto fftw = runQualification(fmcw::FftBackendKind::Fftw);
-  bool cuda_available = fmcw::CudaFftBackend::available();
+int main(int argc, char* argv[]) {
+  QualificationOptions options;
+  if (!parseOptions(argc, argv, options)) {
+    return 2;
+  }
+
+  QualificationResult fftw;
+  const bool run_fftw = options.backend != BackendSelection::Cuda;
+  if (run_fftw) {
+    fftw = runQualification(fmcw::FftBackendKind::Fftw);
+  }
+
+  const bool run_cuda = options.backend != BackendSelection::Fftw;
+  const bool cuda_available = fmcw::CudaFftBackend::available();
   QualificationResult cuda;
-  if (cuda_available) {
+  if (run_cuda && cuda_available) {
     cuda = runQualification(fmcw::FftBackendKind::Cuda);
-  } else {
+  } else if (run_cuda) {
     std::cout << "phase7_3d backend=CUDA result=SKIP reason=\"No runtime CUDA device\"\n";
   }
 
-  const bool functional = fftw.functional && (!cuda_available || cuda.functional);
-#if FMCW_QUALIFICATION_ENFORCE_HARD_PASS
-  const bool accepted = functional && fftw.hard_pass && cuda_available && cuda.hard_pass;
-#else
-  const bool accepted = functional;
-#endif
+  const bool functional = (!run_fftw || fftw.functional) &&
+      (!run_cuda || (cuda_available && cuda.functional));
+  const bool hard_pass = (!run_fftw || fftw.hard_pass) &&
+      (!run_cuda || (cuda_available && cuda.hard_pass));
+  const bool accepted = functional && (!options.enforce_hard_pass || hard_pass);
   return accepted ? 0 : 1;
 }

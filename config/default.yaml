@@ -90,7 +90,7 @@ udp:
   target_ip: "192.168.0.10"
   target_port: 9000
   packet_point_count: 256
-  packet_format_version: 1
+  packet_format_version: 2
   queue_capacity: 8
   backpressure_policy: latest_frame
 storage:

@@ -1,0 +1,37 @@
+<launch>
+  <arg name="bind_address" default="0.0.0.0"/>
+  <arg name="port" default="9000"/>
+  <arg name="sender_ip" default=""/>
+  <arg name="topic" default="/fmcw/points"/>
+  <arg name="frame_id" default="fmcw_lidar"/>
+  <arg name="assembly_timeout" default="0.5"/>
+  <arg name="max_inflight_frames" default="8"/>
+  <arg name="max_segments_per_frame" default="4096"/>
+  <arg name="max_frame_points" default="2000000"/>
+  <arg name="socket_receive_buffer" default="4194304"/>
+  <arg name="rviz" default="true"/>
+
+  <node pkg="fmcw_lidar_rviz"
+        type="udp_pointcloud_receiver_node"
+        name="udp_pointcloud_receiver"
+        output="screen"
+        required="true">
+    <param name="bind_address" value="$(arg bind_address)"/>
+    <param name="port" value="$(arg port)"/>
+    <param name="sender_ip" value="$(arg sender_ip)"/>
+    <param name="topic" value="$(arg topic)"/>
+    <param name="frame_id" value="$(arg frame_id)"/>
+    <param name="assembly_timeout" value="$(arg assembly_timeout)"/>
+    <param name="max_inflight_frames" value="$(arg max_inflight_frames)"/>
+    <param name="max_segments_per_frame" value="$(arg max_segments_per_frame)"/>
+    <param name="max_frame_points" value="$(arg max_frame_points)"/>
+    <param name="socket_receive_buffer" value="$(arg socket_receive_buffer)"/>
+  </node>
+
+  <node if="$(arg rviz)"
+        pkg="rviz"
+        type="rviz"
+        name="rviz"
+        args="-d $(find fmcw_lidar_rviz)/rviz/fmcw_lidar.rviz"
+        output="screen"/>
+</launch>

@@ -27,6 +27,23 @@ target_compile_definitions(fmcw_acquisition_tests PRIVATE FMCW_TEST_SOURCE_DIR="
 
 add_test(NAME fmcw_acquisition_tests COMMAND fmcw_acquisition_tests)
 
+if(FMCW_BUILD_QT_APPS)
+  find_package(Qt6 6.2 REQUIRED COMPONENTS Core)
+  add_executable(fmcw_replay_setup_tests
+    replay_setup_loader_test.cpp
+  )
+  target_link_libraries(fmcw_replay_setup_tests PRIVATE fmcw_qt_common Qt6::Core)
+  target_compile_features(fmcw_replay_setup_tests PRIVATE cxx_std_17)
+  if(WIN32)
+    add_custom_command(TARGET fmcw_replay_setup_tests POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        $<TARGET_FILE:Qt6::Core>
+        $<TARGET_FILE_DIR:fmcw_replay_setup_tests>
+    )
+  endif()
+  add_test(NAME fmcw_replay_setup_tests COMMAND fmcw_replay_setup_tests)
+endif()
+
 add_executable(fmcw_phase4_tests
   phase4_pipeline_test.cpp
 )
@@ -132,7 +149,7 @@ if(FMCW_HAS_FFTW)
   add_test(NAME fmcw_phase7_realtime_probe COMMAND fmcw_phase7_realtime_probe)
 
   # Fixed-duration release gate. It is intentionally not part of normal CTest because it
-  # runs FFTW and CUDA for ten minutes each and returns failure on any 5 ms miss.
+  # runs for ten minutes per selected backend and returns failure on any 5 ms miss.
   add_phase7_realtime_qualification(fmcw_phase7_realtime_acceptance 600 1)
 
   add_executable(fmcw_phase7_storage_tests

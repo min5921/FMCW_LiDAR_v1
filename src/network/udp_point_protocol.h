@@ -9,12 +9,15 @@
 
 namespace fmcw {
 
-inline constexpr std::uint16_t kUdpPointPacketVersion = 1;
+// Version 2 fixes XYZ semantics as ROS REP-103: +X forward, +Y left, +Z up.
+// Version 1 used the same wire layout with legacy axis semantics and is rejected.
+inline constexpr std::uint16_t kUdpPointPacketVersion = 2;
 inline constexpr std::size_t kUdpPointHeaderBytes = 40;
 inline constexpr std::size_t kUdpPointStrideBytes = 20;
 inline constexpr std::size_t kMaxUdpPayloadBytes = 65507;
 
 struct UdpPointFrame {
+  // Point payload semantics are +X forward, +Y left, +Z up.
   std::uint64_t raster_frame_id = 0;
   std::uint64_t timestamp_ns = 0;
   std::uint64_t config_revision = 0;

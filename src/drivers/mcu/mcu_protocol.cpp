@@ -33,14 +33,8 @@ bool blankLine(const std::string& line) {
   });
 }
 
-bool parseLegacyXym(std::string_view path, double& sample_rate_hz,
+bool parseLegacyXym(std::istream& input, double& sample_rate_hz,
                     std::vector<XymPoint>& points, std::string& error) {
-  std::ifstream input{std::string(path)};
-  if (!input.is_open()) {
-    error = "Unable to open legacy X/Y/M waveform file: " + std::string(path);
-    return false;
-  }
-
   std::string line;
   std::uint32_t line_number = 0;
   bool header_read = false;
@@ -208,6 +202,62 @@ std::int32_t shiftTriggerMarkers(std::vector<McuWaveformFrame>& frames,
   return static_cast<std::int32_t>(shift);
 }
 
+std::vector<McuWaveformFrame> convertLegacyXym(std::istream& input,
+                                               McuWaveformInfo& info,
+                                               std::string& error) {
+  info = {};
+  info.source = McuWaveformSource::LegacyXymFile;
+  double source_rate_hz = 0.0;
+  std::vector<XymPoint> source;
+  if (!parseLegacyXym(input, source_rate_hz, source, error)) {
+    return {};
+  }
+  auto converted = resampleLegacyXym(source, source_rate_hz, error);
+  if (converted.empty()) {
+    return {};
+  }
+  if (converted.size() > kMcuWaveformMaximumPoints) {
+    error = "Legacy X/Y/M waveform exceeds the firmware 15000-point buffer";
+    return {};
+  }
+
+  std::vector<McuWaveformFrame> frames;
+  frames.reserve(converted.size());
+  for (const auto& point : converted) {
+    McuWaveformFrame frame;
+    frame.a = mirrorCode(point.x);
+    frame.b = mirrorCode(-point.x);
+    frame.c = mirrorCode(point.y);
+    frame.d = mirrorCode(-point.y);
+    frame.trigger = point.marker >= 0.5;
+    frame.command_x = static_cast<float>(point.x);
+    frame.command_y = static_cast<float>(point.y);
+    frame.logical_trigger = frame.trigger;
+    frames.push_back(frame);
+  }
+
+  info.source_point_count = static_cast<std::uint32_t>(source.size());
+  info.output_point_count = static_cast<std::uint32_t>(frames.size());
+  info.marker_rising_edges = markerRisingEdges(frames);
+  info.source_sample_rate_hz = source_rate_hz;
+  info.output_sample_rate_hz = kMcuWaveformPointRateHz;
+  info.resampled = std::abs(source_rate_hz - kMcuWaveformPointRateHz) >= 1.0e-9;
+  describeCommandRange(frames, info.minimum_x_command, info.maximum_x_command,
+                       info.minimum_y_command, info.maximum_y_command);
+  error.clear();
+  return frames;
+}
+
+void finalizeConfiguredWaveform(const SystemConfig& config,
+                                std::vector<McuWaveformFrame>& frames,
+                                McuWaveformInfo& info) {
+  info.trigger_shift_samples = shiftTriggerMarkers(
+      frames, config.scan.trigger_shift_samples);
+  info.marker_rising_edges = markerRisingEdges(frames);
+  describeCommandRange(frames, info.minimum_x_command, info.maximum_x_command,
+                       info.minimum_y_command, info.maximum_y_command);
+}
+
 }  // namespace
 
 std::vector<McuWaveformFrame> McuProtocol::buildConfiguredWaveform(const SystemConfig& config,
@@ -231,10 +281,23 @@ std::vector<McuWaveformFrame> McuProtocol::buildConfiguredWaveform(const SystemC
   if (frames.empty()) {
     return {};
   }
-  info.trigger_shift_samples = shiftTriggerMarkers(frames, config.scan.trigger_shift_samples);
-  info.marker_rising_edges = markerRisingEdges(frames);
-  describeCommandRange(frames, info.minimum_x_command, info.maximum_x_command,
-                       info.minimum_y_command, info.maximum_y_command);
+  finalizeConfiguredWaveform(config, frames, info);
+  error.clear();
+  return frames;
+}
+
+std::vector<McuWaveformFrame> McuProtocol::buildConfiguredLegacyXymWaveform(
+    const SystemConfig& config, std::string_view contents,
+    McuWaveformInfo& info, std::string& error) {
+  if (config.mcu.waveform_source != McuWaveformSource::LegacyXymFile) {
+    error = "Legacy X/Y/M contents require the legacy waveform source mode";
+    return {};
+  }
+  auto frames = loadLegacyXymWaveformContents(contents, info, error);
+  if (frames.empty()) {
+    return {};
+  }
+  finalizeConfiguredWaveform(config, frames, info);
   error.clear();
   return frames;
 }
@@ -279,52 +342,26 @@ std::vector<McuWaveformFrame> McuProtocol::buildFullFrameWaveform(const SystemCo
 std::vector<McuWaveformFrame> McuProtocol::loadLegacyXymWaveform(std::string_view path,
                                                                  McuWaveformInfo& info,
                                                                  std::string& error) {
-  info = {};
-  info.source = McuWaveformSource::LegacyXymFile;
   if (path.empty()) {
     error = "Select a legacy X/Y/M waveform file before upload";
     return {};
   }
-
-  double source_rate_hz = 0.0;
-  std::vector<XymPoint> source;
-  if (!parseLegacyXym(path, source_rate_hz, source, error)) {
+  std::ifstream input{std::string(path), std::ios::binary};
+  if (!input.is_open()) {
+    error = "Unable to open legacy X/Y/M waveform file: " + std::string(path);
     return {};
   }
-  auto converted = resampleLegacyXym(source, source_rate_hz, error);
-  if (converted.empty()) {
+  return convertLegacyXym(input, info, error);
+}
+
+std::vector<McuWaveformFrame> McuProtocol::loadLegacyXymWaveformContents(
+    std::string_view contents, McuWaveformInfo& info, std::string& error) {
+  if (contents.empty()) {
+    error = "Legacy X/Y/M waveform contents are empty";
     return {};
   }
-  if (converted.size() > kMcuWaveformMaximumPoints) {
-    error = "Legacy X/Y/M waveform exceeds the firmware 15000-point buffer";
-    return {};
-  }
-
-  std::vector<McuWaveformFrame> frames;
-  frames.reserve(converted.size());
-  for (const auto& point : converted) {
-    McuWaveformFrame frame;
-    frame.a = mirrorCode(point.x);
-    frame.b = mirrorCode(-point.x);
-    frame.c = mirrorCode(point.y);
-    frame.d = mirrorCode(-point.y);
-    frame.trigger = point.marker >= 0.5;
-    frame.command_x = static_cast<float>(point.x);
-    frame.command_y = static_cast<float>(point.y);
-    frame.logical_trigger = frame.trigger;
-    frames.push_back(frame);
-  }
-
-  info.source_point_count = static_cast<std::uint32_t>(source.size());
-  info.output_point_count = static_cast<std::uint32_t>(frames.size());
-  info.marker_rising_edges = markerRisingEdges(frames);
-  info.source_sample_rate_hz = source_rate_hz;
-  info.output_sample_rate_hz = kMcuWaveformPointRateHz;
-  info.resampled = std::abs(source_rate_hz - kMcuWaveformPointRateHz) >= 1.0e-9;
-  describeCommandRange(frames, info.minimum_x_command, info.maximum_x_command,
-                       info.minimum_y_command, info.maximum_y_command);
-  error.clear();
-  return frames;
+  std::istringstream input{std::string(contents)};
+  return convertLegacyXym(input, info, error);
 }
 
 McuWaveformSnapshotPtr McuProtocol::snapshotForUploadedWaveform(

@@ -71,19 +71,19 @@ distance      = c * (f_up + f_down) / (8 * sweep_bandwidth_hz * sweep_rate_hz)
 velocity      = calibration.velocity_wavelength * (f_up - f_down) / 4
 ```
 
-Distance에는 calibration scale/offset을, velocity에는 wavelength와 scale/offset을 적용한다. 이후 scanner angle에 `x_angle_offset_deg`, `y_angle_offset_deg`를 더하고 Cartesian 좌표를 계산한다. 좌표계와 축 순서는 legacy `Dis_value` 및 UDP `PointXYZIV`와 동일한 `+X` lateral, `+Y` forward, `+Z` vertical이다. Positive scanner Y angle은 legacy 부호 규칙에 따라 negative Z 방향이다.
+Distance에는 calibration scale/offset을, velocity에는 wavelength와 scale/offset을 적용한다. 이후 azimuth에 `x_angle_offset_deg`, elevation에 `y_angle_offset_deg`를 더하고 Cartesian 좌표를 계산한다. 좌표계는 일반적인 ROS/RViz LiDAR convention인 `+X` forward, `+Y` left, `+Z` up의 right-handed frame을 사용한다.
 
 ```text
-x_angle = scan_x_angle + calibration.x_angle_offset_deg
-y_angle = scan_y_angle + calibration.y_angle_offset_deg
-x         = R cos(y_angle) sin(x_angle)
-y         = R cos(y_angle) cos(x_angle)
-z         = -R sin(y_angle)
+azimuth   = scan_x_angle + calibration.x_angle_offset_deg
+elevation = scan_y_angle + calibration.y_angle_offset_deg
+x         = R cos(elevation) cos(azimuth)
+y         = R cos(elevation) sin(azimuth)
+z         = R sin(elevation)
 intensity = (up_peak_db + down_peak_db) / 2
 velocity  = calibrated_velocity
 ```
 
-이 식은 legacy가 사용한 `legacy_x = 90 deg - x_angle`, `legacy_y = 90 deg + y_angle` 변환을 최종 scanner angle 기준으로 전개한 식이다. 별도의 보간 또는 좌표 추정은 수행하지 않는다.
+`scan_position.x_angle_deg`는 azimuth, `scan_position.y_angle_deg`는 elevation 의미로 사용한다. legacy vector에서는 감소 line을 한 번 정렬한 B-scan `x_index`로 azimuth를, `y_index`로 elevation을 계산한다. 원본 X/Y command와 trajectory sample index는 provenance로 저장하지만 Cartesian 변환에서 command 방향을 다시 적용하지 않는다. 필드 이름은 저장 형식 호환을 위해 유지하며 별도의 보간 또는 좌표 추정은 수행하지 않는다.
 
 ## 6. UI Snapshots
 
@@ -92,7 +92,7 @@ velocity  = calibrated_velocity
 - `WaveformSnapshot`: ADC full-scale 기준 full-period waveform과 up/down range
 - `FftSnapshot`: up/down magnitude와 independently detected peak
 - `ScanLineSnapshot`: X pixel별 peak index/value, radial distance, velocity, forward depth, validity
-- `BScanSnapshot`: `width x height` Cartesian forward-depth (`point.y`) matrix와 validity mask
+- `BScanSnapshot`: `width x height` Cartesian forward-depth (`point.x`) matrix와 validity mask
 
 Waveform/FFT는 processed frame마다 교체한다. Scan line은 한 B-scan line의 모든 X pixel이 채워졌을 때 publish한다. B-scan과 point cloud는 모든 B-scan line이 채워진 complete raster frame에서만 원자적으로 publish하며, 다음 frame 조립 중에는 직전 complete snapshot을 유지한다. UI가 느리면 과거 snapshot을 누적하지 않고 최신 shared snapshot을 읽는다.
 
@@ -124,16 +124,19 @@ CUDA mode uses `processing/cuda/cuda_signal_pipeline.cu` for the complete batch 
 
 - `<stem>.raw.0000.bin`, `<stem>.raw.0001.bin`, ...
 - `<stem>.raw.json`
+- `<stem>.setup.yaml`
 - `<stem>.processed.bin`
 - `<stem>.processed.json`
 
 Raw binary는 stream header 뒤에 frame record를 순차 기록한다. 각 record에는 frame/config/trigger/scan/optical/segment metadata와 full-period `int16` payload가 들어간다. Raw frame을 segment로 자른 뒤 저장하지 않는다.
 
-Raw streams record their explicit `SampleFormat`. Simulator and legacy replay input may use signed `int16`, while ATS9371 acquisition preserves native `UnsignedOffsetBinary12LeftAligned` codes in the same two-byte payload width. Raw v2 stores one compact metadata table plus one contiguous payload without converting native ATS samples. FFTW, CUDA, waveform snapshots, storage, and replay all decode the descriptor through the same sample-format contract. Raw v1 replay compatibility remains available.
+Raw streams record their explicit `SampleFormat`. Simulator input may use signed `int16`, while ATS acquisition preserves native `UnsignedOffsetBinary12LeftAligned` codes in the same two-byte payload width. Raw v3 stores one compact metadata table plus one contiguous payload without converting native ATS samples and adds trajectory provenance plus an intrinsic ROS coordinate contract. FFTW, CUDA, waveform snapshots, storage, and replay all decode the descriptor through the same sample-format contract. Raw v1/v2 is accepted only after an adjacent sidecar explicitly identifies the standard coordinate frame; ambiguous legacy recordings require conversion.
 
 Phase 7.4 changes production acquisition ownership: one `RawFrameBatch` references a contiguous DMA payload and each record exposes a sample view into that allocation. Raw storage enqueues and writes once per DMA block. CUDA copies native external DMA storage directly to its persistent device input; only non-external input uses one contiguous pinned staging copy. Raw/result writers have separate queues and workers. Raw parts are preallocated, split only between complete blocks, truncated to committed bytes, and guarded by free-space preflight.
 
 Processed binary에는 up/down FFT magnitude, peak와 validity, distance, velocity, XYZ, intensity, point velocity, latency, processing revision을 기록한다. UDP point payload도 동일한 `x, y, z, intensity, velocity` 순서를 사용한다.
+
+Raw writer는 stream open 시점에 `<stem>.setup.yaml`을 먼저 기록하며 JSON sidecar의 `setup_file`과 `coordinate_frame`이 이를 참조한다. MCU legacy X/Y/M 파일을 사용하는 session은 적용된 waveform을 같은 session directory에 보관하고 setup의 상대 경로를 그 사본으로 바꾼다.
 
 JSON sidecar에는 다음을 기록한다.
 
@@ -146,13 +149,17 @@ JSON sidecar에는 다음을 기록한다.
 
 `split_file_size_gb`를 넘으면 다음 numbered raw part를 연다. 한 frame은 두 part로 분할하지 않으므로 part 크기는 최대 한 frame만큼 설정값을 초과할 수 있다.
 
-Processed binary format v2 additionally records the trajectory sample index, source X/Y commands, calibrated X/Y angles, detected fast axis/direction, coordinate source, and command coordinates copied into the final point. Point-cloud CSV exports `x, y, z, intensity, velocity, scan_x_command, scan_y_command`. UDP packet v1 remains unchanged at five floats per point for compatibility.
+Processed binary format v2 additionally records the trajectory sample index, source X/Y commands, calibrated azimuth/elevation angles, detected fast axis/direction, coordinate source, and command coordinates copied into the final point. Point-cloud CSV exports `x_forward_m, y_left_m, z_up_m, intensity_db, velocity_mps, scan_x_command, scan_y_command`. UDP packet v2 keeps five floats per point and fixes XYZ as `X forward, Y left, Z up`; legacy-axis v1 is rejected.
 
 ## 9. Replay
 
 `RawReplayReader`는 raw header와 frame record를 검증해 원래 `RawFrame`을 복원한다. `*.raw.0000.bin`을 열면 뒤의 numbered part를 자동으로 탐색해 연속 읽는다.
 
+Reader는 vector allocation 전에 block의 record/sample 곱셈, exact header size, 남은 파일 byte, 최대 100,000 records와 256 MiB payload를 검사한다. 손상 파일의 비정상 크기와 `bad_alloc`/`length_error`는 GUI 종료 대신 명시적 replay error가 된다. Replay runtime은 저장된 spatial `x_index/y_index`와 command provenance는 보존하지만 azimuth/elevation은 현재 적용된 setup 범위에서 다시 계산한다. 따라서 과거 command-derived angle metadata가 B-scan과 point cloud 방향을 갈라놓지 않는다.
+
 Replay frame은 hardware frame과 같은 `SignalProcessor` 또는 `ProcessingService` 입력으로 사용한다. 별도의 replay 전용 FFT/peak 계산을 만들지 않는다.
+
+GUI에서 raw part를 선택하면 같은 stem의 `.setup.yaml`을 우선 읽고, 과거 recording은 `.raw.json`의 `config_snapshot`으로 fallback한다. 저장 당시의 ATS board profile, digitizer, laser/chirp, scanner geometry, calibration, processing 설정을 pending controls에 복원한다. 실제 MCU/EDFA 출력, UDP, raw/processed 재기록은 안전을 위해 비활성화하며 사용자가 `Apply Setup`으로 재생 설정을 확정한다.
 
 ## 10. Failure Policy
 

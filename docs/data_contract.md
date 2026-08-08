@@ -15,9 +15,11 @@ An Alazar DMA buffer contains the records for one B-scan line. Each record is on
 
 `records_per_buffer` is the A-scan count in one B-scan line. The operator sets B-scans per frame, while B-scan rate and period are measured from Alazar DMA buffer completion timestamps. B-scan and 3D point-cloud snapshots publish only after every configured line is complete. While the next frame is being assembled, consumers keep the previous complete frame.
 
-For a legacy X/Y/M waveform, each rising edge in the original M sequence is the logical start of one acquired line. Record `i` maps to waveform sample `floor(i * scanner_sample_rate_hz / laser.sweep_rate_hz)` after that logical edge. This is zero-order command sampling; no coordinate interpolation is introduced. The upload-only B-trigger offset moves the emitted M bit but never moves the logical coordinate anchor.
+For a legacy X/Y/M waveform, each rising edge in the emitted M sequence is the start of one acquired line because that edge is the signal observed by the digitizer. Record `i` maps to waveform sample `floor(i * scanner_sample_rate_hz / laser.sweep_rate_hz)` after that emitted edge. This is zero-order command sampling; no coordinate interpolation is introduced. The original M edge is retained only as waveform provenance. Applying a B-trigger offset therefore moves both the physical trigger and the coordinate anchor to the same emitted edge.
 
-The uploaded X/Y command order is authoritative. Its full-file command minima and maxima map linearly to the four configured angle endpoints. The dominant command delta over an acquired line identifies the fast axis and its increasing/decreasing direction. A decreasing line keeps its original commands and Cartesian angles, but its B-scan column index is reversed exactly once so spatial columns remain left-to-right. No additional odd/even parity reversal is applied to a vector waveform. Generated raster mode uses `records_per_buffer * B_scans_per_frame` points and may apply its configured bidirectional parity.
+The uploaded X/Y command order is authoritative only for identifying the fast axis and preserving trajectory provenance. The operator controls line alignment with `scan.bidirectional`: OFF keeps every line in acquisition order, while ON keeps even lines forward and reverses odd lines exactly once into `x_index`. This parity mapping never reverses samples inside an A-scan or changes its FFT input. Cartesian azimuth is derived linearly from the aligned `x_index` and the configured `scan.x_start_deg` to `scan.x_end_deg` range; elevation is derived from `y_index` and `scan.y_start_deg` to `scan.y_end_deg`. Source X/Y commands and the sampled trajectory index remain attached as provenance and diagnostics. Generated raster mode uses the same parity contract and `records_per_buffer * B_scans_per_frame` points.
+
+Replay preserves the stored `x_index`, `y_index`, source X/Y commands, and trajectory sample index. Before processing, it recalculates azimuth and elevation from those spatial indices and the currently applied replay setup. Stored command-derived angles from earlier recordings therefore cannot override the operator-visible scan geometry or diverge from the B-scan. A replay position outside the applied raster dimensions is rejected explicitly.
 
 Runtime metadata also carries `dma_buffer_sequence`, zero-based `record_index_in_buffer`, and `records_in_buffer`. Live Time Domain and FFT snapshots update only when `record_index_in_buffer` matches the operator-selected A-scan. This display filter does not remove frames from processing, peak analysis, B-scan assembly, UDP frame assembly, or raw storage.
 
@@ -54,7 +56,7 @@ Configuration and optical-state history map each revision to the first and last 
 
 One `ProcessedFrame` is the result of processing one full-period `RawFrame` at one scan position. It carries independent up/down FFT magnitude arrays, independently detected peak results, one distance/velocity measurement, and one XYZ point. A peak that does not exceed the threshold is invalid for that A-scan; no value is carried from a previous A-scan. Invalid floating-point peak, distance, velocity, intensity, and XYZ fields are quiet `NaN`, while the integer `discrete_bin` sentinel remains `-1` and validity flags remain false. A valid `peak_bin` is exactly the selected integer `discrete_bin`; this version does not perform peak interpolation.
 
-The final point contract is legacy-compatible XYZIV: X is lateral, Y is forward range, and Z is vertical. Scanner-angle calibration offsets are applied before Cartesian conversion. Point intensity is the mean of the valid up/down peak magnitudes, and point velocity is the calibrated radial velocity. The B-scan matrix stores forward depth (`point.y`). In-memory points, processed format v2, and point-cloud CSV also preserve the source X/Y command pair. UDP v1 intentionally remains the compatible five-float `x, y, z, intensity, velocity` contract.
+The final point contract uses the common ROS/RViz right-handed LiDAR frame: `+X` is forward, `+Y` is left, and `+Z` is up. `scan_position.x_angle_deg` is azimuth and `scan_position.y_angle_deg` is elevation; these field names are retained for binary compatibility. Scanner-angle calibration offsets are applied before Cartesian conversion. For range `R`, azimuth `a`, and elevation `e`, the conversion is `x = R cos(e) cos(a)`, `y = R cos(e) sin(a)`, and `z = R sin(e)`. Point intensity is the mean of the valid up/down peak magnitudes, and point velocity is the calibrated radial velocity. The B-scan matrix stores forward depth (`point.x`). In-memory points, processed format v2, and point-cloud CSV also preserve the source X/Y command pair. UDP v2 uses the five-float `x, y, z, intensity, velocity` layout with this standard frame; legacy-axis UDP v1 is rejected.
 
 FFTW and CUDA/cuFFT consume the same configuration and implement the same ordered signal-processing contract. Backend selection may change execution hardware and memory movement but must not change preprocessing, magnitude scaling, peak selection, distance/velocity, calibration, XYZ, or validity semantics.
 
@@ -70,21 +72,24 @@ Scan-line and B-scan arrays are derived immutable snapshots. They are not embedd
 ## Storage Rules
 
 - Raw storage always preserves the complete pre-segmentation record.
-- Binary files declare format version, sample format, byte order, channel, sample rate, and record length.
-- JSON metadata stores the session descriptor, complete configuration snapshot, revision history, device versions, calibration identifiers, and stop reason.
+- Binary files declare format version, sample format, byte order, channel, sample rate, and record length. New DMA-block recordings use raw v3, whose coordinate contract is intrinsically ROS/RViz `X forward, Y left, Z up` and whose record table preserves trajectory sample, source commands, fast axis/direction, coordinate source, and calibration state.
+- JSON metadata stores the session descriptor, coordinate frame, complete configuration snapshot, revision history, device versions, calibration identifiers, and stop reason.
+- Raw recording creates `<stem>.setup.yaml` when the stream opens. The sidecar references this file, and an active legacy X/Y/M waveform is copied into the session so replay does not depend on a later-edited external file.
 - Queue overflow or raw-writer failure requests an acquisition stop and records the responsible queue and last accepted frame ID.
 - Raw files use numbered parts named `<stem>.raw.0000.bin`, `<stem>.raw.0001.bin`, and so on.
 - Replay opened at part `0000` automatically continues through compatible numbered parts.
+- Raw v1/v2 replay is allowed only when the adjacent JSON sidecar explicitly declares `coordinate_frame: ros_x_forward_y_left_z_up`. Missing or legacy coordinate metadata is rejected with a conversion-required error instead of being reinterpreted silently.
+- Before allocation, replay validates record dimensions, exact metadata bytes, payload arithmetic, remaining file length, a 100,000-record cap, and a 256 MiB payload cap. Allocation failures become replay errors rather than process termination.
 - Processed binary v2 uses the `FMCWPRO2` magic and stores scan trajectory provenance and source commands in addition to XYZIV. Raw/processed JSON sidecars use the same session/config revision identity as the source raw frame.
 
-## UDP Point Packet V1
+## UDP Point Packet V2
 
 Each complete raster frame is assembled from all scan positions and split into one or more UDP datagrams. Invalid measurements are omitted from the point array. Multi-byte fields and IEEE-754 floats use little-endian byte order.
 
 | Offset | Type | Field |
 |---:|---|---|
 | 0 | char[4] | magic `FMCW` |
-| 4 | uint16 | packet format version, currently 1 |
+| 4 | uint16 | packet format version, currently 2 |
 | 6 | uint16 | header bytes, currently 40 |
 | 8 | uint64 | one-based raster frame ID |
 | 16 | uint64 | source timestamp in ns |
@@ -93,8 +98,8 @@ Each complete raster frame is assembled from all scan positions and split into o
 | 34 | uint16 | zero-based segment index |
 | 36 | uint16 | points in this datagram |
 | 38 | uint16 | point stride, currently 20 bytes |
-| 40 | float[5] x N | x, y, z, intensity, velocity |
+| 40 | float[5] x N | x (forward), y (left), z (up), intensity, velocity |
 
-The maximum v1 datagram payload is 65,507 bytes, so `packet_point_count` is validated in the range 1..3273. The sender runs on its own worker thread and reports queue use, frames/packets sent, send FPS, dropped frames, and send errors.
+The maximum v2 datagram payload is 65,507 bytes, so `packet_point_count` is validated in the range 1..3273. The sender runs on its own worker thread and reports queue use, frames/packets sent, send FPS, dropped frames, and send errors.
 
-UDP v1 does not carry scanner command coordinates. A future packet version must use a new version and stride instead of changing the v1 payload in place.
+UDP v2 does not carry scanner command coordinates. A future payload change must use a new version and stride instead of changing v2 in place. Version 1 has the same byte layout but legacy coordinate semantics and must not be accepted as v2.

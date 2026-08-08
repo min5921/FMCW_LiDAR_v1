@@ -1,5 +1,8 @@
 #include "core/realtime_thread.h"
 
+#include <cstdint>
+#include <mutex>
+
 #if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -8,6 +11,48 @@
 #endif
 
 namespace fmcw {
+namespace {
+
+#if defined(_WIN32)
+std::mutex process_priority_mutex;
+std::uint32_t process_priority_users = 0U;
+DWORD original_process_priority = 0U;
+bool process_priority_changed = false;
+#endif
+
+}  // namespace
+
+RealtimeProcessPriorityScope::RealtimeProcessPriorityScope() {
+#if defined(_WIN32)
+  std::lock_guard<std::mutex> lock(process_priority_mutex);
+  if (process_priority_users == 0U) {
+    original_process_priority = GetPriorityClass(GetCurrentProcess());
+    process_priority_changed = original_process_priority != 0U &&
+        original_process_priority != HIGH_PRIORITY_CLASS &&
+        original_process_priority != REALTIME_PRIORITY_CLASS &&
+        SetPriorityClass(GetCurrentProcess(), HIGH_PRIORITY_CLASS) != FALSE;
+  }
+  ++process_priority_users;
+  active_ = true;
+#endif
+}
+
+RealtimeProcessPriorityScope::~RealtimeProcessPriorityScope() {
+#if defined(_WIN32)
+  std::lock_guard<std::mutex> lock(process_priority_mutex);
+  if (!active_ || process_priority_users == 0U) {
+    return;
+  }
+  --process_priority_users;
+  if (process_priority_users == 0U) {
+    if (process_priority_changed) {
+      SetPriorityClass(GetCurrentProcess(), original_process_priority);
+    }
+    original_process_priority = 0U;
+    process_priority_changed = false;
+  }
+#endif
+}
 
 void prioritizeCurrentRealtimeThread(RealtimeThreadPriority priority) {
 #if defined(_WIN32)

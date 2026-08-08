@@ -13,7 +13,8 @@
 namespace fmcw {
 
 inline constexpr std::uint32_t kRawFrameFormatVersion = 1;
-inline constexpr std::uint32_t kRawFrameBatchFormatVersion = 2;
+inline constexpr std::uint32_t kLegacyRawFrameBatchFormatVersion = 2;
+inline constexpr std::uint32_t kRawFrameBatchFormatVersion = 3;
 
 enum class FrameKind {
   FullChirpPeriod,
@@ -101,6 +102,8 @@ struct ScanPosition {
   std::uint32_t trajectory_sample_index = 0;
   float x_command = 0.0F;
   float y_command = 0.0F;
+  // Stored field names are retained for format compatibility: X angle is
+  // azimuth and Y angle is elevation, independent of source command columns.
   float x_angle_deg = 0.0F;
   float y_angle_deg = 0.0F;
   ScanAxis fast_axis = ScanAxis::Unknown;
@@ -265,7 +268,7 @@ struct DmaBufferMetadata {
   std::uint32_t format_version = kRawFrameBatchFormatVersion;
   std::uint64_t sequence = 0;
   std::uint64_t completion_timestamp_ns = 0;
-  // Runtime-only host timing. Raw v2 keeps its existing on-disk contract.
+  // Runtime-only host timing. Raw storage formats do not serialize these fields.
   std::uint64_t acquisition_wakeup_timestamp_ns = 0;
   std::uint64_t ownership_ready_timestamp_ns = 0;
   std::uint64_t session_ready_timestamp_ns = 0;
@@ -302,7 +305,7 @@ inline RawFramePtr rawFrameAt(const RawFrameBatchPtr& batch, std::size_t index) 
 }
 
 struct PointXYZI {
-  // Legacy-compatible axes: X lateral, Y forward range, Z vertical.
+  // ROS/RViz right-handed axes: +X forward, +Y left, +Z up.
   float x = std::numeric_limits<float>::quiet_NaN();
   float y = std::numeric_limits<float>::quiet_NaN();
   float z = std::numeric_limits<float>::quiet_NaN();

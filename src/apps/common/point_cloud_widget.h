@@ -25,7 +25,7 @@ class PointCloudWidget final : public QOpenGLWidget, protected QOpenGLFunctions 
   void setSnapshot(std::shared_ptr<const PointCloudSnapshot> snapshot);
   void setColorMode(PointCloudColorMode mode);
   void setPointSize(float pixels);
-  void setAccumulate(bool enabled);
+  void setAxesVisible(bool visible);
   void resetCamera();
   bool saveCurrentCloud(const QString& path) const;
 
@@ -52,7 +52,6 @@ class PointCloudWidget final : public QOpenGLWidget, protected QOpenGLFunctions 
 
   std::shared_ptr<const PointCloudSnapshot> snapshot_;
   std::vector<PointXYZI> current_points_;
-  std::vector<PointXYZI> accumulated_points_;
   std::vector<Vertex> vertices_;
   QPoint last_mouse_position_;
   PointCloudColorMode color_mode_ = PointCloudColorMode::Intensity;
@@ -66,7 +65,7 @@ class PointCloudWidget final : public QOpenGLWidget, protected QOpenGLFunctions 
   float center_y_ = 0.0F;
   float center_z_ = 0.0F;
   float extent_ = 1.0F;
-  bool accumulate_ = false;
+  bool axes_visible_ = true;
   bool spatial_bounds_valid_ = false;
 };
 

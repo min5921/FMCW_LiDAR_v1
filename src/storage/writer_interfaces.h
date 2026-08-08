@@ -28,7 +28,9 @@ struct SessionDescriptor {
   std::string application_version;
   std::uint32_t config_schema_version = kConfigSchemaVersion;
   std::uint64_t start_timestamp_utc_ns = 0;
+  std::string coordinate_frame = "ros_x_forward_y_left_z_up";
   std::string config_snapshot_json;
+  std::string config_snapshot_yaml;
 };
 
 struct RawStreamDescriptor {

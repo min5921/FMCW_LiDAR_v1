@@ -61,6 +61,9 @@ struct ProcessingServiceStatus {
   double batch_latency_p95_ms = 0.0;
   double batch_latency_p99_ms = 0.0;
   double maximum_batch_latency_ms = 0.0;
+  std::uint64_t maximum_batch_latency_sequence = 0;
+  std::uint64_t maximum_acquisition_wakeup_latency_sequence = 0;
+  std::uint64_t maximum_compute_latency_sequence = 0;
   double batch_deadline_ms = 5.0;
   std::uint64_t batch_deadline_misses = 0;
   ProcessingLatencyBreakdown last_latency;

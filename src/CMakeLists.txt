@@ -248,6 +248,8 @@ if(FMCW_BUILD_QT_APPS)
     apps/common/point_cloud_widget.h
     apps/common/plot_widgets.cpp
     apps/common/plot_widgets.h
+    apps/common/replay_setup_loader.cpp
+    apps/common/replay_setup_loader.h
   )
   target_link_libraries(fmcw_qt_common
     PUBLIC

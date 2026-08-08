@@ -15,6 +15,18 @@ void ProcessingSnapshotStore::configure(std::uint32_t x_pixel_count, std::uint32
   scan_frame_index_ = 0;
   line_fill_count_ = 0;
   line_work_ = {};
+  line_work_.up_peak_index.assign(width_, invalid);
+  line_work_.down_peak_index.assign(width_, invalid);
+  line_work_.up_peak_value_db.assign(width_, invalid);
+  line_work_.down_peak_value_db.assign(width_, invalid);
+  line_work_.distance_m.assign(width_, invalid);
+  line_work_.velocity_mps.assign(width_, invalid);
+  line_work_.depth_m.assign(width_, invalid);
+  line_work_.up_peak_state.assign(
+      width_, static_cast<std::uint8_t>(PeakTrackState::Invalid));
+  line_work_.down_peak_state.assign(
+      width_, static_cast<std::uint8_t>(PeakTrackState::Invalid));
+  line_work_.valid.assign(width_, 0U);
   line_filled_.assign(width_, 0U);
   bscan_work_ = {};
   bscan_work_.width = width_;
@@ -41,20 +53,23 @@ void ProcessingSnapshotStore::resetLine(std::uint32_t y_index) {
   active_y_ = y_index;
   has_active_line_ = true;
   line_fill_count_ = 0;
-  line_work_ = {};
+  line_work_.last_frame_id = 0U;
+  line_work_.processing_config_revision = 0U;
   line_work_.y_index = y_index;
   const float invalid = std::numeric_limits<float>::quiet_NaN();
-  line_work_.up_peak_index.assign(width_, invalid);
-  line_work_.down_peak_index.assign(width_, invalid);
-  line_work_.up_peak_value_db.assign(width_, invalid);
-  line_work_.down_peak_value_db.assign(width_, invalid);
-  line_work_.distance_m.assign(width_, invalid);
-  line_work_.velocity_mps.assign(width_, invalid);
-  line_work_.depth_m.assign(width_, invalid);
-  line_work_.up_peak_state.assign(width_, static_cast<std::uint8_t>(PeakTrackState::Invalid));
-  line_work_.down_peak_state.assign(width_, static_cast<std::uint8_t>(PeakTrackState::Invalid));
-  line_work_.valid.assign(width_, 0U);
-  line_filled_.assign(width_, 0U);
+  std::fill(line_work_.up_peak_index.begin(), line_work_.up_peak_index.end(), invalid);
+  std::fill(line_work_.down_peak_index.begin(), line_work_.down_peak_index.end(), invalid);
+  std::fill(line_work_.up_peak_value_db.begin(), line_work_.up_peak_value_db.end(), invalid);
+  std::fill(line_work_.down_peak_value_db.begin(), line_work_.down_peak_value_db.end(), invalid);
+  std::fill(line_work_.distance_m.begin(), line_work_.distance_m.end(), invalid);
+  std::fill(line_work_.velocity_mps.begin(), line_work_.velocity_mps.end(), invalid);
+  std::fill(line_work_.depth_m.begin(), line_work_.depth_m.end(), invalid);
+  std::fill(line_work_.up_peak_state.begin(), line_work_.up_peak_state.end(),
+            static_cast<std::uint8_t>(PeakTrackState::Invalid));
+  std::fill(line_work_.down_peak_state.begin(), line_work_.down_peak_state.end(),
+            static_cast<std::uint8_t>(PeakTrackState::Invalid));
+  std::fill(line_work_.valid.begin(), line_work_.valid.end(), 0U);
+  std::fill(line_filled_.begin(), line_filled_.end(), 0U);
 }
 
 void ProcessingSnapshotStore::setSelectedRecordIndex(std::uint32_t record_index) {
@@ -160,7 +175,7 @@ void ProcessingSnapshotStore::publishUnlocked(const RawFrame& raw,
   line_work_.down_peak_value_db[x] = processed.down_peak.magnitude_db;
   line_work_.distance_m[x] = processed.distance_m;
   line_work_.velocity_mps[x] = processed.velocity_mps;
-  line_work_.depth_m[x] = processed.point.y;
+  line_work_.depth_m[x] = processed.point.x;
   line_work_.up_peak_state[x] = static_cast<std::uint8_t>(processed.up_peak.state);
   line_work_.down_peak_state[x] = static_cast<std::uint8_t>(processed.down_peak.state);
   line_work_.valid[x] = processed.measurement_valid ? 1U : 0U;

@@ -295,14 +295,14 @@ __global__ void measurementsKernel(const DevicePeakResult* peaks,
   if (position.valid != 0 && isfinite(distance) && isfinite(velocity) &&
       isfinite(static_cast<double>(position.x_angle_deg)) &&
       isfinite(static_cast<double>(position.y_angle_deg))) {
-    const double x_angle = (static_cast<double>(position.x_angle_deg) + x_angle_offset_deg) *
+    const double azimuth = (static_cast<double>(position.x_angle_deg) + x_angle_offset_deg) *
         kPi / 180.0;
-    const double y_angle = (static_cast<double>(position.y_angle_deg) + y_angle_offset_deg) *
+    const double elevation = (static_cast<double>(position.y_angle_deg) + y_angle_offset_deg) *
         kPi / 180.0;
-    const double horizontal_range = distance * cos(y_angle);
-    result.x = static_cast<float>(horizontal_range * sin(x_angle));
-    result.y = static_cast<float>(horizontal_range * cos(x_angle));
-    result.z = static_cast<float>(-distance * sin(y_angle));
+    const double horizontal_range = distance * cos(elevation);
+    result.x = static_cast<float>(horizontal_range * cos(azimuth));
+    result.y = static_cast<float>(horizontal_range * sin(azimuth));
+    result.z = static_cast<float>(distance * sin(elevation));
     result.point_valid = 1;
   }
   measurements[record] = result;

@@ -13,6 +13,8 @@ FMCW LiDAR 시스템을 Windows와 Jetson에서 함께 운용하기 위한 v1 �
 - 3D viewer: Qt/OpenGL lightweight point cloud renderer
 - Live Time/FFT: one operator-selected A-scan from each DMA buffer
 - UDP: asynchronous versioned raster point-frame sender
+- Point axes: ROS/RViz convention (`+X` forward, `+Y` left, `+Z` up)
+- ROS1 viewer: C++ ROS Noetic catkin workspace under `Ros_project`
 
 ## Key Documents
 
@@ -29,6 +31,7 @@ FMCW LiDAR 시스템을 Windows와 Jetson에서 함께 운용하기 위한 v1 �
 - `docs/hardware_acceptance.md`: Windows/Jetson 실제 장비 검증 절차
 - `docs/build_setup.md`: Windows/Jetson 빌드 준비와 외부 SDK 경로
 - `docs/phase7_execution_plan.md`: Phase 7 subphase 순서, 완료 조건, audit finding 추적 및 commit/push 기준
+- `Ros_project/README.md`: ROS Noetic C++ UDP receiver, RViz, copy/build/run 절차
 
 ## Phase Policy
 
@@ -72,5 +75,6 @@ the application converts it to the fixed 100 kS/s MCU rate, validates the 15,000
 and checks that its B-trigger edge count matches `B-scans / frame` before upload.
 `B-trigger offset` fine-tunes only the uploaded M markers: negative values advance and positive
 values delay the marker in 10 us MCU-sample steps, while zero preserves the source file timing.
-The original M edges remain the coordinate anchors. X/Y command order defines vector-scan
-direction, so legacy bidirectional waveforms are not reversed again by odd/even line parity.
+The emitted M edges remain the coordinate anchors. `Bidirectional vector scan` is an operator
+setting: OFF keeps every B-scan in acquisition order, while ON reverses the spatial `x_index` of
+odd B-scan lines. Source X/Y commands and each A-scan's time samples remain unchanged.

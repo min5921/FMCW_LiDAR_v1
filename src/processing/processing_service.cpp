@@ -153,6 +153,17 @@ struct ProcessingService::Impl {
     std::lock_guard<std::mutex> lock(mutex);
     last_latency = latency;
     addLatency(latency_total, latency);
+    if (batches_processed == 0U ||
+        latency.end_to_end_ms > maximum_latency.end_to_end_ms) {
+      maximum_batch_latency_sequence = batch->metadata.sequence;
+    }
+    if (batches_processed == 0U ||
+        latency.acquisition_wakeup_ms > maximum_latency.acquisition_wakeup_ms) {
+      maximum_acquisition_wakeup_latency_sequence = batch->metadata.sequence;
+    }
+    if (batches_processed == 0U || latency.compute_ms > maximum_latency.compute_ms) {
+      maximum_compute_latency_sequence = batch->metadata.sequence;
+    }
     maximizeLatency(maximum_latency, latency);
     if (latency.end_to_end_ms > kBatchDeadlineMs) {
       ++batch_deadline_misses;
@@ -210,7 +221,26 @@ struct ProcessingService::Impl {
   }
 
   void workerLoop() {
-    prioritizeCurrentRealtimeThread(RealtimeThreadPriority::High);
+    RealtimeProcessPriorityScope process_priority;
+    prioritizeCurrentRealtimeThread(RealtimeThreadPriority::Critical);
+    std::string initialization_error;
+    const bool initialized = processor.initializeWorkerThread(initialization_error);
+    {
+      std::lock_guard<std::mutex> lock(mutex);
+      worker_ready = true;
+      if (!initialized) {
+        worker_error = initialization_error.empty()
+            ? "Signal processing worker initialization failed"
+            : std::move(initialization_error);
+        stop_reason = "Signal processing worker initialization failed";
+        accepting = false;
+        running = false;
+      }
+      condition.notify_all();
+    }
+    if (!initialized) {
+      return;
+    }
     if (processor.supportsAsyncBatchProcessing()) {
       workerLoopAsync();
       return;
@@ -459,10 +489,14 @@ struct ProcessingService::Impl {
   ProcessingLatencyBreakdown latency_total;
   ProcessingLatencyBreakdown last_latency;
   ProcessingLatencyBreakdown maximum_latency;
+  std::uint64_t maximum_batch_latency_sequence = 0;
+  std::uint64_t maximum_acquisition_wakeup_latency_sequence = 0;
+  std::uint64_t maximum_compute_latency_sequence = 0;
   std::uint64_t batch_deadline_misses = 0;
   std::deque<double> batch_latency_window;
   bool configured = false;
   bool running = false;
+  bool worker_ready = false;
   bool accepting = false;
   bool stop_requested = false;
   std::string stop_reason;
@@ -492,13 +526,15 @@ bool ProcessingService::configure(const SystemConfig& config, std::uint64_t proc
   impl_->queue_capacity = config.processing.queue_capacity;
   impl_->processing_config_revision = processing_config_revision;
   impl_->snapshots.configure(config.scan.x_pixel_count, config.scan.y_line_count);
+  impl_->processed_batch_workspace.clear();
+  impl_->processed_batch_workspace.resize(config.digitizer.records_per_buffer);
   impl_->configured = true;
   error.clear();
   return true;
 }
 
 bool ProcessingService::start(std::string& error) {
-  std::lock_guard<std::mutex> lock(impl_->mutex);
+  std::unique_lock<std::mutex> lock(impl_->mutex);
   if (!impl_->configured || impl_->running || impl_->worker.joinable()) {
     error = "Processing service is not configured or is already active";
     return false;
@@ -513,14 +549,27 @@ bool ProcessingService::start(std::string& error) {
   impl_->latency_total = {};
   impl_->last_latency = {};
   impl_->maximum_latency = {};
+  impl_->maximum_batch_latency_sequence = 0;
+  impl_->maximum_acquisition_wakeup_latency_sequence = 0;
+  impl_->maximum_compute_latency_sequence = 0;
   impl_->batch_deadline_misses = 0;
   impl_->batch_latency_window.clear();
   impl_->stop_requested = false;
   impl_->stop_reason.clear();
   impl_->worker_error.clear();
+  impl_->worker_ready = false;
   impl_->accepting = true;
   impl_->running = true;
   impl_->worker = std::thread([this] { impl_->workerLoop(); });
+  impl_->condition.wait(lock, [this] { return impl_->worker_ready; });
+  if (!impl_->worker_error.empty()) {
+    error = impl_->worker_error;
+    lock.unlock();
+    if (impl_->worker.joinable()) {
+      impl_->worker.join();
+    }
+    return false;
+  }
   error.clear();
   return true;
 }
@@ -683,6 +732,10 @@ ProcessingServiceStatus ProcessingService::status() const {
     status.maximum_ownership_copy_latency_ms = status.maximum_latency.ownership_ms;
     status.maximum_signal_processing_latency_ms = status.maximum_latency.signal_ms;
     status.maximum_batch_latency_ms = status.maximum_latency.end_to_end_ms;
+    status.maximum_batch_latency_sequence = impl_->maximum_batch_latency_sequence;
+    status.maximum_acquisition_wakeup_latency_sequence =
+        impl_->maximum_acquisition_wakeup_latency_sequence;
+    status.maximum_compute_latency_sequence = impl_->maximum_compute_latency_sequence;
     status.batch_deadline_ms = kBatchDeadlineMs;
     status.batch_deadline_misses = impl_->batch_deadline_misses;
     status.backend_name = impl_->processor.backendName();

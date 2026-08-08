@@ -113,6 +113,8 @@ CUDA/cuFFT is enabled when `nvcc` and `CUDAToolkit` are found. On Windows the bu
 
 The Windows Qt target is linked with the `Windows GUI` subsystem, so launching `fmcw_lidar_windows.exe` does not create a separate command window. Local SDK paths belong in ignored `CMakeUserPresets.json`; this workspace uses the `windows-local-debug` preset for ATS-SDK 25.1.0 and FFTW.
 
+The executable under `build/preset-windows-msvc-release/src` is a development build artifact and is not standalone. After a Release build, run `deploy/windows/package.ps1` to create `build/package/FMCW_LiDAR/FMCW_LiDAR.exe` together with Qt, FFTW/cuFFT, ATS API, platform plugins, and configuration files. Operators launch only the packaged executable; the packaging script verifies `Qt6Core.dll`, `Qt6Widgets.dll`, `platforms/qwindows.dll`, and a packaged smoke test before reporting success.
+
 ## Current Workspace Check
 
 The ordinary PowerShell `PATH` on the current Windows machine resolves `qmake` to Qt 5.15.2 and does not expose `cl`. The installed MSVC 19.44 and Qt 6.11.0 MSVC x64 toolchain were found through their installation roots. After activating the Visual Studio x64 developer environment and selecting Qt 6 through `CMAKE_PREFIX_PATH`, the Windows Qt application built successfully, the core contract test passed, and the offscreen UI smoke test exited successfully.

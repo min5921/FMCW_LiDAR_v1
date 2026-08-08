@@ -298,9 +298,9 @@ ValidationResult ConfigValidator::validate(const SystemConfig& config) {
 
   if (config.udp.enabled && (!isValidIpv4(config.udp.target_ip) || config.udp.target_port == 0 ||
                              config.udp.packet_point_count == 0 || config.udp.packet_point_count > 3273U ||
-                             config.udp.packet_format_version != 1U)) {
+                             config.udp.packet_format_version != 2U)) {
     add(result, ValidationSeverity::Error, "udp", "Enabled UDP output requires a valid IPv4 endpoint and packet format",
-        "Use packet format v1 and 1..3273 points per datagram");
+        "Use packet format v2 and 1..3273 points per datagram");
   }
   if ((config.storage.raw_enabled || config.storage.processed_enabled) && config.storage.output_directory.empty()) {
     add(result, ValidationSeverity::Error, "storage.output_directory", "Enabled storage requires an output directory",

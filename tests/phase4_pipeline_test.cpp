@@ -1,3 +1,4 @@
+#include "core/config_profile.h"
 #include "drivers/simulator/fake_digitizer.h"
 #include "drivers/replay/replay_digitizer.h"
 #include "processing/fft_backends.h"
@@ -502,12 +503,13 @@ void testQualificationBatchExecutionCount() {
 
   std::vector<fmcw::ProcessedFrame> results;
   expect(processor.processBatch(raw_batch, 997U, results, error),
-         "998-record qualification workload executes as FFTW batches");
+         "998-record qualification workload executes as one FFTW plan-many batch");
   expect(results.size() == 998U && results.front().measurement_valid &&
              results.back().measurement_valid,
          "qualification workload produces all 998 measurement results");
-  expect(state->execute_calls == 16U && state->transforms_executed == 2048U,
-         "998 records use 16 fixed FFT batches instead of 1,996 synchronous FFT calls");
+  expect(state->execute_calls == 1U && state->transforms_executed == 1996U &&
+             state->plan.batch == 1996U,
+         "998 records use one exact 1,996-transform FFTW batch without padding");
   expect(results.front().up_fft_magnitude_db.empty() &&
              !results.back().up_fft_magnitude_db.empty(),
          "qualification workload retains spectra only for selected record 997");
@@ -546,16 +548,16 @@ fmcw::ProcessedFrame testSignalProcessing(const fmcw::SystemConfig& config,
       config.calibration.velocity_scale + config.calibration.velocity_offset_mps;
   expectNear(processed.velocity_mps, expected_velocity_mps, 1.0e-6,
              "velocity uses wavelength and the UP/DOWN beat-frequency difference");
-  const double x_angle = (processed.scan_position.x_angle_deg + config.calibration.x_angle_offset_deg) *
+  const double azimuth = (processed.scan_position.x_angle_deg + config.calibration.x_angle_offset_deg) *
       3.14159265358979323846 / 180.0;
-  const double y_angle = (processed.scan_position.y_angle_deg + config.calibration.y_angle_offset_deg) *
+  const double elevation = (processed.scan_position.y_angle_deg + config.calibration.y_angle_offset_deg) *
       3.14159265358979323846 / 180.0;
-  expectNear(processed.point.x, processed.distance_m * std::cos(y_angle) * std::sin(x_angle), 1.0e-5,
-             "Cartesian X matches the legacy lateral-axis conversion");
-  expectNear(processed.point.y, processed.distance_m * std::cos(y_angle) * std::cos(x_angle), 1.0e-5,
-             "Cartesian Y matches the legacy forward-axis conversion");
-  expectNear(processed.point.z, -processed.distance_m * std::sin(y_angle), 1.0e-5,
-             "Cartesian Z matches the legacy vertical-axis conversion");
+  expectNear(processed.point.x, processed.distance_m * std::cos(elevation) * std::cos(azimuth), 1.0e-5,
+             "Cartesian X follows the ROS forward-axis convention");
+  expectNear(processed.point.y, processed.distance_m * std::cos(elevation) * std::sin(azimuth), 1.0e-5,
+             "Cartesian Y follows the ROS left-axis convention");
+  expectNear(processed.point.z, processed.distance_m * std::sin(elevation), 1.0e-5,
+             "Cartesian Z follows the ROS up-axis convention");
   expectNear(processed.point.intensity,
              0.5 * (processed.up_peak.magnitude_db + processed.down_peak.magnitude_db), 1.0e-6,
              "point intensity is the mean UP/DOWN peak magnitude");
@@ -677,10 +679,13 @@ void testProcessingServiceBatch(const fmcw::SystemConfig& config,
              status.average_batch_latency_ms == status.last_batch_latency_ms &&
              status.maximum_ownership_copy_latency_ms ==
                  status.last_ownership_copy_latency_ms &&
-             status.maximum_signal_processing_latency_ms ==
-                 status.last_signal_processing_latency_ms &&
-             status.maximum_batch_latency_ms == status.last_batch_latency_ms &&
-             status.maximum_latency.compute_ms == status.last_latency.compute_ms &&
+              status.maximum_signal_processing_latency_ms ==
+                  status.last_signal_processing_latency_ms &&
+              status.maximum_batch_latency_ms == status.last_batch_latency_ms &&
+              status.maximum_batch_latency_sequence == 12U &&
+              status.maximum_acquisition_wakeup_latency_sequence == 12U &&
+              status.maximum_compute_latency_sequence == 12U &&
+              status.maximum_latency.compute_ms == status.last_latency.compute_ms &&
              status.batch_latency_p50_ms == status.batch_latency_p99_ms &&
              status.batch_deadline_misses == 1U,
          "processing telemetry reports each DMA-to-result stage, arithmetic mean, and deadline timing");
@@ -814,6 +819,7 @@ void testBinaryStorageAndReplay(const fmcw::SystemConfig& config, fmcw::RawFrame
   options.session.application_version = "test";
   options.session.start_timestamp_utc_ns = 1;
   options.session.config_snapshot_json = "{\"profile\":\"phase4-test\"}";
+  options.session.config_snapshot_yaml = fmcw::ConfigProfileCodec::toYaml(config);
   options.raw_stream.channel = raw->metadata.channel;
   options.raw_stream.format_version = fmcw::kRawFrameFormatVersion;
   options.raw_stream.sample_format = raw->metadata.sample_format;
@@ -967,7 +973,7 @@ void testBscanFrameBoundaryReset() {
   fmcw::RawFrame raw;
   fmcw::ProcessedFrame processed;
   processed.measurement_valid = true;
-  processed.point.y = 1.0F;
+  processed.point.x = 1.0F;
   processed.point.valid = true;
 
   const auto publish = [&](std::uint64_t frame_id, std::uint32_t x, std::uint32_t y) {

@@ -41,11 +41,16 @@ class McuProtocol {
   static std::vector<McuWaveformFrame> buildConfiguredWaveform(const SystemConfig& config,
                                                                 McuWaveformInfo& info,
                                                                 std::string& error);
+  static std::vector<McuWaveformFrame> buildConfiguredLegacyXymWaveform(
+      const SystemConfig& config, std::string_view contents,
+      McuWaveformInfo& info, std::string& error);
   static std::vector<McuWaveformFrame> buildFullFrameWaveform(const SystemConfig& config,
                                                                std::string& error);
   static std::vector<McuWaveformFrame> loadLegacyXymWaveform(std::string_view path,
                                                              McuWaveformInfo& info,
                                                              std::string& error);
+  static std::vector<McuWaveformFrame> loadLegacyXymWaveformContents(
+      std::string_view contents, McuWaveformInfo& info, std::string& error);
   static McuWaveformSnapshotPtr snapshotForUploadedWaveform(
       const std::vector<McuWaveformFrame>& frames, double sample_rate_hz);
   static std::string clearCommand();

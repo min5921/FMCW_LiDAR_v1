@@ -8,14 +8,11 @@
 
 #include <algorithm>
 #include <cmath>
-#include <cstddef>
 #include <iterator>
 #include <limits>
 
 namespace fmcw {
 namespace {
-
-constexpr std::size_t kMaxAccumulatedPoints = 500000;
 
 void colorMap(float value, float& red, float& green, float& blue) {
   const auto t = std::clamp(value, 0.0F, 1.0F);
@@ -59,21 +56,12 @@ void PointCloudWidget::setSnapshot(std::shared_ptr<const PointCloudSnapshot> sna
   const bool new_session = snapshot_ != nullptr &&
       snapshot->scan_frame_index <= snapshot_->scan_frame_index;
   if (new_session) {
-    accumulated_points_.clear();
     spatial_bounds_valid_ = false;
   }
   snapshot_ = std::move(snapshot);
   current_points_.clear();
   std::copy_if(snapshot_->points.begin(), snapshot_->points.end(), std::back_inserter(current_points_),
                [](const PointXYZI& point) { return point.valid; });
-  if (accumulate_) {
-    accumulated_points_.insert(accumulated_points_.end(), current_points_.begin(), current_points_.end());
-    if (accumulated_points_.size() > kMaxAccumulatedPoints) {
-      accumulated_points_.erase(accumulated_points_.begin(),
-          accumulated_points_.begin() + static_cast<std::ptrdiff_t>(
-              accumulated_points_.size() - kMaxAccumulatedPoints));
-    }
-  }
   rebuildVertices();
   if (!spatial_bounds_valid_) {
     fitSpatialBounds();
@@ -92,14 +80,8 @@ void PointCloudWidget::setPointSize(float pixels) {
   update();
 }
 
-void PointCloudWidget::setAccumulate(bool enabled) {
-  accumulate_ = enabled;
-  accumulated_points_.clear();
-  if (accumulate_) {
-    accumulated_points_ = current_points_;
-  }
-  rebuildVertices();
-  fitSpatialBounds();
+void PointCloudWidget::setAxesVisible(bool visible) {
+  axes_visible_ = visible;
   update();
 }
 
@@ -119,9 +101,9 @@ bool PointCloudWidget::saveCurrentCloud(const QString& path) const {
     return false;
   }
   QTextStream stream(&file);
-  stream << "x_m,y_m,z_m,intensity_db,velocity_mps,scan_x_command,scan_y_command\n";
-  const auto& points = accumulate_ ? accumulated_points_ : current_points_;
-  for (const auto& point : points) {
+  stream << "x_forward_m,y_left_m,z_up_m,intensity_db,velocity_mps,"
+            "scan_x_command,scan_y_command\n";
+  for (const auto& point : current_points_) {
     stream << point.x << ',' << point.y << ',' << point.z << ',' << point.intensity << ','
            << point.velocity << ',' << point.scan_x_command << ',' << point.scan_y_command << '\n';
   }
@@ -158,27 +140,39 @@ void PointCloudWidget::paintGL() {
     return QPointF(width() * (0.5 + 0.5 * pan_x_) + rotated_x * canvas_scale / depth,
                    height() * (0.5 - 0.5 * pan_y_) - rotated_vertical * canvas_scale / depth);
   };
+  const auto projectWorld = [&](double x, double y, double z) {
+    return project((x - static_cast<double>(center_x_)) * 2.0 / extent_,
+                   (y - static_cast<double>(center_y_)) * 2.0 / extent_,
+                   (z - static_cast<double>(center_z_)) * 2.0 / extent_);
+  };
 
   painter.setPen(QPen(QColor(52, 72, 78, 120), 1.0));
   for (int index = -4; index <= 4; ++index) {
     const auto coordinate = static_cast<double>(index) / 4.0;
-    painter.drawLine(project(coordinate, -1.0, -0.9), project(coordinate, 1.0, -0.9));
-    painter.drawLine(project(-1.0, coordinate, -0.9), project(1.0, coordinate, -0.9));
+    const auto x = static_cast<double>(center_x_) + coordinate * extent_ * 0.5;
+    const auto y = static_cast<double>(center_y_) + coordinate * extent_ * 0.5;
+    painter.drawLine(projectWorld(x, center_y_ - extent_ * 0.5, 0.0),
+                     projectWorld(x, center_y_ + extent_ * 0.5, 0.0));
+    painter.drawLine(projectWorld(center_x_ - extent_ * 0.5, y, 0.0),
+                     projectWorld(center_x_ + extent_ * 0.5, y, 0.0));
   }
 
-  const auto origin = project(0.0, 0.0, 0.0);
-  const auto x_axis = project(0.65, 0.0, 0.0);
-  const auto y_axis = project(0.0, 0.65, 0.0);
-  const auto z_axis = project(0.0, 0.0, 0.65);
-  painter.setPen(QPen(QColor("#e05a67"), 2.0));
-  painter.drawLine(origin, x_axis);
-  painter.drawText(x_axis + QPointF(4.0, 0.0), "X");
-  painter.setPen(QPen(QColor("#67c98c"), 2.0));
-  painter.drawLine(origin, y_axis);
-  painter.drawText(y_axis + QPointF(4.0, 0.0), "Y");
-  painter.setPen(QPen(QColor("#55aee6"), 2.0));
-  painter.drawLine(origin, z_axis);
-  painter.drawText(z_axis + QPointF(4.0, 0.0), "Z");
+  if (axes_visible_) {
+    const auto axis_length = static_cast<double>(extent_) * 0.325;
+    const auto origin = projectWorld(0.0, 0.0, 0.0);
+    const auto x_axis = projectWorld(axis_length, 0.0, 0.0);
+    const auto y_axis = projectWorld(0.0, axis_length, 0.0);
+    const auto z_axis = projectWorld(0.0, 0.0, axis_length);
+    painter.setPen(QPen(QColor("#e05a67"), 2.0));
+    painter.drawLine(origin, x_axis);
+    painter.drawText(x_axis + QPointF(4.0, 0.0), "X");
+    painter.setPen(QPen(QColor("#67c98c"), 2.0));
+    painter.drawLine(origin, y_axis);
+    painter.drawText(y_axis + QPointF(4.0, 0.0), "Y");
+    painter.setPen(QPen(QColor("#55aee6"), 2.0));
+    painter.drawLine(origin, z_axis);
+    painter.drawText(z_axis + QPointF(4.0, 0.0), "Z");
+  }
 
   painter.setPen(Qt::NoPen);
   const auto point_radius = static_cast<double>(point_size_) * 0.5;
@@ -202,9 +196,11 @@ void PointCloudWidget::paintGL() {
             .arg(current_points_.size())
       : QString("Waiting for complete raster frame");
   painter.drawText(QRect(14, 12, width() - 28, 24), Qt::AlignLeft | Qt::AlignVCenter, frame_text);
-  painter.setPen(QColor("#71858b"));
-  painter.drawText(QRect(14, height() - 34, width() - 28, 22), Qt::AlignLeft | Qt::AlignVCenter,
-                   "X lateral | Y range | Z vertical | meters");
+  if (axes_visible_) {
+    painter.setPen(QColor("#71858b"));
+    painter.drawText(QRect(14, height() - 34, width() - 28, 22), Qt::AlignLeft | Qt::AlignVCenter,
+                     "X forward | Y left | Z up | meters");
+  }
 }
 
 void PointCloudWidget::mousePressEvent(QMouseEvent* event) {
@@ -231,9 +227,8 @@ void PointCloudWidget::wheelEvent(QWheelEvent* event) {
 }
 
 void PointCloudWidget::rebuildVertices() {
-  const auto& points = accumulate_ ? accumulated_points_ : current_points_;
   vertices_.clear();
-  if (points.empty()) {
+  if (current_points_.empty()) {
     return;
   }
   float minimum_value = std::numeric_limits<float>::max();
@@ -243,14 +238,14 @@ void PointCloudWidget::rebuildVertices() {
     if (color_mode_ == PointCloudColorMode::Velocity) return point.velocity;
     return std::sqrt(point.x * point.x + point.y * point.y + point.z * point.z);
   };
-  for (const auto& point : points) {
+  for (const auto& point : current_points_) {
     const auto value = valueFor(point);
     minimum_value = std::min(minimum_value, value);
     maximum_value = std::max(maximum_value, value);
   }
   const auto value_span = std::max(maximum_value - minimum_value, 1.0e-6F);
-  vertices_.reserve(points.size());
-  for (const auto& point : points) {
+  vertices_.reserve(current_points_.size());
+  for (const auto& point : current_points_) {
     float red = 1.0F;
     float green = 1.0F;
     float blue = 1.0F;
@@ -260,8 +255,7 @@ void PointCloudWidget::rebuildVertices() {
 }
 
 void PointCloudWidget::fitSpatialBounds() {
-  const auto& points = accumulate_ ? accumulated_points_ : current_points_;
-  if (points.empty()) {
+  if (current_points_.empty()) {
     center_x_ = center_y_ = center_z_ = 0.0F;
     extent_ = 1.0F;
     spatial_bounds_valid_ = false;
@@ -273,7 +267,7 @@ void PointCloudWidget::fitSpatialBounds() {
   float maximum_x = std::numeric_limits<float>::lowest();
   float maximum_y = std::numeric_limits<float>::lowest();
   float maximum_z = std::numeric_limits<float>::lowest();
-  for (const auto& point : points) {
+  for (const auto& point : current_points_) {
     minimum_x = std::min(minimum_x, point.x);
     minimum_y = std::min(minimum_y, point.y);
     minimum_z = std::min(minimum_z, point.z);

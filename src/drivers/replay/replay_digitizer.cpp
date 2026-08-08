@@ -19,7 +19,7 @@ std::uint64_t nowNs() {
 
 }  // namespace
 
-std::string ReplayDigitizer::name() const { return "Raw v1/v2 replay digitizer"; }
+std::string ReplayDigitizer::name() const { return "Raw v1/v2/v3 replay digitizer"; }
 
 DigitizerTelemetry ReplayDigitizer::telemetry() const {
   std::lock_guard<std::mutex> lock(mutex_);
@@ -53,7 +53,8 @@ bool ReplayDigitizer::openReader(std::string& error) {
   const auto& descriptor = reader_.streamDescriptor();
   if (descriptor.channel != config_.digitizer.channel ||
       descriptor.record_length != config_.digitizer.sample_point ||
-      (descriptor.format_version == kRawFrameBatchFormatVersion &&
+      ((descriptor.format_version == kLegacyRawFrameBatchFormatVersion ||
+        descriptor.format_version == kRawFrameBatchFormatVersion) &&
        descriptor.records_per_buffer != config_.digitizer.records_per_buffer) ||
       std::abs(descriptor.sample_rate_hz - config_.digitizer.sample_rate_hz) >
           std::max(1.0, config_.digitizer.sample_rate_hz * 1.0e-9)) {
@@ -159,7 +160,8 @@ FrameWaitResult ReplayDigitizer::waitForBatch(MutableRawFrameBatchPtr& batch,
   auto mutable_batch = batch_pool_.acquire();
   std::size_t records_read = 0;
   bool reopened_empty_file = false;
-  if (reader_.streamDescriptor().format_version == kRawFrameBatchFormatVersion) {
+  if (reader_.streamDescriptor().format_version == kLegacyRawFrameBatchFormatVersion ||
+      reader_.streamDescriptor().format_version == kRawFrameBatchFormatVersion) {
     while (true) {
       const auto result = reader_.readNextBatch(*mutable_batch, error);
       if (result == ReplayReadResult::Error) {
@@ -229,7 +231,8 @@ FrameWaitResult ReplayDigitizer::waitForBatch(MutableRawFrameBatchPtr& batch,
     mutable_batch->records.resize(records_read);
   }
 
-  if (reader_.streamDescriptor().format_version == kRawFrameBatchFormatVersion) {
+  if (reader_.streamDescriptor().format_version == kLegacyRawFrameBatchFormatVersion ||
+      reader_.streamDescriptor().format_version == kRawFrameBatchFormatVersion) {
     for (auto& frame : mutable_batch->records) {
       frame.metadata.frame_id = next_frame_id_;
       frame.metadata.trigger.sequence = next_frame_id_;

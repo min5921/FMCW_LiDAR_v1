@@ -28,6 +28,8 @@ bool mapTrajectoryRecord(const SystemConfig& config,
                          std::uint32_t record_index,
                          ScanPosition& position);
 
+bool alignReplayRasterPosition(const SystemConfig& config, ScanPosition& position);
+
 void stampGeneratedRasterPosition(const SystemConfig& config, RawFrame& frame);
 
 }  // namespace fmcw

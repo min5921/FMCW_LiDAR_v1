@@ -197,10 +197,16 @@ FrameWaitResult AcquisitionSession::waitForFrame(RawFrame& frame, std::chrono::m
     if (frame.metadata.record_index_in_buffer + 1U >= frame.metadata.records_in_buffer) {
       ++scan_line_sequence_;
     }
+  } else if (config_.runtime.acquisition_source == AcquisitionSource::Replay) {
+    if (!frame.metadata.scan_position.valid) {
+      stampGeneratedRasterPosition(config_, frame);
+    }
+    if (!alignReplayRasterPosition(config_, frame.metadata.scan_position)) {
+      error = "Replay scan position is outside the applied raster geometry";
+      return FrameWaitResult::Error;
+    }
   } else if (!frame.metadata.scan_position.valid) {
     stampGeneratedRasterPosition(config_, frame);
-  } else if (config_.runtime.acquisition_source == AcquisitionSource::Replay) {
-    frame.metadata.scan_position.source = ScanCoordinateSource::Replay;
   }
   error.clear();
   return FrameWaitResult::FrameReady;
@@ -258,10 +264,16 @@ FrameWaitResult AcquisitionSession::waitForBatch(RawFrameBatchPtr& batch,
         error = "Unable to map the DMA batch to the loaded MCU trajectory";
         return FrameWaitResult::Error;
       }
+    } else if (config_.runtime.acquisition_source == AcquisitionSource::Replay) {
+      if (!frame.metadata.scan_position.valid) {
+        stampGeneratedRasterPosition(config_, frame);
+      }
+      if (!alignReplayRasterPosition(config_, frame.metadata.scan_position)) {
+        error = "Replay scan position is outside the applied raster geometry";
+        return FrameWaitResult::Error;
+      }
     } else if (!frame.metadata.scan_position.valid) {
       stampGeneratedRasterPosition(config_, frame);
-    } else if (config_.runtime.acquisition_source == AcquisitionSource::Replay) {
-      frame.metadata.scan_position.source = ScanCoordinateSource::Replay;
     }
   }
   ++scan_line_sequence_;

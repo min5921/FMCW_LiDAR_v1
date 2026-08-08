@@ -1,6 +1,7 @@
 #include "processing/signal_processor.h"
 
 #include "core/config_validation.h"
+#include "core/realtime_thread.h"
 #include "processing/cuda/cuda_signal_pipeline.h"
 
 #include <algorithm>
@@ -26,13 +27,18 @@ namespace {
 
 constexpr double kSpeedOfLightMps = 299792458.0;
 constexpr double kPi = 3.14159265358979323846;
-constexpr std::size_t kFftwBatchRecordChunk = 64U;
 constexpr int kMaximumOpenMpBatchThreads = 16;
 
 #if FMCW_HAS_OPENMP
 int openMpBatchThreadCount(std::size_t work_item_count) {
   return std::max(1, std::min({static_cast<int>(work_item_count),
                                omp_get_max_threads(), kMaximumOpenMpBatchThreads}));
+}
+
+void prioritizeOpenMpWorkerThread() {
+  if (omp_get_thread_num() != 0) {
+    prioritizeCurrentRealtimeThread(RealtimeThreadPriority::High);
+  }
 }
 #endif
 
@@ -192,15 +198,15 @@ PointXYZI toPoint(float distance_m, float velocity_mps, float intensity_db,
       !std::isfinite(calibration.y_angle_offset_deg)) {
     return point;
   }
-  const double x_angle = (static_cast<double>(position.x_angle_deg) + calibration.x_angle_offset_deg) *
+  const double azimuth = (static_cast<double>(position.x_angle_deg) + calibration.x_angle_offset_deg) *
       kPi / 180.0;
-  const double y_angle = (static_cast<double>(position.y_angle_deg) + calibration.y_angle_offset_deg) *
+  const double elevation = (static_cast<double>(position.y_angle_deg) + calibration.y_angle_offset_deg) *
       kPi / 180.0;
-  // Algebraic form of the legacy 90-degree angle transforms: X lateral, Y forward, Z vertical.
-  const double horizontal_range = distance_m * std::cos(y_angle);
-  point.x = static_cast<float>(horizontal_range * std::sin(x_angle));
-  point.y = static_cast<float>(horizontal_range * std::cos(x_angle));
-  point.z = static_cast<float>(-distance_m * std::sin(y_angle));
+  // ROS/RViz convention: +X forward, +Y left, +Z up.
+  const double horizontal_range = distance_m * std::cos(elevation);
+  point.x = static_cast<float>(horizontal_range * std::cos(azimuth));
+  point.y = static_cast<float>(horizontal_range * std::sin(azimuth));
+  point.z = static_cast<float>(distance_m * std::sin(elevation));
   point.intensity = intensity_db;
   point.velocity = velocity_mps;
   point.scan_x_command = position.x_command;
@@ -303,9 +309,10 @@ bool SignalProcessor::configure(const SystemConfig& config, std::uint64_t proces
   impl_->down_window = makeWindow(config.chirp_segmentation.window, config.chirp_segmentation.down_segment.length());
   impl_->up_window_sum = windowSum(impl_->up_window);
   impl_->down_window_sum = windowSum(impl_->down_window);
-  impl_->batch_record_capacity = impl_->fft_backend->kind() == FftBackendKind::Fftw
-      ? std::min<std::size_t>(config.digitizer.records_per_buffer, kFftwBatchRecordChunk)
-      : static_cast<std::size_t>(config.digitizer.records_per_buffer);
+  // Keep one digitizer DMA buffer as one CPU plan-many batch. Splitting the
+  // 998-record workload into small chunks repeatedly entered three OpenMP
+  // regions per chunk and introduced avoidable scheduler/barrier spikes.
+  impl_->batch_record_capacity = config.digitizer.records_per_buffer;
   const auto transform_count = impl_->batch_record_capacity * 2U;
   if (impl_->fft_backend->kind() == FftBackendKind::Cuda) {
     if (impl_->cuda_pipeline == nullptr ||
@@ -323,11 +330,30 @@ bool SignalProcessor::configure(const SystemConfig& config, std::uint64_t proces
     }
     impl_->batch_input.resize(static_cast<std::size_t>(
         config.chirp_segmentation.segment_fft_length) * transform_count);
-    impl_->batch_spectrum.reserve(
+    impl_->batch_spectrum.resize(
         (static_cast<std::size_t>(config.chirp_segmentation.segment_fft_length) / 2U + 1U) *
         transform_count);
   }
   impl_->configured = true;
+  error.clear();
+  return true;
+}
+
+bool SignalProcessor::initializeWorkerThread(std::string& error) {
+  if (!impl_->configured) {
+    error = "Configure the signal processor before initializing its worker thread";
+    return false;
+  }
+#if FMCW_HAS_OPENMP
+  if (impl_->fft_backend->kind() == FftBackendKind::Fftw) {
+    const auto batch_thread_count = openMpBatchThreadCount(
+        impl_->config.digitizer.records_per_buffer);
+#pragma omp parallel num_threads(batch_thread_count)
+    {
+      prioritizeOpenMpWorkerThread();
+    }
+  }
+#endif
   error.clear();
   return true;
 }
@@ -446,29 +472,35 @@ bool SignalProcessor::processBatch(const RawFrameBatch& raw_batch,
     std::atomic<bool> preprocess_failed{false};
 #if FMCW_HAS_OPENMP
     const auto batch_thread_count = openMpBatchThreadCount(chunk_record_count);
-#pragma omp parallel for schedule(static) num_threads(batch_thread_count)
+#pragma omp parallel num_threads(batch_thread_count)
+    {
+      prioritizeOpenMpWorkerThread();
+#pragma omp for schedule(static)
 #endif
-    for (std::int64_t local_record = 0;
-         local_record < static_cast<std::int64_t>(chunk_record_count); ++local_record) {
-      const auto local_index = static_cast<std::size_t>(local_record);
-      const auto record_index = chunk_start + local_index;
-      const auto& raw = raw_batch.records[record_index];
-      if (!rawMatchesConfig(raw, impl_->config)) {
-        preprocess_failed.store(true, std::memory_order_relaxed);
-        continue;
+      for (std::int64_t local_record = 0;
+           local_record < static_cast<std::int64_t>(chunk_record_count); ++local_record) {
+        const auto local_index = static_cast<std::size_t>(local_record);
+        const auto record_index = chunk_start + local_index;
+        const auto& raw = raw_batch.records[record_index];
+        if (!rawMatchesConfig(raw, impl_->config)) {
+          preprocess_failed.store(true, std::memory_order_relaxed);
+          continue;
+        }
+        auto* up_output = impl_->batch_input.data() + (local_index * 2U) * fft_length;
+        auto* down_output = up_output + fft_length;
+        std::string local_error;
+        if (!preprocessSegmentInto(raw, raw.metadata.up_segment, impl_->config.processing,
+                                   impl_->config.chirp_segmentation.polarity, false, impl_->up_window,
+                                   fft_length, up_output, local_error) ||
+            !preprocessSegmentInto(raw, raw.metadata.down_segment, impl_->config.processing,
+                                   impl_->config.chirp_segmentation.polarity, true, impl_->down_window,
+                                   fft_length, down_output, local_error)) {
+          preprocess_failed.store(true, std::memory_order_relaxed);
+        }
       }
-      auto* up_output = impl_->batch_input.data() + (local_index * 2U) * fft_length;
-      auto* down_output = up_output + fft_length;
-      std::string local_error;
-      if (!preprocessSegmentInto(raw, raw.metadata.up_segment, impl_->config.processing,
-                                 impl_->config.chirp_segmentation.polarity, false, impl_->up_window,
-                                 fft_length, up_output, local_error) ||
-          !preprocessSegmentInto(raw, raw.metadata.down_segment, impl_->config.processing,
-                                 impl_->config.chirp_segmentation.polarity, true, impl_->down_window,
-                                 fft_length, down_output, local_error)) {
-        preprocess_failed.store(true, std::memory_order_relaxed);
-      }
+#if FMCW_HAS_OPENMP
     }
+#endif
     if (preprocess_failed.load(std::memory_order_relaxed)) {
       error = "Raw DMA batch preprocessing failed its segmentation contract";
       return false;
@@ -484,34 +516,40 @@ bool SignalProcessor::processBatch(const RawFrameBatch& raw_batch,
     }
 
 #if FMCW_HAS_OPENMP
-#pragma omp parallel for schedule(static) num_threads(batch_thread_count)
+#pragma omp parallel num_threads(batch_thread_count)
+    {
+      prioritizeOpenMpWorkerThread();
+#pragma omp for schedule(static)
 #endif
-    for (std::int64_t local_record = 0;
-         local_record < static_cast<std::int64_t>(chunk_record_count); ++local_record) {
-      const auto local_index = static_cast<std::size_t>(local_record);
-      const auto record_index = chunk_start + local_index;
-      const auto& raw = raw_batch.records[record_index];
-      auto& processed = processed_batch[record_index];
-      initializeProcessed(raw, impl_->processing_config_revision, processed);
-      const auto* up_spectrum = impl_->batch_spectrum.data() +
-          (local_index * 2U) * spectrum_length;
-      const auto* down_spectrum = up_spectrum + spectrum_length;
-      if (raw.metadata.record_index_in_buffer == selected_record_index) {
-        processed.up_fft_magnitude_db = magnitudeDb(up_spectrum, spectrum_length,
-                                                    impl_->up_window_sum);
-        processed.down_fft_magnitude_db = magnitudeDb(down_spectrum, spectrum_length,
-                                                      impl_->down_window_sum);
-      }
-      processed.up_peak = detectPeak(up_spectrum, spectrum_length, impl_->up_window_sum,
-                                     impl_->config.processing.peak_search_start_bin,
-                                     impl_->config.processing.peak_search_end_bin,
-                                     impl_->config.processing.peak_threshold_db);
-      processed.down_peak = detectPeak(down_spectrum, spectrum_length, impl_->down_window_sum,
+      for (std::int64_t local_record = 0;
+           local_record < static_cast<std::int64_t>(chunk_record_count); ++local_record) {
+        const auto local_index = static_cast<std::size_t>(local_record);
+        const auto record_index = chunk_start + local_index;
+        const auto& raw = raw_batch.records[record_index];
+        auto& processed = processed_batch[record_index];
+        initializeProcessed(raw, impl_->processing_config_revision, processed);
+        const auto* up_spectrum = impl_->batch_spectrum.data() +
+            (local_index * 2U) * spectrum_length;
+        const auto* down_spectrum = up_spectrum + spectrum_length;
+        if (raw.metadata.record_index_in_buffer == selected_record_index) {
+          processed.up_fft_magnitude_db = magnitudeDb(up_spectrum, spectrum_length,
+                                                      impl_->up_window_sum);
+          processed.down_fft_magnitude_db = magnitudeDb(down_spectrum, spectrum_length,
+                                                        impl_->down_window_sum);
+        }
+        processed.up_peak = detectPeak(up_spectrum, spectrum_length, impl_->up_window_sum,
                                        impl_->config.processing.peak_search_start_bin,
                                        impl_->config.processing.peak_search_end_bin,
                                        impl_->config.processing.peak_threshold_db);
-      finalizeMeasurement(raw, impl_->config, processed);
+        processed.down_peak = detectPeak(down_spectrum, spectrum_length, impl_->down_window_sum,
+                                         impl_->config.processing.peak_search_start_bin,
+                                         impl_->config.processing.peak_search_end_bin,
+                                         impl_->config.processing.peak_threshold_db);
+        finalizeMeasurement(raw, impl_->config, processed);
+      }
+#if FMCW_HAS_OPENMP
     }
+#endif
   }
 
   const auto batch_latency_ms = std::chrono::duration<double, std::milli>(

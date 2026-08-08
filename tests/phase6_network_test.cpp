@@ -35,7 +35,11 @@ void testPacketRoundTrip() {
     frame.points.push_back(point);
   }
   std::string error;
-  const auto packets = fmcw::UdpPointProtocol::encodeFrame(frame, 2, 1, error);
+  const auto legacy_packets = fmcw::UdpPointProtocol::encodeFrame(frame, 2, 1, error);
+  expect(legacy_packets.empty() && !error.empty(),
+         "legacy-axis UDP v1 is rejected after the ROS XYZ contract change");
+  const auto packets = fmcw::UdpPointProtocol::encodeFrame(
+      frame, 2, fmcw::kUdpPointPacketVersion, error);
   expect(error.empty() && packets.size() == 3U, "five points split into three UDP segments");
   fmcw::UdpPointPacket decoded;
   expect(fmcw::UdpPointProtocol::decodePacket(packets.at(1), decoded, error),
@@ -56,7 +60,7 @@ void testAsyncSender() {
   config.target_ip = "127.0.0.1";
   config.target_port = 49001;
   config.packet_point_count = 2;
-  config.packet_format_version = 1;
+  config.packet_format_version = 2;
   config.queue_capacity = 2;
   fmcw::UdpSenderService sender;
   std::string error;

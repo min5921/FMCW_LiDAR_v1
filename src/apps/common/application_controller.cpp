@@ -22,6 +22,8 @@
 #include <chrono>
 #include <cmath>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <utility>
 #include <vector>
 
@@ -98,6 +100,8 @@ class RuntimeWorker final : public QObject {
     }
     connected_ = false;
     mcu_waveform_revision_ = 0;
+    uploaded_legacy_waveform_bytes_.clear();
+    uploaded_legacy_waveform_extension_.clear();
     state_ = configured_ ? OperationState::Configured : OperationState::Disconnected;
     emitLog("INFO", "Device", "Runtime devices disconnected");
     publishStatus("Disconnected");
@@ -144,7 +148,43 @@ class RuntimeWorker final : public QObject {
       options.session.platform = platform_name_.toStdString();
       options.session.application_version = versionString();
       options.session.start_timestamp_utc_ns = utcNowNs();
-      options.session.config_snapshot_json = ConfigProfileCodec::toJsonSnapshot(config_);
+      auto recorded_config = config_;
+      if (recorded_config.mcu.enabled &&
+          recorded_config.mcu.waveform_source == McuWaveformSource::LegacyXymFile &&
+          !recorded_config.mcu.waveform_file.empty()) {
+        std::error_code directory_error;
+        std::filesystem::create_directories(options.session_directory, directory_error);
+        if (directory_error) {
+          storage_.reset();
+          fail("Start", QString("Unable to create recording directory: %1")
+                            .arg(qString(directory_error.message())));
+          return;
+        }
+        if (uploaded_legacy_waveform_bytes_.empty() ||
+            mcu_waveform_revision_ != config_revision_) {
+          storage_.reset();
+          fail("Start", "The uploaded scanner waveform snapshot is unavailable; upload it again");
+          return;
+        }
+        const auto extension = uploaded_legacy_waveform_extension_.empty()
+            ? std::filesystem::path(".txt")
+            : std::filesystem::path(uploaded_legacy_waveform_extension_);
+        const auto archived_name = std::filesystem::path(
+            std::string("fmcw_lidar.waveform") + extension.string());
+        const auto archived_path = options.session_directory / archived_name;
+        std::ofstream archive(archived_path, std::ios::binary | std::ios::trunc);
+        archive.write(uploaded_legacy_waveform_bytes_.data(),
+                      static_cast<std::streamsize>(uploaded_legacy_waveform_bytes_.size()));
+        archive.close();
+        if (!archive) {
+          storage_.reset();
+          fail("Start", "Unable to archive the exact scanner waveform uploaded to the MCU");
+          return;
+        }
+        recorded_config.mcu.waveform_file = archived_name.generic_string();
+      }
+      options.session.config_snapshot_json = ConfigProfileCodec::toJsonSnapshot(recorded_config);
+      options.session.config_snapshot_yaml = ConfigProfileCodec::toYaml(recorded_config);
       options.raw_stream.channel = config_.digitizer.channel;
       options.raw_stream.sample_format = SampleFormat::SignedInt16;
       if (active_source_ == AcquisitionSource::Alazar) {
@@ -416,7 +456,29 @@ class RuntimeWorker final : public QObject {
     }
     std::string error;
     McuWaveformInfo waveform_info;
-    auto frames = McuProtocol::buildConfiguredWaveform(config_, waveform_info, error);
+    std::string legacy_waveform_bytes;
+    std::vector<McuWaveformFrame> frames;
+    mcu_waveform_revision_ = 0;
+    uploaded_legacy_waveform_bytes_.clear();
+    uploaded_legacy_waveform_extension_.clear();
+    if (config_.mcu.waveform_source == McuWaveformSource::LegacyXymFile) {
+      const auto source_path = std::filesystem::path(config_.mcu.waveform_file);
+      std::ifstream source(source_path, std::ios::binary);
+      if (!source.is_open()) {
+        error = "Unable to open legacy X/Y/M waveform file: " + source_path.string();
+      } else {
+        legacy_waveform_bytes.assign(std::istreambuf_iterator<char>(source),
+                                     std::istreambuf_iterator<char>());
+        if (source.bad()) {
+          error = "Unable to read the complete legacy X/Y/M waveform file";
+        } else {
+          frames = McuProtocol::buildConfiguredLegacyXymWaveform(
+              config_, legacy_waveform_bytes, waveform_info, error);
+        }
+      }
+    } else {
+      frames = McuProtocol::buildConfiguredWaveform(config_, waveform_info, error);
+    }
     if (frames.empty()) {
       report(McuUploadStage::Failed, 0, 0, qString(error));
       reject("MCU waveform", qString(error));
@@ -460,6 +522,11 @@ class RuntimeWorker final : public QObject {
       return;
     }
     mcu_waveform_revision_ = config_revision_;
+    if (waveform_info.source == McuWaveformSource::LegacyXymFile) {
+      uploaded_legacy_waveform_bytes_ = std::move(legacy_waveform_bytes);
+      const auto extension = std::filesystem::path(config_.mcu.waveform_file).extension();
+      uploaded_legacy_waveform_extension_ = extension.empty() ? ".txt" : extension.string();
+    }
     const auto loaded_status = adapters_.mcu->status();
     if (waveform_info.source == McuWaveformSource::LegacyXymFile) {
       auto message = QString("Uploaded legacy X/Y/M waveform: %1 source points @ %2 Hz -> %3 points @ %4 Hz | "
@@ -472,11 +539,14 @@ class RuntimeWorker final : public QObject {
       if (waveform_info.resampled) {
         message += " | resampled";
       }
-      message += QString(" | command range X [%1, %2], Y [%3, %4] | direction from waveform | %5 | %6")
+      message += QString(" | command range X [%1, %2], Y [%3, %4] | B-scan parity %5 | %6 | %7")
                      .arg(waveform_info.minimum_x_command, 0, 'g', 6)
                      .arg(waveform_info.maximum_x_command, 0, 'g', 6)
                      .arg(waveform_info.minimum_y_command, 0, 'g', 6)
                      .arg(waveform_info.maximum_y_command, 0, 'g', 6)
+                     .arg(config_.scan.bidirectional
+                              ? "ON (odd lines reversed)"
+                              : "BYPASS (acquisition order)")
                      .arg(trigger_shift_summary)
                      .arg(qString(loaded_status.last_ack));
       emitLog("INFO", "MCU", message);
@@ -595,6 +665,8 @@ class RuntimeWorker final : public QObject {
     config_revision_ = next_revision;
     processing_revision_ = next_revision;
     mcu_waveform_revision_ = 0;
+    uploaded_legacy_waveform_bytes_.clear();
+    uploaded_legacy_waveform_extension_.clear();
     configured_ = true;
     state_ = OperationState::Configured;
 
@@ -977,6 +1049,8 @@ class RuntimeWorker final : public QObject {
   std::uint64_t config_revision_ = 0;
   std::uint64_t processing_revision_ = 0;
   std::uint64_t mcu_waveform_revision_ = 0;
+  std::string uploaded_legacy_waveform_bytes_;
+  std::string uploaded_legacy_waveform_extension_;
   std::uint32_t selected_record_index_ = 0;
   int active_live_plot_index_ = -1;
   WaveformSnapshotPtr last_waveform_snapshot_;

@@ -1,3 +1,4 @@
+#include "core/config_profile.h"
 #include "drivers/simulator/fake_digitizer.h"
 #include "storage/async_storage_service.h"
 #include "storage/binary_storage.h"
@@ -65,7 +66,8 @@ int main() {
   options.session.platform = "Windows";
   options.session.application_version = "test";
   options.session.start_timestamp_utc_ns = 1U;
-  options.session.config_snapshot_json = "{}";
+  options.session.config_snapshot_json = fmcw::ConfigProfileCodec::toJsonSnapshot(config);
+  options.session.config_snapshot_yaml = fmcw::ConfigProfileCodec::toYaml(config);
   options.raw_stream.format_version = fmcw::kRawFrameBatchFormatVersion;
   options.raw_stream.channel = config.digitizer.channel;
   options.raw_stream.sample_rate_hz = config.digitizer.sample_rate_hz;

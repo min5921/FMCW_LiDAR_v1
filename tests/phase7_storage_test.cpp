@@ -1,4 +1,5 @@
 #include "core/acquisition_session.h"
+#include "core/config_profile.h"
 #include "drivers/replay/replay_digitizer.h"
 #include "drivers/simulator/fake_digitizer.h"
 #include "drivers/simulator/fake_edfa.h"
@@ -13,6 +14,7 @@
 #include <condition_variable>
 #include <cstdint>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <limits>
 #include <memory>
@@ -35,6 +37,60 @@ std::filesystem::path uniqueTestDirectory(const char* label) {
   const auto suffix = std::chrono::steady_clock::now().time_since_epoch().count();
   return std::filesystem::temp_directory_path() /
       (std::string("fmcw_phase7_storage_") + label + "_" + std::to_string(suffix));
+}
+
+std::string readText(const std::filesystem::path& path) {
+  std::ifstream stream(path, std::ios::binary);
+  return {std::istreambuf_iterator<char>(stream), std::istreambuf_iterator<char>()};
+}
+
+template <typename Value>
+void writeScalar(std::ofstream& stream, const Value& value) {
+  stream.write(reinterpret_cast<const char*>(&value), sizeof(value));
+}
+
+void writeRawStreamHeaderForTest(std::ofstream& stream, std::uint32_t version,
+                                 std::uint32_t record_length,
+                                 std::uint32_t records_per_buffer) {
+  const std::string magic = version == fmcw::kLegacyRawFrameBatchFormatVersion
+      ? "FMCWRAW2"
+      : "FMCWRAW3";
+  stream.write(magic.data(), static_cast<std::streamsize>(magic.size()));
+  writeScalar(stream, version);
+  writeScalar(stream, static_cast<std::uint32_t>(fmcw::DigitizerChannel::A));
+  writeScalar(stream, static_cast<std::uint32_t>(fmcw::SampleFormat::SignedInt16));
+  writeScalar(stream, static_cast<std::uint32_t>(fmcw::ByteOrder::LittleEndian));
+  writeScalar(stream, 1.0e9);
+  writeScalar(stream, record_length);
+  writeScalar(stream, records_per_buffer);
+}
+
+void writeRawBlockPrefixForTest(std::ofstream& stream, std::uint32_t record_count,
+                                std::uint32_t record_length) {
+  writeScalar(stream, std::uint32_t{0x32424D46U});
+  writeScalar(stream, fmcw::kRawFrameBatchFormatVersion);
+  writeScalar(stream, static_cast<std::uint32_t>(120U + record_count * 96U));
+  writeScalar(stream, std::uint32_t{0U});
+  writeScalar(stream, static_cast<std::uint64_t>(record_count) * record_length *
+                          sizeof(std::int16_t));
+  writeScalar(stream, std::uint64_t{1U});
+  writeScalar(stream, std::uint64_t{2U});
+  writeScalar(stream, std::uint64_t{3U});
+  writeScalar(stream, record_count);
+  writeScalar(stream, record_length);
+  writeScalar(stream, std::uint64_t{0U});
+  writeScalar(stream, std::uint64_t{0U});
+  writeScalar(stream, static_cast<std::uint32_t>(fmcw::FrameKind::FullChirpPeriod));
+  writeScalar(stream, static_cast<std::uint32_t>(fmcw::DigitizerChannel::A));
+  writeScalar(stream, static_cast<std::uint32_t>(fmcw::SampleFormat::SignedInt16));
+  writeScalar(stream, static_cast<std::uint32_t>(fmcw::ByteOrder::LittleEndian));
+  writeScalar(stream, 1.0e9);
+  writeScalar(stream, std::uint32_t{0U});
+  writeScalar(stream, record_length);
+  writeScalar(stream, std::uint32_t{0U});
+  writeScalar(stream, std::uint32_t{1U});
+  writeScalar(stream, std::uint32_t{1U});
+  writeScalar(stream, std::uint32_t{2U});
 }
 
 fmcw::RawFrameBatchPtr qualificationBatch(fmcw::SystemConfig& config) {
@@ -65,7 +121,8 @@ fmcw::WriterOpenOptions writerOptions(const fmcw::SystemConfig& config,
   options.session.platform = "Windows";
   options.session.application_version = "test";
   options.session.start_timestamp_utc_ns = 1U;
-  options.session.config_snapshot_json = "{}";
+  options.session.config_snapshot_json = fmcw::ConfigProfileCodec::toJsonSnapshot(config);
+  options.session.config_snapshot_yaml = fmcw::ConfigProfileCodec::toYaml(config);
   options.raw_stream.format_version = fmcw::kRawFrameBatchFormatVersion;
   options.raw_stream.channel = config.digitizer.channel;
   options.raw_stream.sample_rate_hz = config.digitizer.sample_rate_hz;
@@ -109,7 +166,11 @@ bool processingParity(const fmcw::SystemConfig& config, const fmcw::RawFrameBatc
         std::abs(lhs.velocity_mps - rhs.velocity_mps) > 1.0e-6F ||
         std::abs(lhs.point.x - rhs.point.x) > 1.0e-6F ||
         std::abs(lhs.point.y - rhs.point.y) > 1.0e-6F ||
-        std::abs(lhs.point.z - rhs.point.z) > 1.0e-6F) {
+        std::abs(lhs.point.z - rhs.point.z) > 1.0e-6F ||
+        std::abs(lhs.point.intensity - rhs.point.intensity) > 1.0e-6F ||
+        std::abs(lhs.point.velocity - rhs.point.velocity) > 1.0e-6F ||
+        std::abs(lhs.point.scan_x_command - rhs.point.scan_x_command) > 1.0e-6F ||
+        std::abs(lhs.point.scan_y_command - rhs.point.scan_y_command) > 1.0e-6F) {
       return false;
     }
   }
@@ -124,18 +185,19 @@ void testDmaBlockStorageAndReplay() {
   if (!batch) {
     return;
   }
+  config.digitizer.board_profile = "ats9360";
 
-  const auto directory = uniqueTestDirectory("v2");
+  const auto directory = uniqueTestDirectory("v3");
   const auto options = writerOptions(config, directory);
   fmcw::AsyncStorageService storage;
   std::string error;
-  expect(storage.start(options, error), "raw v2 asynchronous storage starts");
+  expect(storage.start(options, error), "raw v3 asynchronous storage starts");
   expect(storage.enqueueRawBatch(batch, error) == fmcw::EnqueueResult::Accepted,
          "first complete DMA block enters the raw queue");
   expect(storage.enqueueRawBatch(batch, error) == fmcw::EnqueueResult::Accepted,
          "second complete DMA block enters the raw queue");
-  storage.requestStop("phase7 v2 test complete");
-  expect(storage.waitUntilStopped(error), "raw v2 storage drains and finalizes");
+  storage.requestStop("phase7 v3 test complete");
+  expect(storage.waitUntilStopped(error), "raw v3 storage drains and finalizes");
   const auto status = storage.status();
   expect(status.raw_writer.blocks_written == 2U && status.raw_writer.frames_written == 1996U &&
              status.raw_writer.bytes_written > batch->contiguous_samples.size() * sizeof(std::int16_t) * 2U,
@@ -144,33 +206,55 @@ void testDmaBlockStorageAndReplay() {
   const auto first_part = directory / "qualification.raw.0000.bin";
   const auto second_part = directory / "qualification.raw.0001.bin";
   expect(std::filesystem::exists(first_part) && std::filesystem::exists(second_part),
-         "v2 split keeps each complete DMA block in one numbered part");
+         "v3 split keeps each complete DMA block in one numbered part");
+  const auto setup_path = directory / "qualification.setup.yaml";
+  const auto sidecar_path = directory / "qualification.raw.json";
+  const auto setup = fmcw::ConfigProfileCodec::loadLayered({setup_path});
+  expect(std::filesystem::exists(setup_path) && setup.ok() &&
+             setup.config.digitizer.board_profile == "ats9360" &&
+             setup.config.digitizer.sample_point == config.digitizer.sample_point &&
+             setup.config.scan.x_pixel_count == config.scan.x_pixel_count &&
+             setup.config.scan.y_line_count == config.scan.y_line_count,
+         "raw recording stores a reloadable board, digitizer, and scanner setup snapshot");
+  expect(readText(sidecar_path).find("\"coordinate_frame\": \"ros_x_forward_y_left_z_up\"") !=
+             std::string::npos,
+         "raw sidecar declares the standard ROS point-cloud coordinate frame");
   fmcw::RawReplayReader reader;
   expect(reader.open(first_part, error) &&
              reader.streamDescriptor().format_version == fmcw::kRawFrameBatchFormatVersion,
-         "raw replay detects the v2 DMA-block stream");
+         "raw replay detects the v3 DMA-block stream");
   fmcw::RawFrameBatch replayed;
   expect(reader.readNextBatch(replayed, error) == fmcw::ReplayReadResult::FrameReady &&
              replayed.hasContiguousSamples() && replayed.records.size() == 998U,
-         "v2 replay restores one complete contiguous DMA block");
+         "v3 replay restores one complete contiguous DMA block");
   expect(replayed.contiguous_samples == batch->contiguous_samples &&
              replayed.records.front().metadata.scan_position.x_index ==
                  batch->records.front().metadata.scan_position.x_index &&
              replayed.records.back().metadata.scan_position.x_index ==
-                 batch->records.back().metadata.scan_position.x_index,
-         "v2 replay preserves samples and first/last raster positions");
+                 batch->records.back().metadata.scan_position.x_index &&
+             replayed.records.front().metadata.scan_position.trajectory_sample_index ==
+                 batch->records.front().metadata.scan_position.trajectory_sample_index &&
+             replayed.records.front().metadata.scan_position.fast_axis ==
+                 batch->records.front().metadata.scan_position.fast_axis &&
+             replayed.records.front().metadata.scan_position.source ==
+                 batch->records.front().metadata.scan_position.source,
+         "v3 replay preserves samples, raster positions, and trajectory provenance");
   expect(processingParity(config, *batch, replayed),
-         "v2 replay produces the same FFTW peak, distance, velocity, and XYZ results");
+         "v3 replay produces the same FFTW peak, distance, velocity, and XYZIV results");
   fmcw::RawFrameBatch second_replayed;
   expect(reader.readNextBatch(second_replayed, error) == fmcw::ReplayReadResult::FrameReady &&
              reader.readNextBatch(second_replayed, error) == fmcw::ReplayReadResult::EndOfStream,
-         "v2 replay advances across split parts and stops at the exact block boundary");
+         "v3 replay advances across split parts and stops at the exact block boundary");
   reader.close();
 
   auto replay_config = config;
   replay_config.runtime.acquisition_source = fmcw::AcquisitionSource::Replay;
   replay_config.runtime.replay_file = first_part.string();
   replay_config.runtime.replay_loop = false;
+  replay_config.scan.x_start_deg = -6.0;
+  replay_config.scan.x_end_deg = 6.0;
+  replay_config.scan.y_start_deg = -3.0;
+  replay_config.scan.y_end_deg = 3.0;
   fmcw::ReplayDigitizer replay_digitizer;
   fmcw::FakeEdfaController replay_edfa;
   fmcw::FakeMcuController replay_mcu;
@@ -181,14 +265,24 @@ void testDmaBlockStorageAndReplay() {
              replay_session.waitForBatch(runtime_replay, std::chrono::milliseconds(100), error) ==
                  fmcw::FrameWaitResult::FrameReady &&
              runtime_replay && runtime_replay->hasContiguousSamples(),
-         "runtime replay keeps the v2 DMA block contiguous through AcquisitionSession");
+         "runtime replay keeps the v3 DMA block contiguous through AcquisitionSession");
   expect(runtime_replay &&
              runtime_replay->records.back().metadata.scan_position.x_index ==
                  batch->records.back().metadata.scan_position.x_index &&
-             runtime_replay->records.back().metadata.scan_position.x_angle_deg ==
-                 batch->records.back().metadata.scan_position.x_angle_deg,
-         "AcquisitionSession preserves valid scan positions restored from raw v2 metadata");
-  expect(replay_session.stop(error), "runtime v2 replay session stops cleanly");
+             std::abs(runtime_replay->records.front().metadata.scan_position.x_angle_deg + 6.0F) <
+                 1.0e-5F &&
+             std::abs(runtime_replay->records.back().metadata.scan_position.x_angle_deg - 6.0F) <
+                 1.0e-5F &&
+             std::abs(runtime_replay->records.front().metadata.scan_position.y_angle_deg + 3.0F) <
+                 1.0e-5F &&
+             runtime_replay->records.front().metadata.scan_position.x_command ==
+                 batch->records.front().metadata.scan_position.x_command &&
+             runtime_replay->records.front().metadata.scan_position.y_command ==
+                 batch->records.front().metadata.scan_position.y_command &&
+             runtime_replay->records.front().metadata.scan_position.source ==
+                 fmcw::ScanCoordinateSource::Replay,
+         "AcquisitionSession realigns replay angles to the applied raster while preserving commands");
+  expect(replay_session.stop(error), "runtime v3 replay session stops cleanly");
   replay_session.disconnect();
 
   auto insufficient = options;
@@ -201,6 +295,79 @@ void testDmaBlockStorageAndReplay() {
   std::error_code remove_error;
   std::filesystem::remove_all(directory, remove_error);
   std::filesystem::remove_all(insufficient.session_directory, remove_error);
+}
+
+void testLegacyCoordinatePolicyAndCorruptAllocationGuard() {
+  const auto directory = uniqueTestDirectory("replay_guard");
+  std::filesystem::create_directories(directory);
+  std::string error;
+
+  const auto legacy_path = directory / "legacy.raw.0000.bin";
+  {
+    std::ofstream stream(legacy_path, std::ios::binary | std::ios::trunc);
+    writeRawStreamHeaderForTest(stream, fmcw::kLegacyRawFrameBatchFormatVersion,
+                                4992U, 998U);
+  }
+  fmcw::RawReplayReader legacy_reader;
+  expect(!legacy_reader.open(legacy_path, error) &&
+             error.find("coordinate_frame") != std::string::npos,
+         "legacy raw without coordinate metadata is rejected instead of silently reinterpreted");
+  {
+    std::ofstream sidecar(directory / "legacy.raw.json", std::ios::binary | std::ios::trunc);
+    sidecar << "{\"coordinate_frame\":\"ros_x_forward_y_left_z_up\"}\n";
+  }
+  expect(legacy_reader.open(legacy_path, error) &&
+             legacy_reader.streamDescriptor().format_version ==
+                 fmcw::kLegacyRawFrameBatchFormatVersion,
+         "explicitly annotated standard-coordinate raw v2 remains readable");
+  legacy_reader.close();
+
+  constexpr std::uint32_t record_count = 100000U;
+  constexpr std::uint32_t record_length = 64U * 1024U * 1024U;
+  const auto corrupt_path = directory / "corrupt.raw.0000.bin";
+  {
+    std::ofstream stream(corrupt_path, std::ios::binary | std::ios::trunc);
+    writeRawStreamHeaderForTest(stream, fmcw::kRawFrameBatchFormatVersion,
+                                record_length, record_count);
+    writeRawBlockPrefixForTest(stream, record_count, record_length);
+  }
+  fmcw::RawReplayReader corrupt_reader;
+  fmcw::RawFrameBatch replayed;
+  expect(corrupt_reader.open(corrupt_path, error) &&
+             corrupt_reader.readNextBatch(replayed, error) == fmcw::ReplayReadResult::Error &&
+             error.find("allocation limit") != std::string::npos &&
+             replayed.contiguous_samples.empty() && replayed.records.empty(),
+         "corrupt multi-terabyte raw dimensions are rejected before allocation");
+  corrupt_reader.close();
+
+  const auto truncated_path = directory / "truncated.raw.0000.bin";
+  {
+    std::ofstream stream(truncated_path, std::ios::binary | std::ios::trunc);
+    writeRawStreamHeaderForTest(stream, fmcw::kRawFrameBatchFormatVersion,
+                                4992U, 998U);
+    writeRawBlockPrefixForTest(stream, 998U, 4992U);
+  }
+  fmcw::RawReplayReader truncated_reader;
+  replayed = {};
+  expect(truncated_reader.open(truncated_path, error) &&
+             truncated_reader.readNextBatch(replayed, error) == fmcw::ReplayReadResult::Error &&
+             error.find("file boundary") != std::string::npos &&
+             replayed.contiguous_samples.empty() && replayed.records.empty(),
+         "truncated raw block is rejected against remaining file bytes before allocation");
+  truncated_reader.close();
+
+  fmcw::SystemConfig config;
+  auto oversized_options = writerOptions(config, directory / "oversized_writer");
+  oversized_options.raw_stream.record_length = 64U * 1024U * 1024U;
+  oversized_options.raw_stream.records_per_buffer = 3U;
+  oversized_options.preallocate_raw_parts = false;
+  fmcw::BinaryRawFrameWriter oversized_writer;
+  expect(!oversized_writer.open(oversized_options, error) &&
+             error.find("open options") != std::string::npos,
+         "raw v3 writer rejects a batch larger than its replay allocation contract");
+
+  std::error_code remove_error;
+  std::filesystem::remove_all(directory, remove_error);
 }
 
 void testNativeAtsSampleFormatRoundTrip() {
@@ -258,7 +425,7 @@ void testNativeAtsSampleFormatRoundTrip() {
   std::string error;
   expect(writer.open(options, error) && writer.writeBatch(batch, error) &&
              writer.finalize({14U, "native ATS12 round trip", true}, error),
-         "raw v2 writes native ATS12 codes without conversion");
+         "raw v3 writes native ATS12 codes without conversion");
 
   fmcw::RawReplayReader reader;
   fmcw::RawFrameBatch replayed;
@@ -270,7 +437,7 @@ void testNativeAtsSampleFormatRoundTrip() {
              replayed.contiguous_samples == native_codes &&
              replayed.records.front().metadata.sample_format ==
                  fmcw::SampleFormat::UnsignedOffsetBinary12LeftAligned,
-         "raw v2 replay restores the exact native ATS12 descriptor and payload");
+         "raw v3 replay restores the exact native ATS12 descriptor and payload");
   reader.close();
   std::error_code remove_error;
   std::filesystem::remove_all(directory, remove_error);
@@ -403,6 +570,7 @@ void testIndependentRawAndProcessedWorkers() {
 int main() {
   testDmaBlockStorageAndReplay();
   testNativeAtsSampleFormatRoundTrip();
+  testLegacyCoordinatePolicyAndCorruptAllocationGuard();
   testIndependentRawAndProcessedWorkers();
   if (failures == 0) {
     std::cout << "All Phase 7.4 DMA-block storage tests passed.\n";

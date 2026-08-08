@@ -21,6 +21,7 @@ class SignalProcessor {
   SignalProcessor& operator=(const SignalProcessor&) = delete;
 
   bool configure(const SystemConfig& config, std::uint64_t processing_config_revision, std::string& error);
+  bool initializeWorkerThread(std::string& error);
   bool updateRuntimeConfig(const ProcessingConfig& config, std::uint64_t processing_config_revision,
                            std::string& error);
   bool process(const RawFrame& raw, ProcessedFrame& processed, std::string& error);

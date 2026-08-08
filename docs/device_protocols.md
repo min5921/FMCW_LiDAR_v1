@@ -56,7 +56,7 @@ MCU waveform source는 `legacy_xym_file`과 `generated_raster` 두 mode를 지�
 
 활성 기본 파일은 `config/waveforms/mems_xym_100ksps.txt`이며 10,388 points와 12개의 B-trigger rising edge를 가진다. Upload 전에 marker rising edge 수와 UI의 `B-scans / frame`을 비교하며 다르면 전송하지 않는다. `generated_raster` mode만 `A-scans/B-scan * B-scans/frame` 크기로 파형을 만들고 각 B-scan 첫 point에 marker를 켠다. 두 mode 모두 firmware 최대 15,000 points와 TIM6 100 kHz playback rate를 따른다. 실제 B-scan rate는 Alazar DMA buffer 완료 timestamp에서 측정한다.
 
-Host는 원본 M rising edge와 offset 적용 후 출력 M rising edge를 별도로 보관한다. 원본 edge는 A-scan을 X/Y command에 결합하는 논리 line anchor이고, 출력 edge는 실제 PA9 timing이다. 따라서 GUI offset으로 PA9를 보정해도 point-cloud 좌표가 함께 이동하지 않는다. 각 DMA line은 원본 edge부터 `floor(record_index * waveform_rate / laser_sweep_rate)` sample의 X/Y를 사용하며 보간하지 않는다. fast axis와 증가/감소 방향은 line의 실제 command 변화량에서 판정하고, legacy vector waveform에 odd/even 반전을 추가하지 않는다.
+Host는 원본 M rising edge와 offset 적용 후 출력 M rising edge를 별도로 보관한다. 원본 edge는 waveform provenance이고, 실제 PA9로 출력되어 digitizer가 관측하는 emitted edge가 acquired line과 좌표의 anchor다. 각 DMA line은 emitted edge부터 `floor(record_index * waveform_rate / laser_sweep_rate)` sample의 X/Y를 사용하며 보간하지 않는다. 실제 command 변화량은 fast axis 판정에만 사용한다. line 증가/감소 방향은 자동 판정하지 않고 GUI/YAML의 `scan.bidirectional`을 따른다. OFF이면 모든 line을 acquisition order로 두고, ON이면 짝수 line은 정방향, 홀수 line은 B-scan `x_index`에서 한 번만 역배치한다. A-scan 내부 sample과 FFT 입력은 반전하지 않으며 azimuth/elevation은 정렬된 `x_index`/`y_index`와 configured angle range로 계산한다. 원본 X/Y command는 provenance로 유지한다.
 
 Timer/output contract:
 

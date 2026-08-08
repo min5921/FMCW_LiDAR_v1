@@ -84,6 +84,7 @@ class MainWindow final : public QMainWindow {
   void updateStopStageDisplay();
   void applyProfile();
   void loadProfile();
+  void loadReplaySetup(const QString& raw_path);
   void saveProfile();
   void updateStatus(RuntimeStatus status);
   void appendLog(QString level, QString source, QString message);
@@ -160,6 +161,7 @@ class MainWindow final : public QMainWindow {
   QLineEdit* replay_file_ = nullptr;
   QToolButton* replay_browse_ = nullptr;
   QCheckBox* replay_loop_ = nullptr;
+  QString loaded_replay_setup_path_;
   QLabel* board_model_ = nullptr;
   QString board_profile_id_;
   QString alazar_detection_detail_;

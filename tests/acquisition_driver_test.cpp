@@ -16,13 +16,16 @@
 #include "drivers/simulator/fake_mcu.h"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <condition_variable>
 #include <cmath>
 #include <cstdint>
 #include <deque>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
+#include <iterator>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -384,10 +387,10 @@ void testMcuProtocol() {
          "positive B-trigger offset delays every marker without changing the edge count");
 
   const std::filesystem::path source_root = FMCW_TEST_SOURCE_DIR;
+  const auto legacy_path = source_root / "config" / "waveforms" / "mems_xym_100ksps.txt";
   fmcw::McuWaveformInfo legacy_info;
   const auto legacy_waveform = fmcw::McuProtocol::loadLegacyXymWaveform(
-      (source_root / "config" / "waveforms" / "mems_xym_100ksps.txt").string(),
-      legacy_info, waveform_error);
+      legacy_path.string(), legacy_info, waveform_error);
   expect(waveform_error.empty() && legacy_waveform.size() == 10388U,
          "active legacy X/Y/M waveform parses all 10388 source points");
   expect(legacy_info.source_sample_rate_hz == 100000.0 &&
@@ -399,10 +402,48 @@ void testMcuProtocol() {
              legacy_waveform.front().c == legacy_waveform.front().d,
          "zero X/Y input maps to balanced differential DAC pairs");
 
+  std::ifstream legacy_input(legacy_path, std::ios::binary);
+  const std::string legacy_contents{std::istreambuf_iterator<char>(legacy_input),
+                                    std::istreambuf_iterator<char>()};
+  raster.mcu.waveform_source = fmcw::McuWaveformSource::LegacyXymFile;
+  raster.mcu.waveform_file = legacy_path.string();
+  raster.scan.trigger_shift_samples = -80;
+  fmcw::McuWaveformInfo path_configured_info;
+  fmcw::McuWaveformInfo snapshot_configured_info;
+  const auto path_configured = fmcw::McuProtocol::buildConfiguredWaveform(
+      raster, path_configured_info, waveform_error);
+  const auto snapshot_configured = fmcw::McuProtocol::buildConfiguredLegacyXymWaveform(
+      raster, legacy_contents, snapshot_configured_info, waveform_error);
+  const bool snapshot_matches_path = path_configured.size() == snapshot_configured.size() &&
+      std::equal(path_configured.begin(), path_configured.end(), snapshot_configured.begin(),
+                 [](const fmcw::McuWaveformFrame& left,
+                    const fmcw::McuWaveformFrame& right) {
+                   return left.a == right.a && left.b == right.b &&
+                       left.c == right.c && left.d == right.d &&
+                       left.trigger == right.trigger &&
+                       left.command_x == right.command_x &&
+                       left.command_y == right.command_y &&
+                       left.logical_trigger == right.logical_trigger;
+                 });
+  expect(legacy_input && !legacy_contents.empty() && waveform_error.empty() &&
+             snapshot_matches_path &&
+             snapshot_configured_info.trigger_shift_samples ==
+                 path_configured_info.trigger_shift_samples,
+         "an in-memory legacy waveform snapshot produces the exact uploaded command sequence");
+
   const auto active_snapshot = fmcw::McuProtocol::snapshotForUploadedWaveform(
       legacy_waveform, legacy_info.output_sample_rate_hz);
   fmcw::SystemConfig active_config;
   active_config.laser.sweep_rate_hz = 200000.0;
+  active_config.digitizer.records_per_buffer = 998U;
+  active_config.scan.x_pixel_count = 998U;
+  active_config.scan.y_line_count = 12U;
+  active_config.digitizer.b_scan_count = 12U;
+  active_config.scan.x_start_deg = -9.0;
+  active_config.scan.x_end_deg = 9.0;
+  active_config.scan.y_start_deg = -4.0;
+  active_config.scan.y_end_deg = 4.0;
+  active_config.scan.bidirectional = true;
   fmcw::TrajectoryLineContext first_line;
   fmcw::TrajectoryLineContext second_line;
   expect(active_snapshot &&
@@ -412,7 +453,24 @@ void testMcuProtocol() {
              first_line.direction == fmcw::ScanDirection::Increasing &&
              second_line.fast_axis == fmcw::ScanAxis::Y &&
              second_line.direction == fmcw::ScanDirection::Decreasing,
-         "active vector asset derives its alternating Y fast-axis order from X/Y commands");
+         "operator-enabled vector parity alternates the active Y-fast asset line order");
+  fmcw::ScanPosition active_first;
+  fmcw::ScanPosition active_last;
+  expect(active_snapshot &&
+             fmcw::mapTrajectoryRecord(active_config, *active_snapshot, first_line, 0U, active_first) &&
+             fmcw::mapTrajectoryRecord(active_config, *active_snapshot, first_line, 997U, active_last) &&
+             active_first.x_index == 0U && active_last.x_index == 997U &&
+             std::abs(active_first.x_angle_deg + 9.0F) < 1.0e-5F &&
+             std::abs(active_last.x_angle_deg - 9.0F) < 1.0e-5F &&
+             std::abs(active_first.y_angle_deg + 4.0F) < 1.0e-5F,
+         "active Y-fast waveform uses the aligned B-scan column for azimuth and line for elevation");
+  expect(active_snapshot &&
+             active_first.trajectory_sample_index < active_snapshot->frames.size() &&
+             active_first.x_command ==
+                 active_snapshot->frames[active_first.trajectory_sample_index].command_x &&
+             active_first.y_command ==
+                 active_snapshot->frames[active_first.trajectory_sample_index].command_y,
+         "active vector mapping preserves source X/Y commands as trajectory provenance");
 }
 
 void testVectorTrajectoryMapping() {
@@ -441,6 +499,7 @@ void testVectorTrajectoryMapping() {
   config.scan.x_end_deg = 9.0;
   config.scan.y_start_deg = -4.0;
   config.scan.y_end_deg = 4.0;
+  config.scan.bidirectional = true;
   fmcw::TrajectoryLineContext even_line;
   fmcw::TrajectoryLineContext odd_line;
   expect(waveform && fmcw::prepareTrajectoryLine(config, *waveform, 0U, 8U, even_line) &&
@@ -450,7 +509,7 @@ void testVectorTrajectoryMapping() {
              even_line.direction == fmcw::ScanDirection::Increasing &&
              odd_line.fast_axis == fmcw::ScanAxis::X &&
              odd_line.direction == fmcw::ScanDirection::Decreasing,
-         "vector trajectory derives bidirectional scan direction from command order");
+         "operator-enabled vector trajectory reverses odd B-scan lines by parity");
 
   fmcw::ScanPosition even_first;
   fmcw::ScanPosition even_second;
@@ -473,8 +532,93 @@ void testVectorTrajectoryMapping() {
              odd_first.x_index == 7U && odd_last.x_index == 0U,
          "decreasing vector line keeps acquisition order while assigning spatial B-scan columns once");
   expect(even_first.source == fmcw::ScanCoordinateSource::McuTrajectory &&
-             even_first.angle_calibrated && even_first.y_index == 0U && odd_first.y_index == 1U,
+              even_first.angle_calibrated && even_first.y_index == 0U && odd_first.y_index == 1U,
          "mapped records retain command provenance and complete-frame line indices");
+
+  auto bypass_config = config;
+  bypass_config.scan.bidirectional = false;
+  fmcw::TrajectoryLineContext bypass_odd_line;
+  fmcw::ScanPosition bypass_odd_first;
+  fmcw::ScanPosition bypass_odd_last;
+  expect(fmcw::prepareTrajectoryLine(
+             bypass_config, *waveform, 1U, 8U, bypass_odd_line) &&
+             bypass_odd_line.direction == fmcw::ScanDirection::Increasing &&
+             fmcw::mapTrajectoryRecord(
+                 bypass_config, *waveform, bypass_odd_line, 0U, bypass_odd_first) &&
+             fmcw::mapTrajectoryRecord(
+                 bypass_config, *waveform, bypass_odd_line, 7U, bypass_odd_last) &&
+             bypass_odd_first.x_index == 0U && bypass_odd_last.x_index == 7U,
+         "vector parity bypass keeps an odd line in acquisition order despite decreasing commands");
+
+  std::vector<fmcw::McuWaveformFrame> y_fast_frames;
+  const auto append_y_fast = [&y_fast_frames](float slow_x, float fast_y, bool marker) {
+    fmcw::McuWaveformFrame frame;
+    frame.command_x = slow_x;
+    frame.command_y = fast_y;
+    frame.trigger = marker;
+    frame.logical_trigger = marker;
+    y_fast_frames.push_back(frame);
+  };
+  append_y_fast(-1.0F, -1.0F, true);
+  append_y_fast(-1.0F, -0.2F, false);
+  append_y_fast(-1.0F, 0.4F, false);
+  append_y_fast(-1.0F, 1.0F, false);
+  append_y_fast(1.0F, 0.2F, true);
+  append_y_fast(1.0F, -1.0F, false);
+  append_y_fast(1.0F, -0.4F, false);
+  append_y_fast(1.0F, -0.8F, false);
+
+  const auto y_fast_waveform =
+      fmcw::McuProtocol::snapshotForUploadedWaveform(y_fast_frames, 100000.0);
+  fmcw::SystemConfig y_fast_config;
+  y_fast_config.laser.sweep_rate_hz = 100000.0;
+  y_fast_config.digitizer.records_per_buffer = 4U;
+  y_fast_config.scan.x_pixel_count = 4U;
+  y_fast_config.scan.y_line_count = 2U;
+  y_fast_config.digitizer.b_scan_count = 2U;
+  y_fast_config.scan.x_start_deg = -4.0;
+  y_fast_config.scan.x_end_deg = 4.0;
+  y_fast_config.scan.y_start_deg = -2.0;
+  y_fast_config.scan.y_end_deg = 2.0;
+  y_fast_config.scan.bidirectional = true;
+
+  fmcw::TrajectoryLineContext decreasing_y_line;
+  expect(y_fast_waveform &&
+             fmcw::prepareTrajectoryLine(
+                 y_fast_config, *y_fast_waveform, 1U, 4U, decreasing_y_line) &&
+             decreasing_y_line.fast_axis == fmcw::ScanAxis::Y &&
+             decreasing_y_line.direction == fmcw::ScanDirection::Decreasing,
+         "operator-enabled parity marks the odd Y-fast legacy line as decreasing");
+
+  std::vector<fmcw::ScanPosition> decreasing_positions(4U);
+  bool mapped_decreasing_line = y_fast_waveform != nullptr;
+  for (std::uint32_t record = 0; mapped_decreasing_line && record < 4U; ++record) {
+    mapped_decreasing_line = fmcw::mapTrajectoryRecord(
+        y_fast_config, *y_fast_waveform, decreasing_y_line, record,
+        decreasing_positions[record]);
+  }
+  expect(mapped_decreasing_line && decreasing_positions[0].x_index == 3U &&
+             decreasing_positions[1].x_index == 2U &&
+             decreasing_positions[2].x_index == 1U &&
+             decreasing_positions[3].x_index == 0U &&
+             std::abs(decreasing_positions[0].x_angle_deg - 4.0F) < 1.0e-5F &&
+             std::abs(decreasing_positions[3].x_angle_deg + 4.0F) < 1.0e-5F,
+         "decreasing Y-fast line assigns B-scan columns and azimuth in the same single reversal");
+
+  std::array<float, 4U> azimuth_by_column{};
+  bool source_commands_preserved = mapped_decreasing_line;
+  for (const auto& position : decreasing_positions) {
+    azimuth_by_column[position.x_index] = position.x_angle_deg;
+    const auto& source = y_fast_waveform->frames[position.trajectory_sample_index];
+    source_commands_preserved = source_commands_preserved &&
+        position.x_command == source.command_x && position.y_command == source.command_y;
+  }
+  expect(azimuth_by_column[0] < azimuth_by_column[1] &&
+             azimuth_by_column[1] < azimuth_by_column[2] &&
+             azimuth_by_column[2] < azimuth_by_column[3],
+         "point-cloud azimuth remains monotonic in displayed B-scan column order");
+  expect(source_commands_preserved,
+         "spatial angle alignment does not discard the original non-monotonic X/Y commands");
 }
 
 void testEdfaProtocol() {

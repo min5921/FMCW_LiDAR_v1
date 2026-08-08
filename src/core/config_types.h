@@ -205,7 +205,7 @@ struct UdpConfig {
   std::string target_ip = "192.168.0.10";
   std::uint16_t target_port = 9000;
   std::uint32_t packet_point_count = 256;
-  std::uint32_t packet_format_version = 1;
+  std::uint32_t packet_format_version = 2;
   std::uint32_t queue_capacity = 8;
   UdpBackpressurePolicy backpressure_policy = UdpBackpressurePolicy::LatestFrame;
 };

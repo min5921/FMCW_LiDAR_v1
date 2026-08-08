@@ -106,7 +106,7 @@ Status: done
 
 - Versioned `FMCW` UDP point packets carry raster frame ID, config revision, timestamp, segment indices, and little-endian XYZ/intensity/velocity arrays.
 - A bounded asynchronous sender assembles complete raster frames and applies `latest_frame`, `preserve_frames`, or `stop_sending` queue policy without network I/O in the acquisition or processing loop.
-- Live View includes a Qt/OpenGL-backed 3D point-cloud tab with color modes, rotate, pan, zoom, reset, point size, accumulation, freeze, and CSV export.
+- Live View includes a Qt/OpenGL-backed 3D point-cloud tab with color modes, rotate, pan, zoom, reset, point size, optional XYZ axes, freeze, and CSV export.
 - Scan-line snapshots publish at completed line boundaries. B-scan and point-cloud snapshots publish only for complete raster frames and remain unchanged while the next frame is assembled.
 - Storage / UDP exposes packet version, points per packet, sender queue, backpressure policy, send FPS, packet count, queue use, and dropped-frame telemetry.
 
@@ -215,8 +215,8 @@ ATS record-length and legacy XYZIV contract audit (2026-07-15):
 - ATS9371 record length follows ATS-SDK 25.1.0 section 7.2: minimum 256 samples and exact 128-sample resolution. The Qt control only commits supported values; 4992 is accepted and unsupported 5000 is rejected without remaining in the profile.
 - Peak search remains strict-threshold, integer-bin processing with no interpolation. Invalid UP or DOWN detection propagates `NaN` through distance, velocity, intensity, and XYZ.
 - Distance and velocity equations were checked algebraically against the legacy CUDA pipeline while retaining the configured sweep rate instead of the legacy hard-coded 200 kHz value.
-- Cartesian conversion restores the legacy contract: X is lateral, Y is forward range, and Z is vertical. Configured X/Y angle offsets are applied before conversion.
-- The B-scan stores forward depth from `point.y`; the 3D viewer, processed storage, and UDP packet all use the same finite `x, y, z, intensity, velocity` output contract.
+- Cartesian conversion uses the ROS/RViz right-handed contract: X is forward, Y is left, and Z is up. Configured azimuth/elevation offsets are applied before conversion.
+- The B-scan stores forward depth from `point.x`; the 3D viewer, processed storage, CSV, and UDP packet all use the same finite `x, y, z, intensity, velocity` output contract.
 - Windows MSVC Release and CTest 5/5 passed, including the explicit local CUDA/FFTW full-result parity test. The packaged EXE smoke test passed.
 - Packaged GUI verification confirmed 4992 acceptance, 5000 input rejection, live B-scan depth output, and a nonblank XYZ point cloud with intensity, velocity, and distance color modes.
 - Packaged EXE SHA-256: `EB67F68B958C12FF6EE465715224C11DAE1C24385CFE1341B4B2F75053352C06`.
@@ -534,25 +534,117 @@ EDFA control and serial-port selection hardening (2026-08-03):
 Vector waveform trajectory and stable spatial rendering (2026-08-04):
 
 - The uploaded X/Y/M vector is now the authoritative scan trajectory. Original
-  logical M edges anchor acquired lines while offset-adjusted emitted M edges
-  remain a separate PA9 timing contract, so trigger compensation cannot move
-  point coordinates.
+  logical M edges remain provenance while offset-adjusted emitted M edges anchor
+  both acquired lines and point coordinates. This matches the PA9 edge observed
+  by the digitizer after trigger timing compensation.
 - A 200 kHz A-scan maps to the held 100 kS/s command with no interpolation.
-  Fast axis and direction come from each line's actual X/Y delta. Decreasing
-  lines preserve acquisition commands and angles while B-scan columns reverse
-  exactly once; no additional odd/even reversal is applied to vector input.
+  The fast axis comes from each line's X/Y delta, but line direction is an
+  operator decision. With `scan.bidirectional` OFF every line keeps acquisition
+  order; with it ON, even lines remain forward and odd lines reverse exactly
+  once into the spatial B-scan `x_index`. Original X/Y commands, A-scan time
+  samples, FFT input order, and trajectory sample indices remain unchanged.
 - CPU/FFTW and CUDA/cuFFT share the same trajectory metadata and calibrated
-  Cartesian path. Point cloud and B-scan remain complete-frame publications.
+  Cartesian path. The current fixed frame is ROS/RViz `X forward, Y left, Z up`,
+  and B-scan forward depth is `point.x`. Point cloud and B-scan remain complete-frame publications.
   The 3D view keeps fixed spatial bounds between frames and refits only for a
   new session or the operator's Fit View action.
 - Processed storage is now `FMCWPRO2` and records trajectory provenance plus
-  source commands. CSV adds `scan_x_command` and `scan_y_command`; UDP v1 stays
-  binary-compatible XYZIV.
+  source commands. CSV adds `scan_x_command` and `scan_y_command`; UDP v2 keeps
+  the XYZIV wire layout and explicitly fixes ROS/RViz frame semantics, while
+  legacy-axis v1 is rejected.
+- Every new raw recording writes a reloadable `.setup.yaml`, declares its
+  coordinate frame in the JSON sidecar, and archives the active legacy X/Y/M
+  waveform. Selecting a raw part restores the saved ATS model and complete
+  measurement setup, with old JSON snapshot fallback and physical outputs,
+  UDP, and recursive recording disabled for replay safety.
+- Raw DMA storage is now v3. It embeds trajectory provenance and standard-frame
+  semantics; ambiguous v1/v2 recordings are rejected unless their sidecar
+  explicitly declares the standard frame. Replay checks exact header/payload
+  bounds and a 256 MiB allocation cap before resizing any sample vector.
 - Windows MSVC Release and CTest passed 9/9, including the active 10,388-point
-  vector asset, CPU/CUDA, storage v2, UDP, and real-time probe paths. The
+  vector asset, CPU/CUDA, storage v3, UDP, and real-time probe paths. The
   packaged EXE passed `--smoke-test`; SHA-256 is
-  `BCB88AF5C7DA16CA64FA3E27FE69285C8DD970F4E27C87EE6A856405367D5268`.
+  `8044310D4B60EDBA72920D7840C71FB2BA7C25EF957BDDCDC9BBA093DB38ADB3`.
+- The ROS Noetic workspace now uses the standard catkin top-level initializer.
+  `catkin_make -DCMAKE_BUILD_TYPE=Release run_tests` and
+  `catkin_test_results --verbose build/test_results` report 12 tests with zero
+  errors, failures, or skips. The six protocol cases include explicit UDP v2
+  header verification and legacy v1 rejection.
 - Jetson shell scripts passed `bash -n`. The regenerated source bundle has a
   verified 266-file manifest and excludes CubeIDE Debug/Release output and
   machine-specific indexer state. Physical command-to-angle calibration and
   PA9-to-Alazar timing remain hardware acceptance work.
+- This section supersedes earlier historical notes that described
+  `X lateral/Y forward/Z vertical` or used the original M edge as the active
+  coordinate anchor.
+
+P1 reliability and real-time follow-up (2026-08-07):
+
+- The CPU path now treats one 998-record DMA buffer as one exact 1,996-transform
+  FFTW batch. Cache-sized eight-transform lane plans execute directly against
+  the prepared input and final spectrum workspaces whenever alignment permits.
+  The selected A-scan spectrum, strict threshold/NaN behavior, distance,
+  velocity, and XYZIV contract are unchanged.
+- Processing start waits until the FFTW/OpenMP worker team is ready. On Windows,
+  the process uses `HIGH_PRIORITY_CLASS` only while the processing worker is
+  active and restores the original class on STOP. It does not use the Windows
+  realtime process class. This supersedes the earlier normal-process-priority
+  note in the historical 2026-07-17 entry.
+- The final 600-second FFTW strict run was `HARD_PASS`: 120,241 batches,
+  120,000,518 valid XYZIV records, queue high-water 1/32, no drops/rejections,
+  1.866 ms mean, 2.455 ms p99, 3.656 ms maximum, and zero deadline misses.
+- The final 600-second CUDA run retained full result accounting and no
+  drops/rejections, with 1.502 ms mean, 2.536 ms p99, and 2.791 ms maximum
+  compute time. It remained `HARD_FAIL` because three Windows simulator
+  completion-to-wakeup/ownership outliers produced a 7.148 ms end-to-end
+  maximum. The CUDA compute path meets 5 ms; the Windows simulator end-to-end
+  gate remains open without relaxing or filtering the criterion.
+- Legacy X/Y/M upload now parses a single in-memory source snapshot and archives
+  those exact successfully uploaded bytes with each raw session. The recording
+  path no longer rereads a potentially modified source file.
+- Point-cloud sensor axes and the Z=0 grid now use the same world-to-view
+  transform as XYZIV points. The displayed origin is the physical sensor origin,
+  not the point bounding-box center.
+- Windows MSVC Release and CTest passed 9/9. The refreshed package passed
+  `FMCW_LiDAR.exe --smoke-test`; SHA-256 is
+  `3C997B001E4676E5944B04C0C5050EF3E1D725622876B81E014768FA2FF6764F`.
+- The Jetson source bundle was regenerated with zero mismatches across its
+  266-file manifest. All Jetson Bash scripts passed syntax checks; the source
+  ZIP SHA-256 is
+  `DCED3B324E90FD938F84F576825C0F8C33BFB7E0B7B35BAB5C7CE0AD148C94EE`.
+
+P2 replay setup restoration hardening (2026-08-08):
+
+- Replay setup selection now uses a testable loader. A missing or corrupt
+  `.setup.yaml` falls back to the adjacent `.raw.json` `config_snapshot` and
+  records the reason as a Replay warning.
+- The UI remembers the normalized replay path. Losing focus on an unchanged
+  path no longer reloads the recorded setup or overwrites unapplied operator
+  edits.
+- An unsupported recorded digitizer profile is rejected explicitly instead of
+  silently substituting the first capability. Success logs identify the actual
+  validated board display name/profile ID and the metadata source used.
+- Windows MSVC Release and CTest passed 10/10, including the new replay setup
+  regression test. The refreshed package passed `--smoke-test`; SHA-256 is
+  `C495837A91C2EBCDFE68A2B259E26E233ACF7A9C408DB60E6E95F7DE8024F910`.
+- The refreshed Jetson source bundle contains 269 verified manifest entries
+  with zero mismatches. Its build, dependency-check, package, and run scripts
+  passed Bash syntax checks. The external handoff record carries the final ZIP
+  checksum so regenerating this bundled document cannot invalidate itself.
+
+Operator-controlled vector bidirectional mapping (2026-08-08):
+
+- The Scan / MCU `Bidirectional vector scan` checkbox is now editable for a
+  legacy X/Y/M waveform. OFF is a true bypass that maps every record directly
+  to the same `x_index`; ON keeps even B-scan lines forward and reverses odd
+  lines once.
+- X/Y command deltas identify only the fast axis. They no longer override the
+  operator's line-direction setting. Raw A-scan samples are never reversed:
+  segmentation, FFT, peak search, distance, and velocity run in acquisition
+  order, then XYZIV and complete-frame B-scan storage use the parity-adjusted
+  spatial index.
+- Regression coverage includes an odd vector line whose source commands are
+  decreasing: ON reverses its spatial indices and OFF preserves acquisition
+  order. Windows MSVC Release and CTest passed 10/10; the packaged smoke test
+  exited 0. Package EXE SHA-256 is
+  `A8271E09DC411F0F5978E9007D67B1A2C7586BA8C59F2E2C041A479C01898F92`.

@@ -8,9 +8,12 @@
 #include <cstring>
 #include <fstream>
 #include <iomanip>
+#include <iterator>
 #include <limits>
 #include <mutex>
+#include <new>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <type_traits>
 #include <utility>
@@ -21,11 +24,24 @@ namespace {
 
 constexpr std::array<char, 8> kRawV1Magic{{'F', 'M', 'C', 'W', 'R', 'A', 'W', '1'}};
 constexpr std::array<char, 8> kRawV2Magic{{'F', 'M', 'C', 'W', 'R', 'A', 'W', '2'}};
+constexpr std::array<char, 8> kRawV3Magic{{'F', 'M', 'C', 'W', 'R', 'A', 'W', '3'}};
 constexpr std::array<char, 8> kProcessedMagic{{'F', 'M', 'C', 'W', 'P', 'R', 'O', '2'}};
 constexpr std::uint32_t kRawRecordMagic = 0x314D5246U;
 constexpr std::uint32_t kRawBlockMagic = 0x32424D46U;
 constexpr std::uint32_t kProcessedRecordMagic = 0x31435250U;
 constexpr std::uint32_t kProcessedFormatVersion = 2U;
+constexpr std::uint64_t kMaximumReplayRecordSamples = 64U * 1024U * 1024U;
+constexpr std::uint64_t kMaximumReplayBatchSamples = 128U * 1024U * 1024U;
+constexpr std::uint64_t kMaximumReplayBatchPayloadBytes =
+    kMaximumReplayBatchSamples * sizeof(std::int16_t);
+constexpr std::uint32_t kMaximumReplayBatchRecords = 100000U;
+constexpr std::uint64_t kMaximumReplayHeaderBytes = 64U * 1024U * 1024U;
+constexpr const char* kStandardCoordinateFrame = "ros_x_forward_y_left_z_up";
+
+bool isRawBatchVersion(std::uint32_t version) {
+  return version == kLegacyRawFrameBatchFormatVersion ||
+      version == kRawFrameBatchFormatVersion;
+}
 
 std::uint64_t utcNowNs() {
   return static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -100,6 +116,59 @@ std::string jsonEscape(const std::string& value) {
   return escaped.str();
 }
 
+std::filesystem::path rawSidecarPath(const std::filesystem::path& raw_path) {
+  const auto filename = raw_path.filename().string();
+  const auto marker = filename.rfind(".raw.");
+  if (marker != std::string::npos) {
+    return raw_path.parent_path() / (filename.substr(0U, marker) + ".raw.json");
+  }
+  return raw_path.parent_path() / (raw_path.stem().string() + ".json");
+}
+
+bool readCoordinateFrame(const std::filesystem::path& sidecar_path,
+                         std::string& coordinate_frame, std::string& error) {
+  std::error_code size_error;
+  const auto sidecar_bytes = std::filesystem::file_size(sidecar_path, size_error);
+  if (size_error || sidecar_bytes == 0U || sidecar_bytes > 16U * 1024U * 1024U) {
+    error = "Legacy raw replay requires a readable metadata sidecar with coordinate_frame";
+    return false;
+  }
+  std::ifstream stream(sidecar_path, std::ios::binary);
+  if (!stream) {
+    error = "Legacy raw replay metadata sidecar could not be opened: " + sidecar_path.string();
+    return false;
+  }
+  const std::string document((std::istreambuf_iterator<char>(stream)),
+                             std::istreambuf_iterator<char>());
+  const auto key = document.find("\"coordinate_frame\"");
+  const auto colon = key == std::string::npos ? std::string::npos : document.find(':', key + 18U);
+  const auto quote = colon == std::string::npos ? std::string::npos : document.find('"', colon + 1U);
+  const auto end_quote = quote == std::string::npos ? std::string::npos : document.find('"', quote + 1U);
+  if (quote == std::string::npos || end_quote == std::string::npos) {
+    error = "Legacy raw replay metadata does not declare coordinate_frame";
+    return false;
+  }
+  coordinate_frame = document.substr(quote + 1U, end_quote - quote - 1U);
+  error.clear();
+  return true;
+}
+
+bool streamBytesFrom(std::istream& stream, std::streampos start,
+                     std::uint64_t& available_bytes) {
+  const auto current = stream.tellg();
+  if (current < 0 || start < 0) {
+    return false;
+  }
+  stream.seekg(0, std::ios::end);
+  const auto end = stream.tellg();
+  stream.seekg(current);
+  if (!stream || end < start) {
+    return false;
+  }
+  available_bytes = static_cast<std::uint64_t>(end - start);
+  return true;
+}
+
 bool writeSidecar(const std::filesystem::path& path, const WriterOpenOptions& open_options,
                   const WriterFinalizeOptions& finalize_options, const WriterStatus& status,
                   const std::vector<std::filesystem::path>& data_files, const char* stream_type,
@@ -127,6 +196,7 @@ bool writeSidecar(const std::filesystem::path& path, const WriterOpenOptions& op
          << ",\n"
          << "  \"completed\": " << (finalize_options.completed ? "true" : "false") << ",\n"
          << "  \"stop_reason\": \"" << jsonEscape(finalize_options.stop_reason) << "\",\n"
+         << "  \"coordinate_frame\": \"" << jsonEscape(open_options.session.coordinate_frame) << "\",\n"
          << "  \"blocks_written\": " << status.blocks_written << ",\n"
          << "  \"frames_written\": " << status.frames_written << ",\n"
          << "  \"bytes_written\": " << status.bytes_written << ",\n"
@@ -145,11 +215,32 @@ bool writeSidecar(const std::filesystem::path& path, const WriterOpenOptions& op
          << "    \"record_length\": " << open_options.raw_stream.record_length << ",\n"
          << "    \"records_per_buffer\": " << open_options.raw_stream.records_per_buffer << "\n"
          << "  },\n"
+         << "  \"setup_file\": \"" << jsonEscape(open_options.file_stem + ".setup.yaml") << "\",\n"
          << "  \"config_snapshot\": "
          << (open_options.session.config_snapshot_json.empty() ? "{}" : open_options.session.config_snapshot_json)
          << "\n} \n";
   if (!stream) {
     error = "Unable to write metadata sidecar: " + path.string();
+    return false;
+  }
+  error.clear();
+  return true;
+}
+
+bool writeSetupSnapshot(const std::filesystem::path& path, const std::string& yaml,
+                        std::string& error) {
+  if (yaml.empty()) {
+    error = "The recording setup snapshot is empty";
+    return false;
+  }
+  std::ofstream stream(path, std::ios::binary | std::ios::trunc);
+  if (!stream) {
+    error = "Unable to create setup snapshot: " + path.string();
+    return false;
+  }
+  stream << yaml;
+  if (!stream) {
+    error = "Unable to write setup snapshot: " + path.string();
     return false;
   }
   error.clear();
@@ -167,7 +258,7 @@ std::uint32_t rawFlags(const RawFrameMetadata& metadata) {
 }
 
 bool writeRawStreamHeader(std::ostream& stream, const RawStreamDescriptor& descriptor) {
-  const auto& magic = descriptor.format_version == kRawFrameFormatVersion ? kRawV1Magic : kRawV2Magic;
+  const auto& magic = descriptor.format_version == kRawFrameFormatVersion ? kRawV1Magic : kRawV3Magic;
   stream.write(magic.data(), static_cast<std::streamsize>(magic.size()));
   const auto channel = static_cast<std::uint32_t>(descriptor.channel);
   const auto sample_format = static_cast<std::uint32_t>(descriptor.sample_format);
@@ -185,13 +276,13 @@ bool readRawStreamHeader(std::istream& stream, RawStreamDescriptor& descriptor) 
   std::uint32_t channel = 0U;
   std::uint32_t sample_format = 0U;
   std::uint32_t byte_order = 0U;
-  if (!stream || (magic != kRawV1Magic && magic != kRawV2Magic) ||
+  if (!stream || (magic != kRawV1Magic && magic != kRawV2Magic && magic != kRawV3Magic) ||
       !readScalar(stream, descriptor.format_version) ||
       !readScalar(stream, channel) || !readScalar(stream, sample_format) || !readScalar(stream, byte_order) ||
       !readScalar(stream, descriptor.sample_rate_hz) || !readScalar(stream, descriptor.record_length)) {
     return false;
   }
-  if (descriptor.format_version == kRawFrameBatchFormatVersion &&
+  if (isRawBatchVersion(descriptor.format_version) &&
       !readScalar(stream, descriptor.records_per_buffer)) {
     return false;
   }
@@ -199,11 +290,19 @@ bool readRawStreamHeader(std::istream& stream, RawStreamDescriptor& descriptor) 
   descriptor.sample_format = static_cast<SampleFormat>(sample_format);
   descriptor.byte_order = static_cast<ByteOrder>(byte_order);
   const bool supported_version = descriptor.format_version == kRawFrameFormatVersion ||
-      descriptor.format_version == kRawFrameBatchFormatVersion;
+      isRawBatchVersion(descriptor.format_version);
+  const bool matching_magic =
+      (descriptor.format_version == kRawFrameFormatVersion && magic == kRawV1Magic) ||
+      (descriptor.format_version == kLegacyRawFrameBatchFormatVersion && magic == kRawV2Magic) ||
+      (descriptor.format_version == kRawFrameBatchFormatVersion && magic == kRawV3Magic);
   const bool supported_sample_format = descriptor.sample_format == SampleFormat::SignedInt16 ||
       descriptor.sample_format == SampleFormat::UnsignedOffsetBinary12LeftAligned;
-  return supported_version && supported_sample_format &&
-      descriptor.byte_order == ByteOrder::LittleEndian && descriptor.record_length > 0U;
+  return supported_version && matching_magic && supported_sample_format &&
+      descriptor.byte_order == ByteOrder::LittleEndian && descriptor.record_length > 0U &&
+      descriptor.record_length <= kMaximumReplayRecordSamples &&
+      (descriptor.format_version == kRawFrameFormatVersion ||
+       (descriptor.records_per_buffer > 0U &&
+        descriptor.records_per_buffer <= kMaximumReplayBatchRecords));
 }
 
 bool writeRawRecord(std::ostream& stream, const RawFrame& frame) {
@@ -238,7 +337,7 @@ bool writeRawBlock(std::ostream& stream, const RawFrameBatch& batch,
                    std::vector<std::int16_t>& payload_workspace,
                    std::uint64_t& bytes_written, std::string& error) {
   if (batch.records.empty() || batch.records.size() > std::numeric_limits<std::uint32_t>::max()) {
-    error = "Raw DMA block has no records or exceeds the v2 record limit";
+    error = "Raw DMA block has no records or exceeds the v3 record limit";
     return false;
   }
   const auto record_count = static_cast<std::uint32_t>(batch.records.size());
@@ -267,7 +366,7 @@ bool writeRawBlock(std::ostream& stream, const RawFrameBatch& batch,
 
   const auto& common = batch.records.front().metadata;
   header.clear();
-  header.reserve(128U + static_cast<std::size_t>(record_count) * 80U);
+  header.reserve(128U + static_cast<std::size_t>(record_count) * 96U);
   appendScalar(header, kRawBlockMagic);
   appendScalar(header, kRawFrameBatchFormatVersion);
   const auto header_size_offset = header.size();
@@ -321,10 +420,17 @@ bool writeRawBlock(std::ostream& stream, const RawFrameBatch& batch,
     appendScalar(header, metadata.scan_position.x_angle_deg);
     appendScalar(header, metadata.scan_position.y_angle_deg);
     appendScalar(header, metadata.optical_state.revision);
+    appendScalar(header, metadata.scan_position.trajectory_sample_index);
+    appendScalar(header, metadata.scan_position.x_command);
+    appendScalar(header, metadata.scan_position.y_command);
+    appendScalar(header, static_cast<std::uint8_t>(metadata.scan_position.fast_axis));
+    appendScalar(header, static_cast<std::uint8_t>(metadata.scan_position.fast_axis_direction));
+    appendScalar(header, static_cast<std::uint8_t>(metadata.scan_position.source));
+    appendScalar(header, static_cast<std::uint8_t>(metadata.scan_position.angle_calibrated ? 1U : 0U));
   }
 
   if (header.size() > std::numeric_limits<std::uint32_t>::max()) {
-    error = "Raw DMA block metadata exceeds the v2 header limit";
+    error = "Raw DMA block metadata exceeds the v3 header limit";
     return false;
   }
   const auto header_bytes = static_cast<std::uint32_t>(header.size());
@@ -427,7 +533,7 @@ struct BinaryRawFrameWriter::Impl {
       create.close();
       const auto block_bytes = static_cast<std::uint64_t>(options.raw_stream.record_length) *
           options.raw_stream.records_per_buffer * sizeof(std::int16_t) + 128U +
-          static_cast<std::uint64_t>(options.raw_stream.records_per_buffer) * 80U;
+          static_cast<std::uint64_t>(options.raw_stream.records_per_buffer) * 96U;
       const auto preallocation_bytes = std::max(split_bytes, block_bytes + 64U);
       std::error_code resize_error;
       std::filesystem::resize_file(path, preallocation_bytes, resize_error);
@@ -473,6 +579,14 @@ BinaryRawFrameWriter::~BinaryRawFrameWriter() = default;
 
 bool BinaryRawFrameWriter::open(const WriterOpenOptions& options, std::string& error) {
   std::lock_guard<std::mutex> lock(impl_->mutex);
+  const bool batch_dimensions_valid =
+      options.raw_stream.record_length > 0U &&
+      options.raw_stream.records_per_buffer > 0U &&
+      options.raw_stream.record_length <= kMaximumReplayRecordSamples &&
+      options.raw_stream.records_per_buffer <= kMaximumReplayBatchRecords &&
+      (options.raw_stream.format_version != kRawFrameBatchFormatVersion ||
+       options.raw_stream.record_length <=
+           kMaximumReplayBatchSamples / options.raw_stream.records_per_buffer);
   if (!littleEndianHost()) {
     error = "Raw binary writer supports little-endian hosts only";
     return false;
@@ -481,7 +595,8 @@ bool BinaryRawFrameWriter::open(const WriterOpenOptions& options, std::string& e
       options.raw_stream.record_length == 0U || options.raw_stream.records_per_buffer == 0U ||
       !(options.raw_stream.sample_rate_hz > 0.0) ||
       (options.raw_stream.format_version != kRawFrameFormatVersion &&
-       options.raw_stream.format_version != kRawFrameBatchFormatVersion)) {
+       options.raw_stream.format_version != kRawFrameBatchFormatVersion) ||
+      !batch_dimensions_valid) {
     error = "Raw writer open options are invalid or the writer is already open";
     return false;
   }
@@ -491,6 +606,10 @@ bool BinaryRawFrameWriter::open(const WriterOpenOptions& options, std::string& e
     error = "Unable to create session directory: " + directory_error.message();
     return false;
   }
+  if (!writeSetupSnapshot(options.session_directory / (options.file_stem + ".setup.yaml"),
+                          options.session.config_snapshot_yaml, error)) {
+    return false;
+  }
   const auto free_space = std::filesystem::space(options.session_directory, directory_error);
   if (directory_error) {
     error = "Unable to query raw storage free space: " + directory_error.message();
@@ -498,7 +617,7 @@ bool BinaryRawFrameWriter::open(const WriterOpenOptions& options, std::string& e
   }
   const auto estimated_block_bytes = static_cast<std::uint64_t>(options.raw_stream.record_length) *
       options.raw_stream.records_per_buffer * sizeof(std::int16_t) + 128U +
-      static_cast<std::uint64_t>(options.raw_stream.records_per_buffer) * 80U;
+      static_cast<std::uint64_t>(options.raw_stream.records_per_buffer) * 96U;
   const auto split_bytes = static_cast<std::uint64_t>(
       std::max(options.split_file_size_gb, 1.0e-6) * 1.0e9);
   const auto preallocation_bytes = options.preallocate_raw_parts
@@ -581,15 +700,16 @@ bool BinaryRawFrameWriter::writeBatch(const RawFrameBatch& batch, std::string& e
   std::lock_guard<std::mutex> lock(impl_->mutex);
   if (!impl_->status.open || !impl_->status.recording ||
       impl_->options.raw_stream.format_version != kRawFrameBatchFormatVersion ||
-      batch.records.empty() || batch.metadata.record_length != impl_->options.raw_stream.record_length ||
+      batch.records.size() != impl_->options.raw_stream.records_per_buffer ||
+      batch.metadata.record_length != impl_->options.raw_stream.record_length ||
       batch.records.front().metadata.channel != impl_->options.raw_stream.channel ||
       batch.records.front().metadata.sample_format != impl_->options.raw_stream.sample_format ||
       batch.records.front().metadata.sample_rate_hz != impl_->options.raw_stream.sample_rate_hz) {
-    error = "Raw DMA block does not match the open v2 stream descriptor";
+    error = "Raw DMA block does not match the open v3 stream descriptor";
     return false;
   }
   const auto estimated_block_bytes = static_cast<std::uint64_t>(batch.metadata.record_length) *
-      batch.records.size() * sizeof(std::int16_t) + 128U + batch.records.size() * 80U;
+      batch.records.size() * sizeof(std::int16_t) + 128U + batch.records.size() * 96U;
   if (impl_->status.blocks_written > 0U &&
       impl_->current_part_bytes + estimated_block_bytes > impl_->split_bytes) {
     if (!impl_->closePart(error)) {
@@ -701,6 +821,10 @@ bool BinaryProcessedFrameWriter::open(const WriterOpenOptions& options, std::str
   std::filesystem::create_directories(options.session_directory, directory_error);
   if (directory_error) {
     error = "Unable to create session directory: " + directory_error.message();
+    return false;
+  }
+  if (!writeSetupSnapshot(options.session_directory / (options.file_stem + ".setup.yaml"),
+                          options.session.config_snapshot_yaml, error)) {
     return false;
   }
   impl_->options = options;
@@ -860,6 +984,21 @@ bool RawReplayReader::open(const std::filesystem::path& path, std::string& error
     error = "Raw replay file header is invalid: " + path.string();
     return false;
   }
+  if (impl_->descriptor.format_version != kRawFrameBatchFormatVersion) {
+    std::string coordinate_frame;
+    std::string metadata_error;
+    const auto sidecar = rawSidecarPath(path);
+    if (!readCoordinateFrame(sidecar, coordinate_frame, metadata_error) ||
+        coordinate_frame != kStandardCoordinateFrame) {
+      close();
+      error = metadata_error.empty()
+          ? "Legacy raw coordinate frame '" + coordinate_frame +
+                "' is incompatible. Convert the recording to " +
+                kStandardCoordinateFrame + " before replay."
+          : metadata_error + ". Convert the recording explicitly before replay.";
+      return false;
+    }
+  }
   const auto path_text = path.string();
   const auto marker = path_text.rfind(".raw.");
   if (marker != std::string::npos && marker + 9U < path_text.size() &&
@@ -882,7 +1021,7 @@ ReplayReadResult RawReplayReader::readNext(RawFrame& frame, std::string& error) 
     error = "Raw replay reader is not open";
     return ReplayReadResult::Error;
   }
-  if (impl_->descriptor.format_version == kRawFrameBatchFormatVersion) {
+  if (isRawBatchVersion(impl_->descriptor.format_version)) {
     if (impl_->cached_record_index >= impl_->cached_batch.records.size()) {
       impl_->cached_batch = {};
       impl_->cached_record_index = 0U;
@@ -908,11 +1047,13 @@ ReplayReadResult RawReplayReader::readNext(RawFrame& frame, std::string& error) 
         impl_->stream.open(next_path, std::ios::binary);
         RawStreamDescriptor next_descriptor;
         if (!impl_->stream || !readRawStreamHeader(impl_->stream, next_descriptor) ||
+            next_descriptor.format_version != impl_->descriptor.format_version ||
             next_descriptor.channel != impl_->descriptor.channel ||
             next_descriptor.sample_format != impl_->descriptor.sample_format ||
             next_descriptor.byte_order != impl_->descriptor.byte_order ||
             next_descriptor.sample_rate_hz != impl_->descriptor.sample_rate_hz ||
-            next_descriptor.record_length != impl_->descriptor.record_length) {
+            next_descriptor.record_length != impl_->descriptor.record_length ||
+            next_descriptor.records_per_buffer != impl_->descriptor.records_per_buffer) {
           error = "Next raw replay part has an incompatible stream header";
           return ReplayReadResult::Error;
         }
@@ -951,11 +1092,14 @@ ReplayReadResult RawReplayReader::readNext(RawFrame& frame, std::string& error) 
       !readScalar(impl_->stream, metadata.down_segment.start_sample) ||
       !readScalar(impl_->stream, metadata.down_segment.end_sample_exclusive) ||
       !readScalar(impl_->stream, sample_count) || sample_count != metadata.record_length ||
+      metadata.record_length != impl_->descriptor.record_length ||
+      metadata.sample_rate_hz != impl_->descriptor.sample_rate_hz ||
+      channel != static_cast<std::uint32_t>(impl_->descriptor.channel) ||
       (sample_format != static_cast<std::uint32_t>(SampleFormat::SignedInt16) &&
        sample_format != static_cast<std::uint32_t>(SampleFormat::UnsignedOffsetBinary12LeftAligned)) ||
       static_cast<SampleFormat>(sample_format) != impl_->descriptor.sample_format ||
       byte_order != static_cast<std::uint32_t>(ByteOrder::LittleEndian) ||
-      sample_count > 100000000U) {
+      sample_count > kMaximumReplayRecordSamples) {
     error = "Raw replay record header is corrupt";
     return ReplayReadResult::Error;
   }
@@ -968,9 +1112,24 @@ ReplayReadResult RawReplayReader::readNext(RawFrame& frame, std::string& error) 
   metadata.optical_state.laser_enabled = (flags & (1U << 2U)) != 0U;
   metadata.optical_state.edfa_used = (flags & (1U << 3U)) != 0U;
   metadata.optical_state.edfa_output_enabled = (flags & (1U << 4U)) != 0U;
-  frame.samples.resize(sample_count);
+  const auto payload_bytes = static_cast<std::uint64_t>(sample_count) * sizeof(std::int16_t);
+  std::uint64_t remaining_bytes = 0U;
+  if (!streamBytesFrom(impl_->stream, impl_->stream.tellg(), remaining_bytes) ||
+      payload_bytes > remaining_bytes) {
+    error = "Raw replay sample payload is truncated or exceeds the file boundary";
+    return ReplayReadResult::Error;
+  }
+  try {
+    frame.samples.resize(sample_count);
+  } catch (const std::bad_alloc&) {
+    error = "Raw replay sample allocation failed within the configured safety limit";
+    return ReplayReadResult::Error;
+  } catch (const std::length_error&) {
+    error = "Raw replay sample count exceeds the host container limit";
+    return ReplayReadResult::Error;
+  }
   impl_->stream.read(reinterpret_cast<char*>(frame.samples.data()),
-                     static_cast<std::streamsize>(sample_count * sizeof(std::int16_t)));
+                     static_cast<std::streamsize>(payload_bytes));
   if (!impl_->stream) {
     error = "Raw replay sample payload is truncated";
     return ReplayReadResult::Error;
@@ -987,7 +1146,7 @@ ReplayReadResult RawReplayReader::readNextBatch(RawFrameBatch& batch, std::strin
     error = "Raw replay reader is not open";
     return ReplayReadResult::Error;
   }
-  if (impl_->descriptor.format_version != kRawFrameBatchFormatVersion) {
+  if (!isRawBatchVersion(impl_->descriptor.format_version)) {
     error = "Raw v1 replay does not contain DMA block records";
     return ReplayReadResult::Error;
   }
@@ -1045,27 +1204,64 @@ ReplayReadResult RawReplayReader::readNextBatch(RawFrameBatch& batch, std::strin
       !readScalar(impl_->stream, up_segment.end_sample_exclusive) ||
       !readScalar(impl_->stream, down_segment.start_sample) ||
       !readScalar(impl_->stream, down_segment.end_sample_exclusive) ||
-      block_version != kRawFrameBatchFormatVersion || record_count == 0U ||
-      record_count > 1000000U || record_length == 0U || record_length > 100000000U ||
+      !isRawBatchVersion(block_version) || block_version != impl_->descriptor.format_version ||
+      record_count == 0U || record_count > kMaximumReplayBatchRecords ||
+      record_count != impl_->descriptor.records_per_buffer || record_length == 0U ||
+      record_length > kMaximumReplayRecordSamples ||
+      record_length != impl_->descriptor.record_length ||
       (sample_format != static_cast<std::uint32_t>(SampleFormat::SignedInt16) &&
        sample_format != static_cast<std::uint32_t>(SampleFormat::UnsignedOffsetBinary12LeftAligned)) ||
       static_cast<SampleFormat>(sample_format) != impl_->descriptor.sample_format ||
-      byte_order != static_cast<std::uint32_t>(ByteOrder::LittleEndian)) {
-    error = "Raw v2 DMA block header is corrupt";
+      byte_order != static_cast<std::uint32_t>(ByteOrder::LittleEndian) ||
+      channel != static_cast<std::uint32_t>(impl_->descriptor.channel) ||
+      sample_rate_hz != impl_->descriptor.sample_rate_hz) {
+    error = "Raw DMA block header is corrupt";
+    return ReplayReadResult::Error;
+  }
+  if (record_length > kMaximumReplayBatchSamples / record_count) {
+    error = "Raw DMA block sample count exceeds the replay allocation limit";
     return ReplayReadResult::Error;
   }
   const auto expected_samples = static_cast<std::uint64_t>(record_count) * record_length;
-  if (expected_samples > std::numeric_limits<std::size_t>::max() ||
-      payload_bytes != expected_samples * sizeof(std::int16_t)) {
-    error = "Raw v2 DMA payload size is invalid";
+  if (expected_samples > kMaximumReplayBatchSamples ||
+      expected_samples > std::numeric_limits<std::size_t>::max() ||
+      payload_bytes != expected_samples * sizeof(std::int16_t) ||
+      payload_bytes > kMaximumReplayBatchPayloadBytes) {
+    error = "Raw DMA payload size is invalid";
+    return ReplayReadResult::Error;
+  }
+
+  const auto fixed_header_bytes = static_cast<std::uint64_t>(impl_->stream.tellg() - block_start);
+  const auto record_metadata_bytes =
+      block_version == kLegacyRawFrameBatchFormatVersion ? 80U : 96U;
+  const auto expected_header_bytes = fixed_header_bytes +
+      static_cast<std::uint64_t>(record_count) * record_metadata_bytes;
+  std::uint64_t available_block_bytes = 0U;
+  if (header_bytes != expected_header_bytes || header_bytes > kMaximumReplayHeaderBytes ||
+      !streamBytesFrom(impl_->stream, block_start, available_block_bytes) ||
+      header_bytes > available_block_bytes ||
+      payload_bytes > available_block_bytes - header_bytes) {
+    error = "Raw DMA block header or payload exceeds the file boundary";
     return ReplayReadResult::Error;
   }
 
   block.format_version = block_version;
   block.record_count = record_count;
   block.record_length = record_length;
-  batch.contiguous_samples.resize(static_cast<std::size_t>(expected_samples));
-  batch.records.resize(record_count);
+  try {
+    batch.contiguous_samples.resize(static_cast<std::size_t>(expected_samples));
+    batch.records.resize(record_count);
+  } catch (const std::bad_alloc&) {
+    batch.contiguous_samples.clear();
+    batch.records.clear();
+    error = "Raw DMA block allocation failed within the configured safety limit";
+    return ReplayReadResult::Error;
+  } catch (const std::length_error&) {
+    batch.contiguous_samples.clear();
+    batch.records.clear();
+    error = "Raw DMA block dimensions exceed the host container limit";
+    return ReplayReadResult::Error;
+  }
   for (std::uint32_t record_index = 0; record_index < record_count; ++record_index) {
     auto& frame = batch.records[record_index];
     auto& metadata = frame.metadata;
@@ -1083,8 +1279,36 @@ ReplayReadResult RawReplayReader::readNextBatch(RawFrameBatch& batch, std::strin
         !readScalar(impl_->stream, metadata.scan_position.x_angle_deg) ||
         !readScalar(impl_->stream, metadata.scan_position.y_angle_deg) ||
         !readScalar(impl_->stream, metadata.optical_state.revision)) {
-      error = "Raw v2 record metadata table is truncated";
+      error = "Raw DMA record metadata table is truncated";
       return ReplayReadResult::Error;
+    }
+    if (block_version == kRawFrameBatchFormatVersion) {
+      std::uint8_t fast_axis = 0U;
+      std::uint8_t fast_axis_direction = 0U;
+      std::uint8_t coordinate_source = 0U;
+      std::uint8_t angle_calibrated = 0U;
+      if (!readScalar(impl_->stream, metadata.scan_position.trajectory_sample_index) ||
+          !readScalar(impl_->stream, metadata.scan_position.x_command) ||
+          !readScalar(impl_->stream, metadata.scan_position.y_command) ||
+          !readScalar(impl_->stream, fast_axis) ||
+          !readScalar(impl_->stream, fast_axis_direction) ||
+          !readScalar(impl_->stream, coordinate_source) ||
+          !readScalar(impl_->stream, angle_calibrated) ||
+          fast_axis > static_cast<std::uint8_t>(ScanAxis::Y) ||
+          fast_axis_direction > static_cast<std::uint8_t>(ScanDirection::Decreasing) ||
+          coordinate_source > static_cast<std::uint8_t>(ScanCoordinateSource::Replay) ||
+          angle_calibrated > 1U) {
+        error = "Raw v3 trajectory metadata is corrupt or truncated";
+        return ReplayReadResult::Error;
+      }
+      metadata.scan_position.fast_axis = static_cast<ScanAxis>(fast_axis);
+      metadata.scan_position.fast_axis_direction =
+          static_cast<ScanDirection>(fast_axis_direction);
+      metadata.scan_position.source = static_cast<ScanCoordinateSource>(coordinate_source);
+      metadata.scan_position.angle_calibrated = angle_calibrated != 0U;
+    } else {
+      metadata.scan_position.source = ScanCoordinateSource::Replay;
+      metadata.scan_position.angle_calibrated = (flags & (1U << 1U)) != 0U;
     }
     metadata.format_version = kRawFrameFormatVersion;
     metadata.frame_kind = static_cast<FrameKind>(frame_kind);
@@ -1111,13 +1335,13 @@ ReplayReadResult RawReplayReader::readNextBatch(RawFrameBatch& batch, std::strin
 
   const auto consumed_header_bytes = static_cast<std::uint64_t>(impl_->stream.tellg() - block_start);
   if (consumed_header_bytes != header_bytes) {
-    error = "Raw v2 DMA block header length is inconsistent";
+    error = "Raw DMA block header length is inconsistent";
     return ReplayReadResult::Error;
   }
   impl_->stream.read(reinterpret_cast<char*>(batch.contiguous_samples.data()),
                      static_cast<std::streamsize>(payload_bytes));
   if (!impl_->stream) {
-    error = "Raw v2 DMA payload is truncated";
+    error = "Raw DMA payload is truncated";
     return ReplayReadResult::Error;
   }
   error.clear();

@@ -1,5 +1,7 @@
 #include "apps/common/main_window.h"
 
+#include "apps/common/replay_setup_loader.h"
+
 #include "core/app_version.h"
 #include "core/config_profile.h"
 #include "core/config_validation.h"
@@ -797,7 +799,9 @@ QWidget* MainWindow::buildLivePage() {
   point_size->setValue(3);
   point_size->setFixedWidth(110);
   point_size->setToolTip("Point size");
-  auto* accumulate = new QCheckBox("Accumulate", point_cloud_page);
+  auto* show_axes = new QCheckBox("XYZ axes", point_cloud_page);
+  show_axes->setChecked(true);
+  show_axes->setToolTip("Show or hide the X, Y, and Z reference axes");
   auto* reset_camera = new QToolButton(point_cloud_page);
   reset_camera->setIcon(style()->standardIcon(QStyle::SP_BrowserReload));
   reset_camera->setToolTip("Fit the current cloud and reset the 3D camera");
@@ -809,7 +813,7 @@ QWidget* MainWindow::buildLivePage() {
   point_cloud_tools->addWidget(color_mode);
   point_cloud_tools->addWidget(new QLabel("Point size", point_cloud_page));
   point_cloud_tools->addWidget(point_size);
-  point_cloud_tools->addWidget(accumulate);
+  point_cloud_tools->addWidget(show_axes);
   point_cloud_tools->addWidget(reset_camera);
   point_cloud_tools->addWidget(save_cloud);
   point_cloud_tools->addStretch(1);
@@ -821,7 +825,7 @@ QWidget* MainWindow::buildLivePage() {
   live_tabs_->addTab(fft_plot_, "FFT");
   live_tabs_->addTab(peak_page, "Peak Analysis");
   live_tabs_->addTab(distance_plot_, "Distance / Velocity");
-  live_tabs_->addTab(bscan_plot_, "B-scan");
+  live_tabs_->addTab(bscan_plot_, "B-scan | X forward depth");
   live_tabs_->addTab(point_cloud_page, "3D Point Cloud");
   layout->addWidget(live_tabs_, 1);
   connect(auto_range, &QToolButton::toggled, content, [this](bool enabled) {
@@ -884,7 +888,7 @@ QWidget* MainWindow::buildLivePage() {
   connect(point_size, &QSlider::valueChanged, point_cloud_page, [this](int value) {
     point_cloud_plot_->setPointSize(static_cast<float>(value));
   });
-  connect(accumulate, &QCheckBox::toggled, point_cloud_plot_, &PointCloudWidget::setAccumulate);
+  connect(show_axes, &QCheckBox::toggled, point_cloud_plot_, &PointCloudWidget::setAxesVisible);
   connect(reset_camera, &QToolButton::clicked, point_cloud_plot_, &PointCloudWidget::resetCamera);
   connect(save_cloud, &QToolButton::clicked, this, [this] {
     const auto path = QFileDialog::getSaveFileName(this, "Save point cloud", "point_cloud.csv",
@@ -1123,10 +1127,14 @@ QWidget* MainWindow::buildScanMcuPage() {
   frame_time_ = new QLabel("Waiting for DMA | measured at runtime", geometry);
   frame_time_->setProperty("statusKind", "neutral");
   bidirectional_ = new QCheckBox("Bidirectional raster", geometry);
-  geometry_form->addRow("X at command min", x_start_);
-  geometry_form->addRow("X at command max", x_end_);
-  geometry_form->addRow("Y at command min", y_start_);
-  geometry_form->addRow("Y at command max", y_end_);
+  x_start_->setToolTip("Azimuth assigned to the minimum fast-axis command");
+  x_end_->setToolTip("Azimuth assigned to the maximum fast-axis command");
+  y_start_->setToolTip("Elevation assigned to the minimum slow-axis command");
+  y_end_->setToolTip("Elevation assigned to the maximum slow-axis command");
+  geometry_form->addRow("Azimuth at fast min", x_start_);
+  geometry_form->addRow("Azimuth at fast max", x_end_);
+  geometry_form->addRow("Elevation at slow min", y_start_);
+  geometry_form->addRow("Elevation at slow max", y_end_);
   geometry_form->addRow("A-scans / B-scan", a_scan_count_);
   geometry_form->addRow("B-scans / frame", y_lines_);
   geometry_form->addRow("Positions / frame", frame_point_count_);
@@ -1171,7 +1179,8 @@ QWidget* MainWindow::buildScanMcuPage() {
   mcu_trigger_shift_->setSuffix(" samples");
   mcu_trigger_shift_->setToolTip(
       "Fine adjustment applied only to the uploaded M/B-trigger markers. "
-      "Negative advances and positive delays the trigger; one MCU sample is 10 us.");
+      "Negative advances and positive delays the trigger; one MCU sample is 10 us. "
+      "The emitted marker remains the acquisition and coordinate line anchor.");
   mcu_point_rate_ = new QLabel("100 kHz | firmware TIM6", mcu);
   mcu_point_rate_->setProperty("statusKind", "neutral");
   mcu_frame_time_ = new QLabel("16.000 ms | 1600 points / frame", mcu);
@@ -1383,7 +1392,7 @@ QWidget* MainWindow::buildStorageUdpPage() {
   udp_points_ = new QSpinBox(udp);
   udp_points_->setRange(1, 3273);
   udp_version_ = new QComboBox(udp);
-  udp_version_->addItem("v1 | little endian", 1);
+  udp_version_->addItem("v2 | ROS XYZ | little endian", 2);
   udp_queue_ = new QSpinBox(udp);
   udp_queue_->setRange(1, 65536);
   udp_policy_ = new QComboBox(udp);
@@ -1720,7 +1729,13 @@ void MainWindow::connectUi() {
         this, "Select raw replay", replay_file_->text(),
         "FMCW raw recording (*.raw.*.bin *.bin)");
     if (!path.isEmpty()) {
-      replay_file_->setText(path);
+      loadReplaySetup(path);
+    }
+  });
+  connect(replay_file_, &QLineEdit::editingFinished, this, [this] {
+    const auto path = replay_file_->text().trimmed();
+    if (QFileInfo::exists(path) && replayPathChanged(path, loaded_replay_setup_path_)) {
+      loadReplaySetup(path);
     }
   });
   connect(mcu_waveform_source_, &QComboBox::currentIndexChanged, this, [this] {
@@ -2267,6 +2282,9 @@ void MainWindow::loadConfigToControls(const SystemConfig& config, bool mark_pend
       static_cast<int>(loaded.runtime.acquisition_source));
   acquisition_source_->setCurrentIndex(source_index >= 0 ? source_index : 0);
   replay_file_->setText(QString::fromStdString(loaded.runtime.replay_file));
+  loaded_replay_setup_path_ = loaded.runtime.acquisition_source == AcquisitionSource::Replay
+      ? normalizedReplayPath(replay_file_->text())
+      : QString{};
   replay_loop_->setChecked(loaded.runtime.replay_loop);
   board_profile_id_ = QString::fromStdString(loaded.digitizer.board_profile);
   if (findDigitizerBoardCapabilities(board_profile_id_.toStdString()) == nullptr &&
@@ -2458,16 +2476,17 @@ void MainWindow::updateMcuWaveformControls() {
   const bool editable = !runtime_status_.running && !mcu_uploading_;
   mcu_waveform_file_->setEnabled(file_mode && editable);
   mcu_waveform_browse_->setEnabled(file_mode && editable);
-  bidirectional_->setText(file_mode ? "Direction encoded in X/Y" : "Bidirectional raster");
-  bidirectional_->setEnabled(!file_mode && editable);
+  bidirectional_->setText(file_mode ? "Bidirectional vector scan" : "Bidirectional raster");
+  bidirectional_->setEnabled(editable);
   bidirectional_->setToolTip(file_mode
-      ? "The uploaded X/Y order defines increasing and decreasing scan lines."
+      ? "When enabled, odd B-scan lines are placed in reverse X order. "
+        "When disabled, every line keeps acquisition order."
       : "Reverse the generated fast-axis command on alternating scan lines.");
   upload_waveform_button_->setEnabled(editable && runtime_status_.connected &&
                                       mcu_enabled_->isChecked() && !restart_dirty_);
   mcu_waveform_file_->setToolTip(file_mode
       ? "Header: sps <rate>. Remaining rows: normalized X Y and marker M."
-      : "Generated raster uses A-scans per B-scan and B-scans per frame.");
+      : "Generated raster contains one command point per A-scan across all B-scans.");
 }
 
 void MainWindow::updateMcuUploadProgress(McuUploadProgress progress) {
@@ -2801,6 +2820,60 @@ void MainWindow::loadProfile() {
   loaded_config.profile.name = QFileInfo(path).completeBaseName().toStdString();
   loadConfigToControls(loaded_config, true);
   appendLog("INFO", "Configuration", QString("Loaded profile %1").arg(QFileInfo(path).fileName()));
+}
+
+void MainWindow::loadReplaySetup(const QString& raw_path) {
+  const auto absolute_raw_path = QFileInfo(raw_path).absoluteFilePath();
+  if (!replayPathChanged(absolute_raw_path, loaded_replay_setup_path_)) {
+    return;
+  }
+
+  const auto setup = loadRecordedSetup(absolute_raw_path);
+  if (!setup.ok()) {
+    const QSignalBlocker source_blocker(acquisition_source_);
+    acquisition_source_->setCurrentIndex(
+        acquisition_source_->findData(static_cast<int>(AcquisitionSource::Replay)));
+    replay_file_->setText(absolute_raw_path);
+    loaded_replay_setup_path_ = normalizedReplayPath(absolute_raw_path);
+    updateRuntimeSourceControls();
+    markRestartDirty();
+    const auto warning_detail = setup.warnings.isEmpty()
+        ? QString{}
+        : setup.warnings.join(QStringLiteral("\n")) + QStringLiteral("\n");
+    QMessageBox::warning(this, "Replay setup not found",
+                         warning_detail + setup.error +
+                             "\nThe current setup will be used and must match the RAW stream.");
+    return;
+  }
+
+  auto recorded = setup.config;
+  recorded.runtime.acquisition_source = AcquisitionSource::Replay;
+  recorded.runtime.replay_file = absolute_raw_path.toStdString();
+  recorded.runtime.replay_loop = false;
+  recorded.mcu.enabled = false;
+  recorded.edfa.mode = EdfaMode::None;
+  recorded.edfa.required_before_start = false;
+  recorded.storage.raw_enabled = false;
+  recorded.storage.processed_enabled = false;
+  recorded.udp.enabled = false;
+  loadConfigToControls(recorded, true);
+  for (const auto& warning : setup.warnings) {
+    appendLog("WARNING", "Replay", warning);
+  }
+  const auto* capabilities = findDigitizerBoardCapabilities(recorded.digitizer.board_profile);
+  const auto board_name = capabilities == nullptr
+      ? QString::fromStdString(recorded.digitizer.board_profile)
+      : QStringLiteral("%1 [%2]")
+            .arg(QString::fromStdString(capabilities->display_name),
+                 QString::fromStdString(capabilities->profile_id));
+  appendLog("INFO", "Replay",
+            QString("Restored recorded setup from %1 | board %2 | hardware outputs disabled")
+                .arg(QFileInfo(setup.setup_source).fileName(), board_name));
+  statusBar()->showMessage(
+      setup.used_json_fallback
+          ? "Recorded setup restored from JSON fallback; review the Replay warnings before applying."
+          : "Recorded setup restored. Review it, then Apply Setup to replay.",
+      8000);
 }
 
 void MainWindow::saveProfile() {

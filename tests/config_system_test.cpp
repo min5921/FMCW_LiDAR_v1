@@ -389,7 +389,7 @@ void testSchemaAndBoardCapabilityValidation() {
   oversized_udp_packet.udp.enabled = true;
   oversized_udp_packet.udp.packet_point_count = 3274;
   expect(fmcw::ConfigValidator::validate(oversized_udp_packet).hasErrors(),
-         "UDP v1 point count cannot exceed one maximum-size datagram");
+         "UDP v2 point count cannot exceed one maximum-size datagram");
 
   fmcw::SystemConfig controlled_edfa;
   controlled_edfa.edfa.mode = fmcw::EdfaMode::Controlled;
