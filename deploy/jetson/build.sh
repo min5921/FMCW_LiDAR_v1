@@ -15,6 +15,17 @@ fi
 # shellcheck disable=SC1090
 source "${env_file}"
 
+# JetPack installs nvcc under /usr/local/cuda/bin, which is not necessarily in
+# PATH for non-interactive SSH sessions.
+if ! command -v nvcc >/dev/null 2>&1; then
+  for cuda_bin in /usr/local/cuda/bin /usr/local/cuda-*/bin; do
+    if [[ -x "${cuda_bin}/nvcc" ]]; then
+      export PATH="${cuda_bin}:${PATH}"
+      break
+    fi
+  done
+fi
+
 is_on() {
   [[ "${1^^}" == "ON" || "${1}" == "1" || "${1^^}" == "TRUE" ]]
 }

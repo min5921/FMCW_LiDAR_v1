@@ -113,8 +113,23 @@ else
   fail "Qt 6.2+ development files were not found; install Qt or set FMCW_JETSON_QT_ROOT"
 fi
 
+cuda_compiler=""
 if command -v nvcc >/dev/null 2>&1; then
-  pass "CUDA compiler: $(command -v nvcc)"
+  cuda_compiler="$(command -v nvcc)"
+else
+  for candidate in \
+    /usr/local/cuda/bin/nvcc \
+    /usr/local/cuda-*/bin/nvcc
+  do
+    if [[ -x "${candidate}" ]]; then
+      cuda_compiler="${candidate}"
+      break
+    fi
+  done
+fi
+
+if [[ -n "${cuda_compiler}" ]]; then
+  pass "CUDA compiler: ${cuda_compiler}"
 else
   fail "nvcc is missing; install the JetPack CUDA toolkit"
 fi
@@ -158,7 +173,12 @@ if is_on "${FMCW_JETSON_WITH_ALAZAR:-ON}"; then
       fail "libATSApi.so was not found under ${alazar_root}"
   fi
   shopt -s nullglob
-  alazar_nodes=(/dev/ATS* /dev/ats*)
+  alazar_nodes=(
+    /dev/ATS*
+    /dev/ats*
+    /dev/AlazarTech/ATS*
+    /dev/AlazarTech/ats*
+  )
   shopt -u nullglob
   if (( ${#alazar_nodes[@]} > 0 )); then
     pass "Alazar device node: ${alazar_nodes[0]}"

@@ -117,7 +117,31 @@ $zipPath = "$destinationPath.zip"
 if (Test-Path -LiteralPath $zipPath) {
     Remove-Item -LiteralPath $zipPath -Force
 }
-Compress-Archive -LiteralPath $destinationPath -DestinationPath $zipPath -CompressionLevel Optimal
+
+# Compress-Archive records Windows directory attributes that Linux unzip can
+# interpret as mode 0664, leaving extracted directories without execute bits.
+# Store file entries only so Linux unzip creates traversable parent directories.
+Add-Type -AssemblyName System.IO.Compression
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+$archive = [System.IO.Compression.ZipFile]::Open(
+    $zipPath,
+    [System.IO.Compression.ZipArchiveMode]::Create
+)
+try {
+    Get-ChildItem -LiteralPath $destinationPath -Recurse -File |
+        Sort-Object FullName |
+        ForEach-Object {
+            $relative = $_.FullName.Substring($packageRoot.Length + 1).Replace("\", "/")
+            $null = [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile(
+                $archive,
+                $_.FullName,
+                $relative,
+                [System.IO.Compression.CompressionLevel]::Optimal
+            )
+        }
+} finally {
+    $archive.Dispose()
+}
 
 Write-Host "Jetson source folder: $destinationPath"
 Write-Host "Jetson source ZIP:    $zipPath"
