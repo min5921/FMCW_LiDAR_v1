@@ -1,5 +1,6 @@
 #pragma once
 
+#include "detection/detection_types.h"
 #include "processing/processing_snapshots.h"
 
 #include <QOpenGLFunctions>
@@ -23,6 +24,7 @@ class PointCloudWidget final : public QOpenGLWidget, protected QOpenGLFunctions 
   ~PointCloudWidget() override;
 
   void setSnapshot(std::shared_ptr<const PointCloudSnapshot> snapshot);
+  void setDetections(DetectionSnapshotPtr detections);
   void setColorMode(PointCloudColorMode mode);
   void setPointSize(float pixels);
   void setAxesVisible(bool visible);
@@ -51,6 +53,7 @@ class PointCloudWidget final : public QOpenGLWidget, protected QOpenGLFunctions 
   void fitSpatialBounds();
 
   std::shared_ptr<const PointCloudSnapshot> snapshot_;
+  DetectionSnapshotPtr detections_;
   std::vector<PointXYZI> current_points_;
   std::vector<Vertex> vertices_;
   QPoint last_mouse_position_;

@@ -33,6 +33,7 @@ set(FMCW_CORE_SOURCES
   core/realtime_thread.cpp
   core/scan_trajectory.cpp
   core/system_state.cpp
+  detection/centerpoint_input_builder.cpp
   drivers/alazar/alazar_digitizer.cpp
   drivers/alazar/alazar_sample_conversion.cpp
   drivers/edfa/edfa_protocol.cpp

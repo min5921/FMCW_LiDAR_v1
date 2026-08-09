@@ -7,6 +7,7 @@
 #include <QWheelEvent>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <iterator>
 #include <limits>
@@ -39,6 +40,20 @@ void colorMap(float value, float& red, float& green, float& blue) {
   }
 }
 
+QColor detectionColor(ObjectClass object_class) {
+  switch (object_class) {
+    case ObjectClass::Vehicle:
+      return QColor("#ffb347");
+    case ObjectClass::Pedestrian:
+      return QColor("#63d7ff");
+    case ObjectClass::Cyclist:
+      return QColor("#d77cff");
+    case ObjectClass::Unknown:
+      return QColor("#d7dde0");
+  }
+  return QColor("#d7dde0");
+}
+
 }  // namespace
 
 PointCloudWidget::PointCloudWidget(QWidget* parent) : QOpenGLWidget(parent) {
@@ -66,6 +81,14 @@ void PointCloudWidget::setSnapshot(std::shared_ptr<const PointCloudSnapshot> sna
   if (!spatial_bounds_valid_) {
     fitSpatialBounds();
   }
+  update();
+}
+
+void PointCloudWidget::setDetections(DetectionSnapshotPtr detections) {
+  if (detections == detections_) {
+    return;
+  }
+  detections_ = std::move(detections);
   update();
 }
 
@@ -189,12 +212,88 @@ void PointCloudWidget::paintGL() {
     painter.drawEllipse(screen, point_radius, point_radius);
   }
 
+  const bool detections_match_frame = snapshot_ != nullptr && detections_ != nullptr &&
+      detections_->scan_frame_index == snapshot_->scan_frame_index;
+  if (detections_match_frame) {
+    static constexpr std::array<std::array<int, 2>, 12> kEdges{{
+        {{0, 1}}, {{1, 2}}, {{2, 3}}, {{3, 0}},
+        {{4, 5}}, {{5, 6}}, {{6, 7}}, {{7, 4}},
+        {{0, 4}}, {{1, 5}}, {{2, 6}}, {{3, 7}},
+    }};
+    static constexpr std::array<std::array<float, 2>, 4> kFootprint{{
+        {{1.0F, 1.0F}}, {{1.0F, -1.0F}},
+        {{-1.0F, -1.0F}}, {{-1.0F, 1.0F}},
+    }};
+
+    painter.setBrush(Qt::NoBrush);
+    for (const auto& box : detections_->boxes) {
+      if (!std::isfinite(box.center_x_m) || !std::isfinite(box.center_y_m) ||
+          !std::isfinite(box.center_z_m) || !std::isfinite(box.length_x_m) ||
+          !std::isfinite(box.width_y_m) || !std::isfinite(box.height_z_m) ||
+          !std::isfinite(box.yaw_rad) || !std::isfinite(box.score) ||
+          box.length_x_m <= 0.0F || box.width_y_m <= 0.0F || box.height_z_m <= 0.0F) {
+        continue;
+      }
+
+      const auto cosine = std::cos(static_cast<double>(box.yaw_rad));
+      const auto sine = std::sin(static_cast<double>(box.yaw_rad));
+      const auto half_length = static_cast<double>(box.length_x_m) * 0.5;
+      const auto half_width = static_cast<double>(box.width_y_m) * 0.5;
+      const auto half_height = static_cast<double>(box.height_z_m) * 0.5;
+      std::array<QPointF, 8> screen_corners;
+      for (std::size_t layer = 0; layer < 2; ++layer) {
+        const auto z = static_cast<double>(box.center_z_m) +
+            (layer == 0 ? -half_height : half_height);
+        for (std::size_t corner = 0; corner < kFootprint.size(); ++corner) {
+          const auto local_x = static_cast<double>(kFootprint[corner][0]) * half_length;
+          const auto local_y = static_cast<double>(kFootprint[corner][1]) * half_width;
+          const auto world_x = static_cast<double>(box.center_x_m) +
+              local_x * cosine - local_y * sine;
+          const auto world_y = static_cast<double>(box.center_y_m) +
+              local_x * sine + local_y * cosine;
+          screen_corners[layer * kFootprint.size() + corner] =
+              projectWorld(world_x, world_y, z);
+        }
+      }
+
+      const auto color = detectionColor(box.object_class);
+      painter.setPen(QPen(color, 2.0));
+      for (const auto& edge : kEdges) {
+        painter.drawLine(screen_corners[static_cast<std::size_t>(edge[0])],
+                         screen_corners[static_cast<std::size_t>(edge[1])]);
+      }
+
+      auto label_anchor = screen_corners[4];
+      for (std::size_t index = 5; index < screen_corners.size(); ++index) {
+        if (screen_corners[index].y() < label_anchor.y()) {
+          label_anchor = screen_corners[index];
+        }
+      }
+      const auto label = QString("%1 %2")
+          .arg(QString::fromLatin1(toString(box.object_class)))
+          .arg(box.score, 0, 'f', 2);
+      const auto label_width = painter.fontMetrics().horizontalAdvance(label) + 10;
+      const QRectF label_background(label_anchor.x(), label_anchor.y() - 22.0,
+                                    label_width, 20.0);
+      painter.fillRect(label_background, QColor(5, 12, 15, 210));
+      painter.setPen(color);
+      painter.drawText(label_background.adjusted(5.0, 0.0, -5.0, 0.0),
+                       Qt::AlignLeft | Qt::AlignVCenter, label);
+      painter.setBrush(Qt::NoBrush);
+    }
+  }
+
   painter.setPen(QColor("#aebdc1"));
-  const auto frame_text = snapshot_
+  auto frame_text = snapshot_
       ? QString("Frame %1 complete | %2 points")
             .arg(snapshot_->scan_frame_index + 1U)
             .arg(current_points_.size())
       : QString("Waiting for complete raster frame");
+  if (detections_match_frame) {
+    frame_text += QString(" | %1 objects | %2 ms")
+        .arg(detections_->boxes.size())
+        .arg(detections_->timing.total_ms, 0, 'f', 1);
+  }
   painter.drawText(QRect(14, 12, width() - 28, 24), Qt::AlignLeft | Qt::AlignVCenter, frame_text);
   if (axes_visible_) {
     painter.setPen(QColor("#71858b"));
