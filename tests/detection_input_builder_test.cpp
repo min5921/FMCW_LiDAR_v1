@@ -1,7 +1,11 @@
 #include "detection/centerpoint_input_builder.h"
 #include "detection/detection_types.h"
+#include "detection/object_detector.h"
 
+#include <chrono>
 #include <cmath>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <string>
 
@@ -81,12 +85,43 @@ void testBoxClassNames() {
          "cyclist class name is stable");
 }
 
+void testDetectorConfigurationValidation() {
+  const auto unique = std::chrono::steady_clock::now().time_since_epoch().count();
+  const auto root = std::filesystem::temp_directory_path() /
+      ("fmcw_centerpoint_config_" + std::to_string(unique));
+  std::filesystem::create_directories(root / "04_pfn");
+  std::filesystem::create_directories(root / "06_rpn");
+  std::filesystem::create_directories(root / "07_head");
+  std::ofstream(root / "04_pfn" / "weights_metadata.json") << "{}\n";
+  std::ofstream(root / "06_rpn" / "rpn_weights_metadata.json") << "{}\n";
+  std::ofstream(root / "07_head" / "head_weights_metadata.json") << "{}\n";
+
+  fmcw::ObjectDetectorConfig config;
+  config.weights_root = root;
+  std::string error;
+  expect(fmcw::validateObjectDetectorConfig(config, error),
+         "complete CenterPoint weight layout is accepted: " + error);
+  config.maximum_detections = 501;
+  expect(!fmcw::validateObjectDetectorConfig(config, error),
+         "maximum detection count above the CUDA limit is rejected");
+
+  const auto compiled = fmcw::centerPointBackendCompiled();
+  const auto detector = fmcw::createCenterPointObjectDetector();
+  expect(compiled == (detector != nullptr),
+         "CenterPoint factory matches the compiled backend flag");
+
+  std::error_code cleanup_error;
+  std::filesystem::remove_all(root, cleanup_error);
+  expect(!cleanup_error, "temporary CenterPoint validation files are removed");
+}
+
 }  // namespace
 
 int main() {
   testInputContract();
   testVelocityFeatureCanBeEnabledLater();
   testBoxClassNames();
+  testDetectorConfigurationValidation();
   if (failures != 0) {
     std::cerr << failures << " detection input test(s) failed\n";
     return 1;

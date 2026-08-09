@@ -5,6 +5,7 @@
 
 #include <array>
 #include <filesystem>
+#include <memory>
 #include <string>
 
 namespace fmcw {
@@ -34,5 +35,10 @@ class ObjectDetector {
  protected:
   ObjectDetector() = default;
 };
+
+bool validateObjectDetectorConfig(const ObjectDetectorConfig& config,
+                                  std::string& error);
+bool centerPointBackendCompiled();
+std::unique_ptr<ObjectDetector> createCenterPointObjectDetector();
 
 }  // namespace fmcw

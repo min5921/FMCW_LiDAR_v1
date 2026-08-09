@@ -3,6 +3,21 @@
 This branch keeps object detection separate from the `main` acquisition branch while sharing
 committed `main` changes through normal Git merges.
 
+## Target device
+
+- NVIDIA Jetson AGX Orin
+- Ubuntu 22.04
+- CUDA architecture `87` (compute capability 8.7)
+- JetPack-provided CUDA, cuFFT, and cuDNN
+
+Record the exact JetPack/L4T, CUDA, and cuDNN versions on the device before the first build:
+
+```bash
+head -n 1 /etc/nv_tegra_release
+nvcc --version
+dpkg-query -W 'libcudnn*' 2>/dev/null
+```
+
 ## Current input contract
 
 - Coordinate system: `+X` forward, `+Y` left, `+Z` up, in meters.
@@ -61,6 +76,24 @@ Keep the runtime weights outside both Git worktrees so they are not duplicated o
 Copy this exported root to an equivalent external path on Jetson and pass that root directory
 through runtime configuration. The application must verify all three directories before enabling
 inference.
+
+## Enabling the Jetson backend
+
+The build consumes the model implementation from a separate, pinned `LiDAR_recon` checkout so
+the research model remains independently versioned. Copy or clone the repository on the Jetson,
+then edit `deploy/jetson/jetson.env`:
+
+```text
+FMCW_JETSON_CUDA_ARCHITECTURES=87
+FMCW_JETSON_WITH_CENTERPOINT=ON
+FMCW_JETSON_CENTERPOINT_SOURCE_DIR=/home/kopti/LiDAR_recon
+FMCW_JETSON_CENTERPOINT_WEIGHTS_ROOT=/home/kopti/CenterPoint_Waymo/weights/exported/pointpillars_full_novelocity_epoch12
+```
+
+`check_dependencies.sh` accepts either the `LiDAR_recon` root or its
+`20_active_count_nms_project` directory. It verifies all CUDA sources, cuDNN, and the three weight
+manifests before CMake starts. The normal build remains independent of CenterPoint while the
+option is `OFF`.
 
 ## Integration order
 

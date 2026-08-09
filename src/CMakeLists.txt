@@ -34,6 +34,7 @@ set(FMCW_CORE_SOURCES
   core/scan_trajectory.cpp
   core/system_state.cpp
   detection/centerpoint_input_builder.cpp
+  detection/object_detector.cpp
   drivers/alazar/alazar_digitizer.cpp
   drivers/alazar/alazar_sample_conversion.cpp
   drivers/edfa/edfa_protocol.cpp
@@ -66,12 +67,100 @@ else()
   list(APPEND FMCW_CORE_SOURCES processing/cuda/cuda_signal_pipeline_stub.cpp)
 endif()
 
+set(FMCW_HAS_CENTERPOINT OFF)
+if(FMCW_WITH_CENTERPOINT)
+  if(NOT FMCW_HAS_CUDA_FFT)
+    message(FATAL_ERROR
+      "CenterPoint requires CUDA, but the CUDA compiler or CUDAToolkit was not found.")
+  endif()
+  if(NOT FMCW_CENTERPOINT_SOURCE_DIR)
+    message(FATAL_ERROR
+      "FMCW_WITH_CENTERPOINT=ON requires FMCW_CENTERPOINT_SOURCE_DIR.")
+  endif()
+
+  set(_fmcw_centerpoint_root "${FMCW_CENTERPOINT_SOURCE_DIR}")
+  if(EXISTS
+      "${_fmcw_centerpoint_root}/20_active_count_nms_project/include/centerpoint/gpu_preprocess.hpp")
+    set(_fmcw_centerpoint_root
+        "${_fmcw_centerpoint_root}/20_active_count_nms_project")
+  endif()
+  if(NOT EXISTS
+      "${_fmcw_centerpoint_root}/include/centerpoint/gpu_preprocess.hpp")
+    message(FATAL_ERROR
+      "FMCW_CENTERPOINT_SOURCE_DIR does not contain the 20_active_count_nms_project runtime: "
+      "${FMCW_CENTERPOINT_SOURCE_DIR}")
+  endif()
+
+  find_path(FMCW_CUDNN_INCLUDE_DIR
+    NAMES cudnn.h
+    HINTS "${FMCW_CUDNN_ROOT}" "$ENV{CUDNN_ROOT}"
+    PATHS /usr/include /usr/local/include /usr/local/cuda/include
+    PATH_SUFFIXES include include/x64 aarch64-linux-gnu
+  )
+  find_library(FMCW_CUDNN_LIBRARY
+    NAMES cudnn cudnn9 cudnn8
+    HINTS "${FMCW_CUDNN_ROOT}" "$ENV{CUDNN_ROOT}"
+    PATHS /usr/lib /usr/local/lib /usr/local/cuda/lib64
+    PATH_SUFFIXES lib lib64 lib/x64 aarch64-linux-gnu
+  )
+  if(NOT FMCW_CUDNN_INCLUDE_DIR OR NOT FMCW_CUDNN_LIBRARY)
+    message(FATAL_ERROR
+      "CenterPoint requires cuDNN headers and library. Install the JetPack cuDNN development "
+      "package or set FMCW_CUDNN_ROOT.")
+  endif()
+
+  set(_fmcw_centerpoint_cuda_sources
+    "${_fmcw_centerpoint_root}/cuda/gpu_preprocess.cu"
+    "${_fmcw_centerpoint_root}/cuda/gpu_rpn.cu"
+    "${_fmcw_centerpoint_root}/cuda/gpu_center_head.cu"
+    "${_fmcw_centerpoint_root}/cuda/gpu_postprocess.cu"
+  )
+  list(APPEND FMCW_CORE_SOURCES
+    detection/centerpoint_detector.cpp
+    "${_fmcw_centerpoint_root}/src/pfn_weights.cpp"
+    "${_fmcw_centerpoint_root}/src/rpn_weights.cpp"
+    "${_fmcw_centerpoint_root}/src/head_weights.cpp"
+    ${_fmcw_centerpoint_cuda_sources}
+  )
+  set(FMCW_HAS_CENTERPOINT ON)
+else()
+  list(APPEND FMCW_CORE_SOURCES detection/centerpoint_detector_stub.cpp)
+endif()
+
 add_library(fmcw_core STATIC ${FMCW_CORE_SOURCES})
 target_include_directories(fmcw_core
   PUBLIC
     ${PROJECT_SOURCE_DIR}/src
 )
 target_compile_features(fmcw_core PUBLIC cxx_std_17)
+
+if(FMCW_HAS_CENTERPOINT)
+  target_include_directories(fmcw_core PRIVATE
+    "${_fmcw_centerpoint_root}/include"
+    "${FMCW_CUDNN_INCLUDE_DIR}"
+  )
+  target_link_libraries(fmcw_core PRIVATE "${FMCW_CUDNN_LIBRARY}")
+  target_compile_definitions(fmcw_core PRIVATE
+    CENTERPOINT_RPN_ALLOW_TF32=1
+    CENTERPOINT_HEAD_USE_FP16=1
+    CENTERPOINT_ACTIVE_COUNT_NMS=1
+  )
+  set_source_files_properties(${_fmcw_centerpoint_cuda_sources}
+    PROPERTIES COMPILE_OPTIONS
+      "--fmad=false;--pre-include=${CMAKE_CURRENT_SOURCE_DIR}/detection/centerpoint_cuda_compat.h")
+  set_target_properties(fmcw_core PROPERTIES
+    CUDA_SEPARABLE_COMPILATION ON
+    CUDA_RESOLVE_DEVICE_SYMBOLS ON
+  )
+  target_compile_definitions(fmcw_core PUBLIC FMCW_HAS_CENTERPOINT=1)
+  message(STATUS
+    "CenterPoint detector: enabled (${_fmcw_centerpoint_root}, cuDNN ${FMCW_CUDNN_LIBRARY})")
+else()
+  target_compile_definitions(fmcw_core PUBLIC FMCW_HAS_CENTERPOINT=0)
+  message(STATUS "CenterPoint detector: disabled")
+endif()
+set(FMCW_HAS_CENTERPOINT "${FMCW_HAS_CENTERPOINT}" CACHE INTERNAL
+    "Whether the CenterPoint detector backend is available" FORCE)
 
 find_package(OpenMP QUIET COMPONENTS CXX)
 if(OpenMP_CXX_FOUND)
