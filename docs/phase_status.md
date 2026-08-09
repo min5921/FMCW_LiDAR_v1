@@ -648,3 +648,27 @@ Operator-controlled vector bidirectional mapping (2026-08-08):
   order. Windows MSVC Release and CTest passed 10/10; the packaged smoke test
   exited 0. Package EXE SHA-256 is
   `A8271E09DC411F0F5978E9007D67B1A2C7586BA8C59F2E2C041A479C01898F92`.
+
+Three-point quadratic peak refinement (2026-08-09):
+
+- The operator-approved peak rule supersedes the historical integer-only
+  runtime contract recorded on 2026-07-15. FFTW and CUDA/cuFFT now apply the
+  same three-point quadratic vertex estimate to the dB values immediately
+  left and right of the discrete maximum.
+- The strict threshold remains attached to the discrete center bin before
+  refinement. A rejected peak remains `discrete_bin = -1` with floating-point
+  peak and measurement fields set to `NaN`.
+- `discrete_bin` preserves the selected integer maximum for diagnostics, while
+  fractional `peak_bin` drives distance and velocity. Search boundaries,
+  non-finite values, non-negative/flat curvature, or an offset outside
+  `[-0.5, 0.5]` fall back to the integer bin.
+- This is local sub-bin peak estimation, not temporal peak tracking and not an
+  increase in the optical range resolution. MCU command-coordinate sampling
+  remains unchanged and does not use interpolation.
+- Windows MSVC Release and CTest passed 10/10, including deterministic
+  threshold/boundary tests and a real CUDA-device comparison against FFTW. The
+  packaged EXE smoke test exited 0; SHA-256 is
+  `6024BF2EE66E294CE04C52EAFE66CD7978E21D9EC34E27FE0E34821620FBEE81`.
+- The refreshed Jetson source bundle contains the same CUDA refinement and 269
+  verified manifest entries with zero mismatches. Its four Bash scripts passed
+  syntax checks.

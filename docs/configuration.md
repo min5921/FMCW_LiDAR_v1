@@ -82,7 +82,7 @@ Laser / EDFA와 Scan / MCU의 `Serial port`는 Windows의 현재 COM 장치 또�
 
 전역 Basic/Advanced mode는 schema version 2부터 사용하지 않는다. 모든 설정 페이지는 항상 접근 가능하며, field policy의 `primary`는 페이지에 바로 표시하고 `detailed`는 같은 페이지의 `Details` 영역에 표시한다. 이 구분은 접근 권한이나 별도 운용 mode가 아니다.
 
-Processing group은 `peak_threshold_db`, `peak_search_start_bin`, `peak_search_end_bin`만 runtime peak 설정으로 저장한다. 각 A-scan은 이전 결과를 추적하지 않고 search range 안에서 threshold를 초과하는 최대 정수 bin을 독립적으로 검출한다. 현재 version은 peak interpolation을 사용하지 않으며, 초과 peak가 없으면 실수형 peak 및 측정 필드는 `NaN`이다.
+Processing group은 `peak_threshold_db`, `peak_search_start_bin`, `peak_search_end_bin`만 runtime peak 설정으로 저장한다. 각 A-scan은 이전 결과를 추적하지 않고 search range 안의 최대 정수 bin을 독립적으로 검출한다. Strict threshold는 이 center bin에 먼저 적용하며, 통과한 peak는 좌우 dB 값을 이용한 3-point quadratic refinement로 fractional `peak_bin`을 계산한다. Search boundary나 유효하지 않은 curvature에서는 정수 bin으로 fallback하고, threshold를 초과하지 못하면 실수형 peak 및 측정 필드는 `NaN`이다.
 
 실수 입력 FFT의 내부 R2C 결과는 Nyquist bin까지 보존한다. 단, 측정용 peak search와 Live FFT 표시는 `[0, FFT length / 2 - 1]`만 사용하므로 FFT length 2048에서는 inclusive 범위가 `0..1023`이고 bin 1024는 표시 및 검출에서 제외된다.
 

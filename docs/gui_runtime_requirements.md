@@ -163,7 +163,7 @@ Processing page의 필수 runtime 설정:
 
 - candidate는 threshold를 초과하며 global search range 안에 있어야 한다.
 - UP과 DOWN은 각 A-scan에서 독립적으로 최대 peak를 검출한다.
-- 현재 version은 peak interpolation이나 sub-bin estimation 없이 최대 정수 bin을 사용한다.
+- Strict threshold는 최대 정수 center bin에 먼저 적용하고, 통과한 peak는 좌우 dB 값을 이용한 3-point quadratic refinement로 fractional bin을 계산한다. 경계 또는 유효하지 않은 curvature에서는 정수 bin으로 fallback한다.
 - search end는 inclusive이며 Nyquist bin을 제외한다. FFT length 2048의 설정 및 Live FFT 표시 범위는 `0..1023`이다.
 - 이전 A-scan의 peak index를 추적, 유지, 재탐색하지 않는다.
 - threshold를 초과하는 candidate가 없으면 해당 chirp peak와 측정 결과를 invalid로 기록하고, 실수형 값은 `NaN`으로 표시·저장한다.

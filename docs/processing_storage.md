@@ -30,7 +30,7 @@ Backend:
 - `FftwBackend`: FFTW3 single-precision `fftwf` R2C
 - `CudaFftBackend`: CUDA runtime buffer와 cuFFT R2C
 
-FFTW와 CUDA/cuFFT의 차이는 연산을 수행하는 processor와 memory execution path뿐이다. ADC conversion, segmentation, DC removal, polarity, window, zero padding, one-sided dBFS scaling, threshold comparison, maximum-bin selection, distance/velocity, calibration, XYZ, validity 순서와 수식은 동일해야 한다. Backend별로 다른 window, scaling, peak rule, 보간, calibration을 사용하지 않는다. Full CUDA pipeline도 이 algorithm contract를 GPU kernel로 그대로 실행할 뿐 별도 신호처리 알고리즘을 정의하지 않는다.
+FFTW와 CUDA/cuFFT의 차이는 연산을 수행하는 processor와 memory execution path뿐이다. ADC conversion, segmentation, DC removal, polarity, window, zero padding, one-sided dBFS scaling, threshold comparison, maximum-bin selection, 3-point quadratic refinement, distance/velocity, calibration, XYZ, validity 순서와 수식은 동일해야 한다. Backend별로 다른 window, scaling, peak rule, refinement, calibration을 사용하지 않는다. Full CUDA pipeline도 이 algorithm contract를 GPU kernel로 그대로 실행할 뿐 별도 신호처리 알고리즘을 정의하지 않는다.
 
 Implementation ownership:
 
@@ -57,9 +57,18 @@ magnitude_db = 20 log10(max(2 |FFT[k]| / sum(window), 1e-10))
 
 ## 4. Peak Detection
 
-Peak candidate는 configured search range에서 threshold를 초과하는 최대 magnitude bin이다. 현재 version은 peak interpolation이나 sub-bin estimation을 수행하지 않는다. `peak_bin`은 선택된 `discrete_bin`을 float로 표현한 값이며 유효할 때 항상 정수값이다.
+Peak candidate는 configured search range에서 가장 큰 magnitude bin이다. Strict threshold는 quadratic refinement 전의 center-bin dB 값에 먼저 적용한다. Center가 threshold를 초과하고 search range 안에서 좌우 이웃을 모두 사용할 수 있으면 세 dB 값 `L`, `C`, `R`로 다음 3-point quadratic vertex를 계산한다.
 
-UP과 DOWN peak는 각 A-scan에서 독립적으로 검출한다. 이전 A-scan의 peak index를 추적하거나 유지하지 않는다. 한쪽이라도 threshold를 초과하는 peak가 없으면 해당 A-scan의 measurement validity는 false이며 실수형 peak, distance, velocity, intensity, XYZ는 `NaN`이다. 정수형 `discrete_bin`은 `-1`을 유지한다.
+```text
+curvature = L - 2*C + R
+offset    = 0.5 * (L - R) / curvature
+peak_bin  = discrete_bin + offset
+peak_db   = C - 0.25 * (L - R) * offset
+```
+
+`curvature < -1e-6`이고 `offset`이 `[-0.5, 0.5]`일 때만 refinement를 적용한다. 경계 bin, 평탄하거나 위로 볼록한 세 점, 비정상 수치에서는 `peak_bin = discrete_bin`, `peak_db = C`로 안전하게 fallback한다. `discrete_bin`은 실제 최대 FFT bin의 정수 진단값이며, `peak_bin`은 거리/속도 계산에 사용하는 fractional estimate다. 이 보정은 FFT bin 사이의 국소 최대 위치를 추정하지만 광학적 거리 분해능 자체를 높이는 것은 아니다.
+
+UP과 DOWN peak는 각 A-scan에서 독립적으로 검출한다. 이전 A-scan의 peak index를 추적하거나 유지하지 않는다. 한쪽이라도 center-bin threshold를 초과하지 못하면 해당 A-scan의 measurement validity는 false이며 실수형 peak, distance, velocity, intensity, XYZ는 `NaN`이다. 정수형 `discrete_bin`은 `-1`을 유지한다.
 
 ## 5. Distance And Velocity
 

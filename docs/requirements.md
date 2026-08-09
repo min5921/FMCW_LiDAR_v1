@@ -414,7 +414,7 @@ CPU FFT 요구사항:
 - processing queue 길이, 처리 지연, drop count를 실시간 표시한다.
 - peak detection threshold와 search range는 실행 중 변경 가능해야 한다.
 - 각 A-scan의 UP/DOWN peak는 이전 A-scan과 독립적으로 search range 안의 최대값을 검출한다.
-- 현재 version은 peak interpolation이나 sub-bin estimation을 사용하지 않고 threshold를 초과하는 최대 정수 FFT bin을 사용한다.
+- 최대 정수 FFT bin의 center dB가 strict threshold를 초과한 뒤, 좌우 dB 값을 이용한 3-point quadratic refinement로 fractional peak를 계산한다. 경계 또는 유효하지 않은 curvature에서는 정수 bin으로 fallback한다.
 - threshold를 초과하는 peak가 없으면 이전 값을 유지하지 않고 해당 결과를 invalid로 기록하며, 모든 실수형 peak 및 측정값을 `NaN`으로 전달한다.
 - 유효한 peak pair는 distance와 velocity calibration을 거친 뒤 일반적인 ROS/RViz right-handed LiDAR 좌표계인 `X forward, Y left, Z up`으로 변환하고 최종 point에 `x, y, z, intensity, velocity`를 모두 기록한다.
 - Cartesian 변환 전에 calibration profile의 `x_angle_offset_deg`, `y_angle_offset_deg`를 scanner angle에 더한다.

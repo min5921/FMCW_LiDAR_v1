@@ -14,7 +14,7 @@ Last reviewed: 2026-07-15
 6. `records_per_buffer`는 한 B-scan line의 A-scan 수이고, `scan.y_line_count`는 사용자가 설정하는 B-scans/frame 수다.
 7. Time Domain과 FFT는 선택한 A-scan만 표시하지만 peak, distance/velocity, B-scan, 3D, UDP, raw/processed storage는 모든 A-scan을 처리한다.
 8. CPU backend는 FFTW3f, GPU backend는 CUDA/cuFFT를 사용한다. 두 backend는 실행 주체만 다르며 preprocessing부터 validity까지 동일한 신호처리 순서, 수식, 설정, 입력과 출력 계약을 사용한다.
-9. 현재 version의 peak는 threshold를 초과하는 최대 정수 FFT bin이며 interpolation이나 sub-bin estimation을 사용하지 않는다.
+9. 현재 version은 최대 정수 FFT bin의 center dB에 strict threshold를 먼저 적용한 뒤, 좌우 dB 값으로 3-point quadratic refinement를 수행한다. `discrete_bin`은 정수 최대값을 유지하고 거리/속도는 fractional `peak_bin`을 사용하며, 경계 또는 유효하지 않은 curvature에서는 정수 bin으로 fallback한다.
 10. real-time queue overflow의 기본 정책은 acquisition `STOP`이다.
 11. EDFA는 `none`, `manual`, `controlled`를 지원하며 EDFA가 없어도 acquisition이 가능해야 한다.
 12. global START/STOP 하나가 processing, storage, digitizer, MCU, optional EDFA를 함께 제어한다.
@@ -226,8 +226,8 @@ Phase 7.3은 batch API 구현만으로 완료하지 않는다. 7.3A부터 7.3D�
 - legacy two-slot stream/event 구조를 새 full-period record 계약에 맞게 재구성한다.
 - pinned host memory와 persistent device workspace를 사용한다.
 - ADC conversion, DC removal, UP/DOWN extraction, polarity, window를 CUDA kernel로 처리한다.
-- cuFFT plan-many batch 1996, magnitude dBFS, independent maximum integer-bin peak search, distance/velocity/XYZ를 GPU에서 수행한다.
-- CUDA kernel은 FFTW reference와 동일한 preprocessing 순서, dBFS scaling, strict threshold, 무보간 peak, calibration, `NaN` 규칙을 사용한다.
+- cuFFT plan-many batch 1996, magnitude dBFS, independent maximum-bin search, 3-point quadratic refinement, distance/velocity/XYZ를 GPU에서 수행한다.
+- CUDA kernel은 FFTW reference와 동일한 preprocessing 순서, dBFS scaling, center-bin strict threshold, 3-point quadratic refinement와 fallback, calibration, `NaN` 규칙을 사용한다.
 - Persistent pinned staging and device workspaces remove steady-state allocation. Inter-batch H2D overlap moves to 7.3D/7.4 with the contiguous DMA-block ownership contract.
 - selected FFT 한 쌍과 998개 peak/point 결과만 host로 복사한다.
 

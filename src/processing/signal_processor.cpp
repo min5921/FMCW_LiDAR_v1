@@ -28,6 +28,7 @@ namespace {
 constexpr double kSpeedOfLightMps = 299792458.0;
 constexpr double kPi = 3.14159265358979323846;
 constexpr int kMaximumOpenMpBatchThreads = 16;
+constexpr float kMinimumPeakCurvatureDb = 1.0e-6F;
 
 #if FMCW_HAS_OPENMP
 int openMpBatchThreadCount(std::size_t work_item_count) {
@@ -116,6 +117,23 @@ float magnitudeDbValue(const std::complex<float>& value, float coherent_sum) {
   return 20.0F * std::log10(amplitude);
 }
 
+void refinePeakMeasurement(PeakMeasurement& result, float left_db,
+                           float center_db, float right_db) {
+  if (!std::isfinite(left_db) || !std::isfinite(center_db) || !std::isfinite(right_db)) {
+    return;
+  }
+  const float curvature = left_db - 2.0F * center_db + right_db;
+  if (!(curvature < -kMinimumPeakCurvatureDb)) {
+    return;
+  }
+  const float offset = 0.5F * (left_db - right_db) / curvature;
+  if (!std::isfinite(offset) || offset < -0.5F || offset > 0.5F) {
+    return;
+  }
+  result.peak_bin = static_cast<float>(result.discrete_bin) + offset;
+  result.magnitude_db = center_db - 0.25F * (left_db - right_db) * offset;
+}
+
 std::vector<float> magnitudeDb(const std::complex<float>* spectrum, std::size_t spectrum_size,
                                float coherent_sum) {
   std::vector<float> result(spectrum_size, -200.0F);
@@ -156,6 +174,12 @@ PeakMeasurement detectPeak(const std::complex<float>* spectrum, std::size_t spec
   result.discrete_bin = static_cast<std::int32_t>(best_index);
   result.peak_bin = static_cast<float>(best_index);
   result.magnitude_db = best_magnitude;
+  if (best_index > start_bin && best_index < bounded_end) {
+    refinePeakMeasurement(result,
+                          magnitudeDbValue(spectrum[best_index - 1U], coherent_sum),
+                          best_magnitude,
+                          magnitudeDbValue(spectrum[best_index + 1U], coherent_sum));
+  }
   result.state = PeakTrackState::Detected;
   result.valid = true;
   return result;
@@ -184,6 +208,10 @@ PeakMeasurement detectPeak(const std::vector<float>& magnitude, std::uint32_t st
   result.discrete_bin = static_cast<std::int32_t>(best_index);
   result.peak_bin = static_cast<float>(best_index);
   result.magnitude_db = *best;
+  if (best_index > start_bin && best_index < bounded_end) {
+    refinePeakMeasurement(result, magnitude[best_index - 1U], *best,
+                          magnitude[best_index + 1U]);
+  }
   result.state = PeakTrackState::Detected;
   result.valid = true;
   return result;

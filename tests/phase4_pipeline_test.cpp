@@ -146,10 +146,12 @@ void testSignalProcessingBackendParity(const fmcw::SystemConfig& base_config,
              fftw_result.down_peak.valid == cuda_result.down_peak.valid,
          "FFTW and CUDA produce identical measurement and peak validity");
   expect(fftw_result.up_peak.discrete_bin == cuda_result.up_peak.discrete_bin &&
-             fftw_result.down_peak.discrete_bin == cuda_result.down_peak.discrete_bin &&
-             fftw_result.up_peak.peak_bin == cuda_result.up_peak.peak_bin &&
-             fftw_result.down_peak.peak_bin == cuda_result.down_peak.peak_bin,
-         "FFTW and CUDA select the same non-interpolated peak bins");
+             fftw_result.down_peak.discrete_bin == cuda_result.down_peak.discrete_bin,
+         "FFTW and CUDA select the same discrete peak candidates");
+  expectNear(fftw_result.up_peak.peak_bin, cuda_result.up_peak.peak_bin, 1.0e-5,
+             "FFTW and CUDA UP sub-bin estimates agree");
+  expectNear(fftw_result.down_peak.peak_bin, cuda_result.down_peak.peak_bin, 1.0e-5,
+             "FFTW and CUDA DOWN sub-bin estimates agree");
   expectNear(cuda_result.up_peak.magnitude_db, fftw_result.up_peak.magnitude_db, 0.05,
              "FFTW and CUDA UP peak magnitude agrees");
   expectNear(cuda_result.down_peak.magnitude_db, fftw_result.down_peak.magnitude_db, 0.05,
@@ -196,6 +198,10 @@ void expectBatchParity(const fmcw::ProcessedFrame& batch,
          record_name + " preserves integer UP/DOWN peak bins");
   expect(!batch.processing_note.empty(), record_name + " records its batch processing backend");
   if (reference.measurement_valid) {
+    expectNear(batch.up_peak.peak_bin, reference.up_peak.peak_bin, 1.0e-3,
+               record_name + " preserves UP sub-bin peak");
+    expectNear(batch.down_peak.peak_bin, reference.down_peak.peak_bin, 1.0e-3,
+               record_name + " preserves DOWN sub-bin peak");
     expectNear(batch.up_peak.magnitude_db, reference.up_peak.magnitude_db, magnitude_tolerance,
                record_name + " preserves UP dBFS magnitude");
     expectNear(batch.down_peak.magnitude_db, reference.down_peak.magnitude_db, magnitude_tolerance,
@@ -472,6 +478,185 @@ class CountingBatchFftBackend final : public fmcw::IFftBackend {
   std::shared_ptr<CountingBatchFftState> state_;
 };
 
+class ParabolicPeakFftBackend final : public fmcw::IFftBackend {
+ public:
+  ParabolicPeakFftBackend(std::size_t up_bin, float up_offset,
+                          std::size_t down_bin, float down_offset)
+      : bins_{up_bin, down_bin}, offsets_{up_offset, down_offset} {}
+
+  std::string name() const override { return "Synthetic parabolic FFT backend"; }
+  fmcw::FftBackendKind kind() const override { return fmcw::FftBackendKind::Fftw; }
+
+  bool prepare(const fmcw::FftPlan& plan, std::string& error) override {
+    plan_ = plan;
+    error.clear();
+    return plan.length > 1U && plan.batch > 0U;
+  }
+
+  bool execute(const std::vector<float>& input,
+               std::vector<std::complex<float>>& output,
+               std::string& error) override {
+    if (input.size() != plan_.length * plan_.batch) {
+      error = "Synthetic parabolic input does not match its FFT plan";
+      return false;
+    }
+    const auto spectrum_length = plan_.length / 2U + 1U;
+    output.assign(spectrum_length * plan_.batch, {});
+    for (std::size_t transform = 0; transform < plan_.batch; ++transform) {
+      const auto segment = (execute_count_ + transform) % 2U;
+      const auto center = bins_[segment];
+      if (center == 0U || center + 1U >= spectrum_length) {
+        error = "Synthetic parabolic peak is outside the FFT spectrum";
+        return false;
+      }
+      for (int neighbor = -1; neighbor <= 1; ++neighbor) {
+        const auto bin = static_cast<std::size_t>(
+            static_cast<std::ptrdiff_t>(center) + neighbor);
+        const float distance = static_cast<float>(neighbor) - offsets_[segment];
+        const float magnitude_db = -20.0F - 8.0F * distance * distance;
+        output[transform * spectrum_length + bin] = {
+            std::pow(10.0F, magnitude_db / 20.0F), 0.0F};
+      }
+    }
+    execute_count_ += plan_.batch;
+    error.clear();
+    return true;
+  }
+
+ private:
+  fmcw::FftPlan plan_;
+  std::array<std::size_t, 2U> bins_{};
+  std::array<float, 2U> offsets_{};
+  std::size_t execute_count_ = 0U;
+};
+
+void testParabolicPeakRefinement(const fmcw::SystemConfig& base_config,
+                                 const fmcw::RawFrame& raw) {
+  auto config = base_config;
+  config.processing.peak_threshold_db = -100.0;
+  constexpr std::size_t up_bin = 100U;
+  constexpr std::size_t down_bin = 120U;
+  constexpr float up_offset = 0.25F;
+  constexpr float down_offset = -0.25F;
+  fmcw::SignalProcessor processor(std::make_unique<ParabolicPeakFftBackend>(
+      up_bin, up_offset, down_bin, down_offset));
+  std::string error;
+  expect(processor.configure(config, 20U, error),
+         "parabolic peak processor configures");
+
+  fmcw::ProcessedFrame refined;
+  expect(processor.process(raw, refined, error) && refined.measurement_valid,
+         "three-point parabolic peaks produce a valid measurement");
+  expect(refined.up_peak.discrete_bin == static_cast<std::int32_t>(up_bin) &&
+             refined.down_peak.discrete_bin == static_cast<std::int32_t>(down_bin),
+         "parabolic refinement preserves the discrete maximum bins");
+  expectNear(refined.up_peak.peak_bin, up_bin + up_offset, 1.0e-5,
+             "UP quadratic vertex recovers the fractional bin");
+  expectNear(refined.down_peak.peak_bin, down_bin + down_offset, 1.0e-5,
+             "DOWN quadratic vertex recovers the fractional bin");
+  expect(refined.up_peak.magnitude_db > refined.up_fft_magnitude_db[up_bin] &&
+             refined.down_peak.magnitude_db > refined.down_fft_magnitude_db[down_bin],
+         "reported peak magnitude is the fitted quadratic vertex");
+
+  auto threshold_config = config.processing;
+  threshold_config.peak_threshold_db = 0.5 *
+      (refined.up_fft_magnitude_db[up_bin] + refined.up_peak.magnitude_db);
+  expect(processor.updateRuntimeConfig(threshold_config, 21U, error),
+         "parabolic threshold test applies at a frame boundary");
+  fmcw::ProcessedFrame threshold_rejected;
+  expect(processor.process(raw, threshold_rejected, error) &&
+             !threshold_rejected.measurement_valid &&
+             !threshold_rejected.up_peak.valid && !threshold_rejected.down_peak.valid &&
+             std::isnan(threshold_rejected.up_peak.peak_bin) &&
+             std::isnan(threshold_rejected.down_peak.peak_bin),
+         "threshold is evaluated on the discrete maximum before vertex refinement");
+
+  auto edge_config = base_config;
+  edge_config.processing.peak_threshold_db = -100.0;
+  const auto edge_bin = static_cast<std::size_t>(edge_config.processing.peak_search_start_bin);
+  fmcw::SignalProcessor edge_processor(std::make_unique<ParabolicPeakFftBackend>(
+      edge_bin, 0.25F, edge_bin, -0.25F));
+  expect(edge_processor.configure(edge_config, 22U, error),
+         "search-boundary fallback processor configures");
+  fmcw::ProcessedFrame edge;
+  expect(edge_processor.process(raw, edge, error) && edge.measurement_valid &&
+             edge.up_peak.peak_bin == static_cast<float>(edge_bin) &&
+             edge.down_peak.peak_bin == static_cast<float>(edge_bin),
+         "a peak on the configured search boundary falls back to its discrete bin");
+}
+
+void testCudaFractionalPeakParity(const fmcw::SystemConfig& base_config) {
+  if (!fmcw::CudaFftBackend::available()) {
+    std::cout << "CUDA fractional peak parity skipped: no runtime CUDA device.\n";
+    return;
+  }
+  auto fftw_config = base_config;
+  fftw_config.processing.fft_backend = fmcw::FftBackendKind::Fftw;
+  auto cuda_config = base_config;
+  cuda_config.processing.fft_backend = fmcw::FftBackendKind::Cuda;
+  constexpr double up_bin = 37.25;
+  constexpr double down_bin = 43.75;
+  constexpr double pi = 3.14159265358979323846;
+
+  fmcw::RawFrame raw;
+  raw.samples.assign(base_config.digitizer.sample_point, 0);
+  raw.metadata.frame_id = 1U;
+  raw.metadata.frame_kind = fmcw::FrameKind::FullChirpPeriod;
+  raw.metadata.sample_format = fmcw::SampleFormat::SignedInt16;
+  raw.metadata.sample_rate_hz = base_config.digitizer.sample_rate_hz;
+  raw.metadata.record_length = base_config.digitizer.sample_point;
+  raw.metadata.record_index_in_buffer = 0U;
+  raw.metadata.records_in_buffer = 1U;
+  raw.metadata.up_segment = base_config.chirp_segmentation.up_segment;
+  raw.metadata.down_segment = base_config.chirp_segmentation.down_segment;
+  raw.metadata.scan_position.valid = true;
+  raw.metadata.scan_position.angle_calibrated = true;
+  const auto fill_tone = [&](fmcw::SegmentRange range, double bin) {
+    for (std::uint32_t index = 0; index < range.length(); ++index) {
+      const double phase = 2.0 * pi * bin * static_cast<double>(index) /
+          static_cast<double>(base_config.chirp_segmentation.segment_fft_length);
+      raw.samples[range.start_sample + index] = static_cast<std::int16_t>(
+          std::lround(12000.0 * std::sin(phase)));
+    }
+  };
+  fill_tone(raw.metadata.up_segment, up_bin);
+  fill_tone(raw.metadata.down_segment, down_bin);
+
+  fmcw::RawFrameBatch batch;
+  batch.records.push_back(raw);
+  batch.metadata.record_count = 1U;
+  batch.metadata.record_length = base_config.digitizer.sample_point;
+  fmcw::SignalProcessor fftw(std::make_unique<fmcw::FftwBackend>());
+  fmcw::SignalProcessor cuda(std::make_unique<fmcw::CudaFftBackend>());
+  std::string error;
+  expect(fftw.configure(fftw_config, 23U, error) &&
+             cuda.configure(cuda_config, 23U, error),
+         "FFTW and full CUDA fractional peak processors configure");
+  std::vector<fmcw::ProcessedFrame> fftw_results;
+  std::vector<fmcw::ProcessedFrame> cuda_results;
+  const bool processed = fftw.processBatch(batch, 0U, fftw_results, error) &&
+      cuda.processBatch(batch, 0U, cuda_results, error);
+  expect(processed && fftw_results.size() == 1U && cuda_results.size() == 1U,
+         "FFTW and full CUDA process the fractional-bin signal");
+  if (!processed || fftw_results.size() != 1U || cuda_results.size() != 1U) {
+    return;
+  }
+  const auto& fftw_result = fftw_results.front();
+  const auto& cuda_result = cuda_results.front();
+  expectNear(fftw_result.up_peak.peak_bin, up_bin, 0.05,
+             "FFTW estimates the synthetic UP fractional bin");
+  expectNear(fftw_result.down_peak.peak_bin, down_bin, 0.05,
+             "FFTW estimates the synthetic DOWN fractional bin");
+  expectNear(cuda_result.up_peak.peak_bin, fftw_result.up_peak.peak_bin, 1.0e-3,
+             "full CUDA UP quadratic estimate matches FFTW");
+  expectNear(cuda_result.down_peak.peak_bin, fftw_result.down_peak.peak_bin, 1.0e-3,
+             "full CUDA DOWN quadratic estimate matches FFTW");
+  expectNear(cuda_result.distance_m, fftw_result.distance_m, 1.0e-5,
+             "full CUDA fractional distance matches FFTW");
+  expectNear(cuda_result.velocity_mps, fftw_result.velocity_mps, 1.0e-5,
+             "full CUDA fractional velocity matches FFTW");
+}
+
 void testQualificationBatchExecutionCount() {
   auto config = fmcw::makeAts9371QualificationSimulatorConfig();
   auto state = std::make_shared<CountingBatchFftState>();
@@ -528,9 +713,11 @@ fmcw::ProcessedFrame testSignalProcessing(const fmcw::SystemConfig& config,
       config.chirp_segmentation.down_segment.length();
   expectNear(processed.up_peak.peak_bin, up_expected, 0.75, "up chirp peak is detected");
   expectNear(processed.down_peak.peak_bin, down_expected, 0.75, "down chirp peak is detected");
-  expect(processed.up_peak.peak_bin == static_cast<float>(processed.up_peak.discrete_bin) &&
-             processed.down_peak.peak_bin == static_cast<float>(processed.down_peak.discrete_bin),
-         "peak detection uses the maximum discrete bin without interpolation");
+  expect(std::abs(processed.up_peak.peak_bin -
+                      static_cast<float>(processed.up_peak.discrete_bin)) <= 0.5F &&
+             std::abs(processed.down_peak.peak_bin -
+                      static_cast<float>(processed.down_peak.discrete_bin)) <= 0.5F,
+         "peak refinement remains within the neighboring FFT bins");
   expect(processed.measurement_valid && processed.point.valid, "valid paired peaks produce distance and XYZ");
   expect(processed.distance_m > 0.0F, "paired peaks produce positive distance");
   expect(processed.velocity_mps < 0.0F, "up/down peak difference preserves velocity sign");
@@ -1152,6 +1339,10 @@ int main() {
     testCudaBatchParity(config, frames);
     std::cout << "[Phase7.3B] Qualification FFT batch execution count\n" << std::flush;
     testQualificationBatchExecutionCount();
+    std::cout << "[Phase4] Three-point parabolic peak refinement\n" << std::flush;
+    testParabolicPeakRefinement(config, *frames.front());
+    std::cout << "[Phase7.3C] CUDA fractional peak parity\n" << std::flush;
+    testCudaFractionalPeakParity(config);
     std::cout << "[Phase4] Signal processor\n" << std::flush;
     const auto processed = testSignalProcessing(config, frames);
     std::cout << "[Phase4] Processing service\n" << std::flush;

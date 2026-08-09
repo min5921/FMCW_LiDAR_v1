@@ -1256,9 +1256,11 @@ QWidget* MainWindow::buildProcessingPage() {
   peak_start_->setRange(0, 1048576);
   peak_end_ = new QSpinBox(peak);
   peak_end_->setRange(1, 1048576);
-  auto* detection_mode = new QLabel("Highest peak above threshold per A-scan", peak);
+  auto* detection_mode = new QLabel("Max bin + 3-point quadratic", peak);
   detection_mode->setWordWrap(true);
   detection_mode->setProperty("statusKind", "ready");
+  detection_mode->setToolTip(
+      "The strict threshold is applied to the discrete maximum before sub-bin refinement.");
   auto* update_runtime = new QPushButton("Apply Processing", peak);
   peak_form->addRow("Peak threshold", peak_threshold_);
   peak_form->addRow("Search start bin", peak_start_);

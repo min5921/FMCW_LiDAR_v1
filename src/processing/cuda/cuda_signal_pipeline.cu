@@ -23,9 +23,11 @@ namespace {
 constexpr int kThreadsPerBlock = 256;
 constexpr double kSpeedOfLightMps = 299792458.0;
 constexpr double kPi = 3.14159265358979323846;
+constexpr float kMinimumPeakCurvatureDb = 1.0e-6F;
 
 struct DevicePeakResult {
   std::int32_t index = -1;
+  float peak_bin = 0.0F;
   float magnitude_db = 0.0F;
   std::int32_t valid = 0;
 };
@@ -155,6 +157,12 @@ __global__ void preprocessSegmentsKernel(const std::uint16_t* raw,
   fft_input[output_index] = value;
 }
 
+__device__ float spectrumMagnitudeDb(const cufftComplex& value, float coherent_sum) {
+  const float amplitude = fmaxf(hypotf(value.x, value.y) *
+                                (2.0F / fmaxf(coherent_sum, 1.0F)), 1.0e-10F);
+  return 20.0F * log10f(amplitude);
+}
+
 __global__ void detectPeaksKernel(const cufftComplex* spectrum,
                                   DevicePeakResult* peaks,
                                   int spectrum_length,
@@ -209,12 +217,25 @@ __global__ void detectPeaksKernel(const cufftComplex* spectrum,
     const int index = shared_index[0];
     if (index >= 0) {
       const float coherent_sum = (transform & 1) == 0 ? up_window_sum : down_window_sum;
-      const float amplitude = fmaxf(hypotf(row[index].x, row[index].y) *
-                                    (2.0F / fmaxf(coherent_sum, 1.0F)), 1.0e-10F);
-      const float magnitude_db = 20.0F * log10f(amplitude);
+      const float magnitude_db = spectrumMagnitudeDb(row[index], coherent_sum);
       if (isfinite(magnitude_db) && magnitude_db > threshold_db) {
         result.index = index;
+        result.peak_bin = static_cast<float>(index);
         result.magnitude_db = magnitude_db;
+        if (index > start_bin && index < end_bin) {
+          const float left_db = spectrumMagnitudeDb(row[index - 1], coherent_sum);
+          const float right_db = spectrumMagnitudeDb(row[index + 1], coherent_sum);
+          const float curvature = left_db - 2.0F * magnitude_db + right_db;
+          if (isfinite(left_db) && isfinite(right_db) &&
+              curvature < -kMinimumPeakCurvatureDb) {
+            const float offset = 0.5F * (left_db - right_db) / curvature;
+            if (isfinite(offset) && offset >= -0.5F && offset <= 0.5F) {
+              result.peak_bin = static_cast<float>(index) + offset;
+              result.magnitude_db = magnitude_db -
+                  0.25F * (left_db - right_db) * offset;
+            }
+          }
+        }
         result.valid = 1;
       }
     }
@@ -279,8 +300,8 @@ __global__ void measurementsKernel(const DevicePeakResult* peaks,
 
   const auto position = positions[record];
   const double bin_frequency_hz = position.sample_rate_hz / static_cast<double>(fft_length);
-  const double up_frequency_hz = static_cast<double>(up.index) * bin_frequency_hz;
-  const double down_frequency_hz = static_cast<double>(down.index) * bin_frequency_hz;
+  const double up_frequency_hz = static_cast<double>(up.peak_bin) * bin_frequency_hz;
+  const double down_frequency_hz = static_cast<double>(down.peak_bin) * bin_frequency_hz;
   const double raw_distance = kSpeedOfLightMps * (up_frequency_hz + down_frequency_hz) /
       (8.0 * bandwidth_hz * sweep_rate_hz);
   const double raw_velocity = wavelength_nm * 1.0e-9 *
@@ -886,7 +907,7 @@ bool CudaSignalPipeline::collectNext(bool wait,
   const auto assign_peak = [](const DevicePeakResult& source, PeakMeasurement& target) {
     if (source.valid != 0) {
       target.discrete_bin = source.index;
-      target.peak_bin = static_cast<float>(source.index);
+      target.peak_bin = source.peak_bin;
       target.magnitude_db = source.magnitude_db;
       target.state = PeakTrackState::Detected;
       target.valid = true;
