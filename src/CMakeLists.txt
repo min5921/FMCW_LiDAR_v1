@@ -106,19 +106,68 @@ if(FMCW_WITH_CENTERPOINT)
     PATHS /usr/lib /usr/local/lib /usr/local/cuda/lib64
     PATH_SUFFIXES lib lib64 lib/x64 aarch64-linux-gnu
   )
-  if(NOT FMCW_CUDNN_INCLUDE_DIR OR NOT FMCW_CUDNN_LIBRARY)
+  if(WIN32)
+    find_file(FMCW_CUDNN_RUNTIME_DLL
+      NAMES cudnn64_9.dll cudnn64_8.dll
+      HINTS "${FMCW_CUDNN_ROOT}" "$ENV{CUDNN_ROOT}"
+      PATH_SUFFIXES bin bin/x64
+    )
+    if(FMCW_CUDNN_INCLUDE_DIR AND FMCW_CUDNN_RUNTIME_DLL AND
+       NOT FMCW_CUDNN_LIBRARY)
+      set(_fmcw_cudnn_definition
+          "${_fmcw_centerpoint_root}/cmake/cudnn64_9.def")
+      if(NOT EXISTS "${_fmcw_cudnn_definition}")
+        message(FATAL_ERROR
+          "cuDNN import library is missing and the CenterPoint definition file was not found: "
+          "${_fmcw_cudnn_definition}")
+      endif()
+      set(FMCW_CUDNN_LIBRARY
+          "${CMAKE_CURRENT_BINARY_DIR}/cudnn64_9.lib")
+      set(_fmcw_cudnn_librarian "${CMAKE_AR}")
+      if(NOT _fmcw_cudnn_librarian OR
+         _fmcw_cudnn_librarian MATCHES "NOTFOUND")
+        get_filename_component(_fmcw_msvc_bin_dir
+            "${CMAKE_CXX_COMPILER}" DIRECTORY)
+        find_program(_fmcw_cudnn_librarian
+          NAMES lib.exe
+          HINTS "${_fmcw_msvc_bin_dir}"
+          NO_DEFAULT_PATH
+        )
+      endif()
+      if(NOT _fmcw_cudnn_librarian)
+        message(FATAL_ERROR "MSVC librarian was not found for the cuDNN import library.")
+      endif()
+      execute_process(
+        COMMAND "${_fmcw_cudnn_librarian}" /nologo
+          "/def:${_fmcw_cudnn_definition}"
+          "/out:${FMCW_CUDNN_LIBRARY}" /machine:x64
+        RESULT_VARIABLE _fmcw_cudnn_import_result
+        OUTPUT_VARIABLE _fmcw_cudnn_import_output
+        ERROR_VARIABLE _fmcw_cudnn_import_error
+      )
+      if(NOT _fmcw_cudnn_import_result EQUAL 0)
+        message(FATAL_ERROR
+          "Failed to generate the cuDNN import library.\n"
+          "${_fmcw_cudnn_import_output}\n${_fmcw_cudnn_import_error}")
+      endif()
+      message(STATUS
+        "Generated cuDNN import library from ${_fmcw_cudnn_definition}")
+    endif()
+  endif()
+  if(NOT FMCW_CUDNN_INCLUDE_DIR OR NOT FMCW_CUDNN_LIBRARY OR
+     (WIN32 AND NOT FMCW_CUDNN_RUNTIME_DLL))
     message(FATAL_ERROR
-      "CenterPoint requires cuDNN headers and library. Install the cuDNN development "
-      "package for the selected CUDA toolkit or set FMCW_CUDNN_ROOT.")
+      "CenterPoint requires cuDNN headers and runtime. Install cuDNN for the selected CUDA "
+      "toolkit or set FMCW_CUDNN_ROOT.")
   endif()
   if(WIN32)
-    get_filename_component(_fmcw_cudnn_library_dir "${FMCW_CUDNN_LIBRARY}" DIRECTORY)
+    get_filename_component(_fmcw_cudnn_runtime_dir
+        "${FMCW_CUDNN_RUNTIME_DLL}" DIRECTORY)
     file(GLOB_RECURSE FMCW_CUDNN_RUNTIME_DLLS CONFIGURE_DEPENDS
       "${FMCW_CUDNN_ROOT}/bin/cudnn*.dll"
       "${FMCW_CUDNN_ROOT}/bin/x64/cudnn*.dll"
       "${FMCW_CUDNN_ROOT}/cudnn*.dll"
-      "${_fmcw_cudnn_library_dir}/../bin/cudnn*.dll"
-      "${_fmcw_cudnn_library_dir}/../../bin/cudnn*.dll"
+      "${_fmcw_cudnn_runtime_dir}/cudnn*.dll"
     )
     set(FMCW_CUDNN_RUNTIME_DLLS "${FMCW_CUDNN_RUNTIME_DLLS}" CACHE INTERNAL
         "cuDNN runtime DLLs copied beside the Windows application" FORCE)

@@ -102,8 +102,9 @@ The button remains disabled until an applied processing configuration is using C
 ## Windows CUDA build
 
 Windows uses the same asynchronous detector service and Qt controls as Jetson. The development
-machine must provide CUDA, cuFFT, and the cuDNN development files (`cudnn.h`, `cudnn.lib`, and
-the matching runtime DLLs). Build from an x64 Visual Studio Developer PowerShell:
+machine must provide CUDA, cuFFT, `cudnn.h`, and the matching cuDNN runtime DLLs. If the Python
+cuDNN package has no `cudnn.lib`, CMake generates an import library from the model project's
+`cmake/cudnn64_9.def`. Build from an x64 Visual Studio Developer PowerShell:
 
 ```powershell
 .\deploy\windows\build_centerpoint.ps1 `
@@ -111,6 +112,33 @@ the matching runtime DLLs). Build from an x64 Visual Studio Developer PowerShell
   -WeightsRoot "\\wsl.localhost\Ubuntu-22.04\home\kopti\CenterPoint_Waymo\weights\exported\pointpillars_full_novelocity_epoch12" `
   -CudnnRoot C:\path\to\cudnn
 ```
+
+### Verified Windows reference
+
+The completed model project on the current development machine is the reference implementation:
+
+```text
+source:  C:\Users\user\Desktop\Onechip\Codex\my project
+commit:  89793fe43d1ad130a8e4fd463e09c5c5090d717d
+runtime: C:\Users\user\Desktop\Onechip\Codex\my project\20_active_count_nms_project
+weights: C:\Users\user\Documents\객체인지\weights_full_novelocity
+cuDNN:   C:\Users\user\Documents\객체인지\dependencies\nvidia_cudnn_cu13\nvidia\cudnn
+sample:  C:\Users\user\Documents\객체인지\waymo_eval_tanh_pcdet_5frames\frame_000\points.bin
+```
+
+The exact reference build and inference smoke test is:
+
+```powershell
+.\deploy\windows\build_centerpoint.ps1 `
+  -CenterPointSource "C:\Users\user\Desktop\Onechip\Codex\my project" `
+  -WeightsRoot "C:\Users\user\Documents\객체인지\weights_full_novelocity" `
+  -CudnnRoot "C:\Users\user\Documents\객체인지\dependencies\nvidia_cudnn_cu13\nvidia\cudnn" `
+  -SamplePoints "C:\Users\user\Documents\객체인지\waymo_eval_tanh_pcdet_5frames\frame_000\points.bin"
+```
+
+This configuration built the complete Windows Qt application and passed all 8 configured tests.
+The adapter inference smoke test consumed 183,680 points and returned 5 boxes in 24.82 ms on one
+run. Treat that timing as a functional smoke-test result, not a p50/p95 benchmark.
 
 The weights stay outside the Git worktrees. The toolbar can select a different exported root at
 runtime, or it can use `FMCW_CENTERPOINT_WEIGHTS_ROOT`. Windows packaging copies discovered
@@ -128,10 +156,9 @@ cuDNN runtime DLLs beside the executable.
 ## Integration order
 
 1. Validate the point conversion contract and fixed intensity mapping on recorded FMCW frames.
-2. Install Windows cuDNN development files and complete the native SM120 CenterPoint build.
-3. Run offline single-frame inference on Windows and AGX Orin with the full grid; record p50/p95.
-4. Validate the asynchronous Qt toggle and matching box overlay on recorded FMCW frames.
-5. Parameterize the CUDA grid and benchmark the narrow-FOV crop without changing voxel size.
+2. Run the same full-grid offline inference on AGX Orin and record Windows/Jetson p50/p95.
+3. Validate the asynchronous Qt toggle and matching box overlay on recorded FMCW frames.
+4. Parameterize the CUDA grid and benchmark the narrow-FOV crop without changing voxel size.
 
 The Qt view already accepts matching detection snapshots and renders oriented 3D boxes with
 class, score, object count, and total inference time. It intentionally ignores detections from a

@@ -6,6 +6,7 @@
 
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -119,6 +120,90 @@ void testDetectorConfigurationValidation() {
   expect(!cleanup_error, "temporary CenterPoint validation files are removed");
 }
 
+bool referenceInferencePaths(std::filesystem::path& weights_root,
+                             std::filesystem::path& points_bin) {
+#ifdef _WIN32
+  const wchar_t* weights = _wgetenv(L"FMCW_CENTERPOINT_TEST_WEIGHTS_ROOT");
+  const wchar_t* points = _wgetenv(L"FMCW_CENTERPOINT_TEST_POINTS_BIN");
+#else
+  const char* weights = std::getenv("FMCW_CENTERPOINT_TEST_WEIGHTS_ROOT");
+  const char* points = std::getenv("FMCW_CENTERPOINT_TEST_POINTS_BIN");
+#endif
+  if (weights == nullptr || points == nullptr ||
+      weights[0] == 0 || points[0] == 0) {
+    return false;
+  }
+  weights_root = std::filesystem::path(weights);
+  points_bin = std::filesystem::path(points);
+  return true;
+}
+
+void testReferenceGpuInferenceWhenConfigured() {
+  std::filesystem::path weights_root;
+  std::filesystem::path points_bin;
+  if (!referenceInferencePaths(weights_root, points_bin)) {
+    std::cout << "Reference GPU inference skipped (sample paths are not configured)\n";
+    return;
+  }
+  if (!fmcw::centerPointBackendCompiled()) {
+    std::cout << "Reference GPU inference skipped (CenterPoint is not compiled)\n";
+    return;
+  }
+
+  std::ifstream stream(points_bin, std::ios::binary | std::ios::ate);
+  expect(stream.is_open(), "reference points.bin can be opened");
+  if (!stream.is_open()) {
+    return;
+  }
+  const auto byte_count = static_cast<std::streamoff>(stream.tellg());
+  expect(byte_count > 0, "reference points.bin is not empty");
+  expect(byte_count % static_cast<std::streamoff>(sizeof(float) * 5) == 0,
+         "reference points.bin contains five floats per point");
+  if (byte_count <= 0 ||
+      byte_count % static_cast<std::streamoff>(sizeof(float) * 5) != 0) {
+    return;
+  }
+
+  std::vector<float> features(
+      static_cast<std::size_t>(byte_count) / sizeof(float));
+  stream.seekg(0, std::ios::beg);
+  stream.read(reinterpret_cast<char*>(features.data()),
+              static_cast<std::streamsize>(byte_count));
+  expect(stream.good(), "reference points.bin is read completely");
+  if (!stream.good()) {
+    return;
+  }
+
+  auto detector = fmcw::createCenterPointObjectDetector();
+  expect(detector != nullptr, "compiled CenterPoint detector can be created");
+  if (detector == nullptr) {
+    return;
+  }
+  fmcw::ObjectDetectorConfig config;
+  config.weights_root = weights_root;
+  std::string error;
+  expect(detector->initialize(config, error),
+         "CenterPoint initializes with reference weights: " + error);
+  if (!detector->ready()) {
+    return;
+  }
+
+  fmcw::CenterPointInput input;
+  input.last_frame_id = 1;
+  input.scan_frame_index = 1;
+  input.processing_config_revision = 1;
+  input.source_frame_complete = true;
+  input.source_points = features.size() / 5U;
+  input.features = std::move(features);
+  const auto result = detector->detect(input);
+  expect(result.backend_ready, "reference inference keeps the backend ready");
+  expect(result.status == "ok", "reference inference completes: " + result.status);
+  expect(!result.boxes.empty(), "reference inference produces object boxes");
+  std::cout << "Reference GPU inference: " << result.accepted_points << " points, "
+            << result.boxes.size() << " boxes, " << result.timing.total_ms
+            << " ms total\n";
+}
+
 class FakeObjectDetector final : public fmcw::ObjectDetector {
  public:
   const char* backendName() const override { return "fake detector"; }
@@ -207,6 +292,7 @@ int main() {
   testVelocityFeatureCanBeEnabledLater();
   testBoxClassNames();
   testDetectorConfigurationValidation();
+  testReferenceGpuInferenceWhenConfigured();
   testObjectDetectionGate();
   testObjectDetectionService();
   if (failures != 0) {
