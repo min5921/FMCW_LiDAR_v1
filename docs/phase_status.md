@@ -648,3 +648,23 @@ Operator-controlled vector bidirectional mapping (2026-08-08):
   order. Windows MSVC Release and CTest passed 10/10; the packaged smoke test
   exited 0. Package EXE SHA-256 is
   `A8271E09DC411F0F5978E9007D67B1A2C7586BA8C59F2E2C041A479C01898F92`.
+
+Point-cloud display post-processing and GPU rendering (2026-08-09):
+
+- The visible 3D tab now median-fuses a bounded one-to-five-frame history of
+  complete organized rasters. Historical valid cells can fill temporary holes;
+  session, geometry, and processing-revision changes reset the history.
+- Edge-aware viewer-only Y interpolation supports native, 2x, and 4x density.
+  The adaptive range gate rejects large depth discontinuities, and CSV export
+  marks interpolated points and the contributing temporal observation count.
+- The point renderer uploads packed XYZ/color vertices to an OpenGL VBO and
+  draws circular point sprites with depth testing. Shader or buffer setup
+  failure retains the CPU painter fallback without entering the acquisition or
+  signal-processing path.
+- The dedicated post-processing test covers temporal hole recovery, bounded
+  history expiry, session reset, smooth-row interpolation, edge rejection, and
+  malformed organized clouds. Windows Release build and GUI smoke passed. The
+  simulator rendered 24,950 source points as 96,806 displayed points through
+  the GPU VBO path. Normal CTest passed 9/10; the existing realtime probe was
+  the sole failure because this local Visual Studio configuration did not make
+  a CUDA runtime device available, while its FFTW portion reported HARD_PASS.
