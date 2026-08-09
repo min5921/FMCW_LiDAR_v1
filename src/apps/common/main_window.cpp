@@ -62,7 +62,6 @@ constexpr int kLivePageIndex = 1;
 constexpr int kLaserEdfaPageIndex = 3;
 constexpr int kScanMcuPageIndex = 4;
 constexpr int kProcessingPageIndex = 5;
-constexpr qint64 kFrameRateSampleIntervalMs = 1000;
 
 enum class SerialPortRole {
   Mcu,
@@ -1129,12 +1128,12 @@ QWidget* MainWindow::buildScanMcuPage() {
   bidirectional_ = new QCheckBox("Bidirectional raster", geometry);
   x_start_->setToolTip("Azimuth assigned to the minimum fast-axis command");
   x_end_->setToolTip("Azimuth assigned to the maximum fast-axis command");
-  y_start_->setToolTip("Elevation assigned to the minimum slow-axis command");
-  y_end_->setToolTip("Elevation assigned to the maximum slow-axis command");
+  y_start_->setToolTip("Bottom elevation; assigned to the final B-scan line");
+  y_end_->setToolTip("Top elevation; assigned to the first B-scan line");
   geometry_form->addRow("Azimuth at fast min", x_start_);
   geometry_form->addRow("Azimuth at fast max", x_end_);
-  geometry_form->addRow("Elevation at slow min", y_start_);
-  geometry_form->addRow("Elevation at slow max", y_end_);
+  geometry_form->addRow("Elevation bottom", y_start_);
+  geometry_form->addRow("Elevation top", y_end_);
   geometry_form->addRow("A-scans / B-scan", a_scan_count_);
   geometry_form->addRow("B-scans / frame", y_lines_);
   geometry_form->addRow("Positions / frame", frame_point_count_);
@@ -2968,29 +2967,24 @@ void MainWindow::updateStatus(RuntimeStatus status) {
                              : "WAITING\nNo waveform");
   overview_processing_->setText(runtime_status_.backend_name.isEmpty() ? "NOT CONFIGURED" : runtime_status_.backend_name);
   const auto frame_point_count = derivedFramePointCount(config_);
-  const auto generated_frames = frame_point_count == 0U
+  const auto completed_frames = frame_point_count == 0U
       ? 0U
       : runtime_status_.frames_processed / frame_point_count;
-  if (!runtime_status_.running) {
-    generated_frame_rate_timer_.invalidate();
-    generated_frame_rate_count_ = generated_frames;
-    generated_frame_rate_hz_ = 0.0;
-  } else if (!generated_frame_rate_timer_.isValid() ||
-             generated_frames < generated_frame_rate_count_) {
-    generated_frame_rate_timer_.start();
-    generated_frame_rate_count_ = generated_frames;
-    generated_frame_rate_hz_ = 0.0;
-  } else if (generated_frame_rate_timer_.elapsed() >= kFrameRateSampleIntervalMs) {
-    const auto elapsed_ms = generated_frame_rate_timer_.elapsed();
-    generated_frame_rate_hz_ = static_cast<double>(
-        generated_frames - generated_frame_rate_count_) * 1000.0 /
-        static_cast<double>(elapsed_ms);
-    generated_frame_rate_count_ = generated_frames;
-    generated_frame_rate_timer_.restart();
+  const auto measured_frame_rate_hz = runtime_status_.running
+      ? derivedMeasuredFrameRateHz(config_, runtime_status_.dma_bscan_rate_hz)
+      : 0.0;
+  const auto measured_frame_time_ms = runtime_status_.running
+      ? derivedMeasuredFrameTimeMs(config_, runtime_status_.dma_bscan_rate_hz)
+      : 0.0;
+  if (measured_frame_rate_hz > 0.0 && measured_frame_time_ms > 0.0) {
+    overview_frames_->setText(QString("%1 FPS\n%2 s/frame | %3 complete")
+                                  .arg(measured_frame_rate_hz, 0, 'f', 2)
+                                  .arg(measured_frame_time_ms / 1000.0, 0, 'f', 3)
+                                  .arg(completed_frames));
+  } else {
+    overview_frames_->setText(QString("0.00 FPS\nwaiting | %1 complete")
+                                  .arg(completed_frames));
   }
-  overview_frames_->setText(QString("%1 FPS\n%2 generated")
-                                .arg(generated_frame_rate_hz_, 0, 'f', 2)
-                                .arg(generated_frames));
   overview_queues_->setText(QString("Signal %1/%2\nRaw %3/%4 | Result %5/%6")
                                 .arg(runtime_status_.processing_queue_size)
                                 .arg(runtime_status_.processing_queue_capacity)

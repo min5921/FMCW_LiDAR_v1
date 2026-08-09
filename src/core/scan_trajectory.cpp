@@ -20,6 +20,12 @@ float indexToAngle(std::uint32_t index, std::uint32_t count,
       (maximum_angle_deg - minimum_angle_deg) * fraction);
 }
 
+float lineIndexToElevation(std::uint32_t index, std::uint32_t count,
+                           double minimum_angle_deg, double maximum_angle_deg) {
+  // DMA B-scan lines arrive from the top of the vector scan to the bottom.
+  return indexToAngle(index, count, maximum_angle_deg, minimum_angle_deg);
+}
+
 std::size_t trajectoryIndexForRecord(const McuWaveformSnapshot& waveform,
                                      std::uint32_t marker_index,
                                      std::uint32_t record_index,
@@ -89,7 +95,7 @@ bool mapTrajectoryRecord(const SystemConfig& config,
   // commands remain provenance and never reverse A-scan samples or FFT input.
   position.x_angle_deg = indexToAngle(position.x_index, context.record_count,
       config.scan.x_start_deg, config.scan.x_end_deg);
-  position.y_angle_deg = indexToAngle(position.y_index, config.scan.y_line_count,
+  position.y_angle_deg = lineIndexToElevation(position.y_index, config.scan.y_line_count,
       config.scan.y_start_deg, config.scan.y_end_deg);
   position.fast_axis = context.fast_axis;
   position.fast_axis_direction = context.direction;
@@ -103,7 +109,7 @@ bool mapTrajectoryRecord(const SystemConfig& config,
 bool alignReplayRasterPosition(const SystemConfig& config, ScanPosition& position) {
   const auto azimuth_deg = indexToAngle(position.x_index, config.scan.x_pixel_count,
       config.scan.x_start_deg, config.scan.x_end_deg);
-  const auto elevation_deg = indexToAngle(position.y_index, config.scan.y_line_count,
+  const auto elevation_deg = lineIndexToElevation(position.y_index, config.scan.y_line_count,
       config.scan.y_start_deg, config.scan.y_end_deg);
   if (!std::isfinite(azimuth_deg) || !std::isfinite(elevation_deg)) {
     return false;
@@ -134,11 +140,11 @@ void stampGeneratedRasterPosition(const SystemConfig& config, RawFrame& frame) {
   position.trajectory_sample_index = static_cast<std::uint32_t>(zero_based);
   position.x_command = static_cast<float>(-1.0 +
       2.0 * static_cast<double>(x) / static_cast<double>(config.scan.x_pixel_count - 1U));
-  position.y_command = static_cast<float>(-1.0 +
+  position.y_command = static_cast<float>(1.0 -
       2.0 * static_cast<double>(y) / static_cast<double>(config.scan.y_line_count - 1U));
   position.x_angle_deg = indexToAngle(x, config.scan.x_pixel_count,
       config.scan.x_start_deg, config.scan.x_end_deg);
-  position.y_angle_deg = indexToAngle(y, config.scan.y_line_count,
+  position.y_angle_deg = lineIndexToElevation(y, config.scan.y_line_count,
       config.scan.y_start_deg, config.scan.y_end_deg);
   position.fast_axis = ScanAxis::X;
   position.fast_axis_direction = decreasing

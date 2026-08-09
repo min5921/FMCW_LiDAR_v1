@@ -583,12 +583,12 @@ void FakeDigitizer::fillFrame(RawFrame& frame, std::uint64_t frame_id,
   metadata.scan_position.trajectory_sample_index = static_cast<std::uint32_t>(zero_based);
   metadata.scan_position.x_command = static_cast<float>(-1.0 +
       2.0 * static_cast<double>(x) / static_cast<double>(config_.scan.x_pixel_count - 1U));
-  metadata.scan_position.y_command = static_cast<float>(-1.0 +
+  metadata.scan_position.y_command = static_cast<float>(1.0 -
       2.0 * static_cast<double>(y) / static_cast<double>(config_.scan.y_line_count - 1U));
   metadata.scan_position.x_angle_deg = static_cast<float>(config_.scan.x_start_deg +
       (config_.scan.x_end_deg - config_.scan.x_start_deg) * static_cast<double>(x) /
           static_cast<double>(config_.scan.x_pixel_count - 1U));
-  metadata.scan_position.y_angle_deg = static_cast<float>(config_.scan.y_start_deg +
+  metadata.scan_position.y_angle_deg = static_cast<float>(config_.scan.y_end_deg -
       (config_.scan.y_end_deg - config_.scan.y_start_deg) * static_cast<double>(y) /
           static_cast<double>(config_.scan.y_line_count - 1U));
   metadata.scan_position.fast_axis = ScanAxis::X;

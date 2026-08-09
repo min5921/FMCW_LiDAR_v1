@@ -216,6 +216,18 @@ double derivedMcuFrameTimeMs(const SystemConfig& config) {
       config.scan.scanner_sample_rate_hz;
 }
 
+double derivedMeasuredFrameRateHz(const SystemConfig& config, double dma_bscan_rate_hz) {
+  if (!(dma_bscan_rate_hz > 0.0) || config.scan.y_line_count == 0U) {
+    return 0.0;
+  }
+  return dma_bscan_rate_hz / static_cast<double>(config.scan.y_line_count);
+}
+
+double derivedMeasuredFrameTimeMs(const SystemConfig& config, double dma_bscan_rate_hz) {
+  const auto frame_rate_hz = derivedMeasuredFrameRateHz(config, dma_bscan_rate_hz);
+  return frame_rate_hz > 0.0 ? 1000.0 / frame_rate_hz : 0.0;
+}
+
 double derivedRecordPeriodSeconds(const SystemConfig& config) {
   if (!(config.digitizer.sample_rate_hz > 0.0)) {
     return 0.0;

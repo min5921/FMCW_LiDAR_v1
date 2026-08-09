@@ -351,6 +351,8 @@ void testMcuProtocol() {
          "MCU waveform does not hold the marker across a B-scan");
   expect(waveform[0].a < waveform[3].a && waveform[4].a > waveform[7].a,
          "bidirectional raster reverses the X waveform on alternating B-scans");
+  expect(waveform.front().command_y == 1.0F && waveform.back().command_y == -1.0F,
+         "generated raster commands the slow axis from top to bottom");
 
   raster.mcu.waveform_source = fmcw::McuWaveformSource::GeneratedRaster;
   raster.scan.trigger_shift_samples = -1;
@@ -462,8 +464,8 @@ void testMcuProtocol() {
              active_first.x_index == 0U && active_last.x_index == 997U &&
              std::abs(active_first.x_angle_deg + 9.0F) < 1.0e-5F &&
              std::abs(active_last.x_angle_deg - 9.0F) < 1.0e-5F &&
-             std::abs(active_first.y_angle_deg + 4.0F) < 1.0e-5F,
-         "active Y-fast waveform uses the aligned B-scan column for azimuth and line for elevation");
+             std::abs(active_first.y_angle_deg - 4.0F) < 1.0e-5F,
+         "the first acquired vector line maps to the top elevation limit");
   expect(active_snapshot &&
              active_first.trajectory_sample_index < active_snapshot->frames.size() &&
              active_first.x_command ==
@@ -499,6 +501,8 @@ void testVectorTrajectoryMapping() {
   config.scan.x_end_deg = 9.0;
   config.scan.y_start_deg = -4.0;
   config.scan.y_end_deg = 4.0;
+  config.scan.y_line_count = 2U;
+  config.digitizer.b_scan_count = 2U;
   config.scan.bidirectional = true;
   fmcw::TrajectoryLineContext even_line;
   fmcw::TrajectoryLineContext odd_line;
@@ -532,8 +536,10 @@ void testVectorTrajectoryMapping() {
              odd_first.x_index == 7U && odd_last.x_index == 0U,
          "decreasing vector line keeps acquisition order while assigning spatial B-scan columns once");
   expect(even_first.source == fmcw::ScanCoordinateSource::McuTrajectory &&
-              even_first.angle_calibrated && even_first.y_index == 0U && odd_first.y_index == 1U,
-         "mapped records retain command provenance and complete-frame line indices");
+              even_first.angle_calibrated && even_first.y_index == 0U && odd_first.y_index == 1U &&
+              std::abs(even_first.y_angle_deg - 4.0F) < 1.0e-5F &&
+              std::abs(odd_first.y_angle_deg + 4.0F) < 1.0e-5F,
+         "vector lines map from top to bottom elevation while retaining frame indices");
 
   auto bypass_config = config;
   bypass_config.scan.bidirectional = false;
@@ -802,6 +808,11 @@ void testFakeDmaBatchSession() {
         frame->metadata.config_revision == 18;
   }
   expect(metadata_consistent, "all records retain immutable batch and session metadata");
+  expect(batch &&
+             std::abs(batch->records.front().metadata.scan_position.y_angle_deg -
+                      static_cast<float>(config.scan.y_end_deg)) < 1.0e-5F &&
+             std::abs(batch->records.front().metadata.scan_position.y_command - 1.0F) < 1.0e-5F,
+         "simulator starts each generated frame at the top elevation line");
   expect(session.stop(error), "batch session stops cleanly");
 }
 

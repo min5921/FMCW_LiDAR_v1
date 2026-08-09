@@ -37,7 +37,7 @@
 | Storage / UDP | raw/processed save, path, queue, UDP endpoint/format | acquisition Start/Stop |
 | System Log | log filtering, alarms, diagnostics export | duplicated setup controls |
 
-Overview의 `FRAMES` card는 누적 A-scan이나 DMA batch 수 대신 실제 처리 완료 raster frame 증가량으로 계산한 1초 구간 FPS와 생성 완료 frame 수만 표시한다. `QUEUES` card는 `Signal`, `Raw`, `Result` 대기 batch/block 수와 각 capacity를 구분해 표시한다.
+Overview의 `FRAMES` card는 누적 A-scan이나 DMA batch 수 대신 실측 DMA B-scan rate를 `B-scans/frame`으로 나눈 연속적인 raster FPS, 그 역수인 frame time, 처리 완료 frame 수를 표시한다. 이 계산은 1 FPS 미만에서도 1초 정수 frame 카운트로 양자화하지 않는다. `QUEUES` card는 `Signal`, `Raw`, `Result` 대기 batch/block 수와 각 capacity를 구분해 표시한다.
 
 ## 3. Global Command Bar
 

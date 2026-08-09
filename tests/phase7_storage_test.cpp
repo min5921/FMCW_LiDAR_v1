@@ -273,7 +273,7 @@ void testDmaBlockStorageAndReplay() {
                  1.0e-5F &&
              std::abs(runtime_replay->records.back().metadata.scan_position.x_angle_deg - 6.0F) <
                  1.0e-5F &&
-             std::abs(runtime_replay->records.front().metadata.scan_position.y_angle_deg + 3.0F) <
+             std::abs(runtime_replay->records.front().metadata.scan_position.y_angle_deg - 3.0F) <
                  1.0e-5F &&
              runtime_replay->records.front().metadata.scan_position.x_command ==
                  batch->records.front().metadata.scan_position.x_command &&
@@ -281,7 +281,7 @@ void testDmaBlockStorageAndReplay() {
                  batch->records.front().metadata.scan_position.y_command &&
              runtime_replay->records.front().metadata.scan_position.source ==
                  fmcw::ScanCoordinateSource::Replay,
-         "AcquisitionSession realigns replay angles to the applied raster while preserving commands");
+         "AcquisitionSession realigns replay from top to bottom while preserving commands");
   expect(replay_session.stop(error), "runtime v3 replay session stops cleanly");
   replay_session.disconnect();
 

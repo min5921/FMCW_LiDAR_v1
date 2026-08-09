@@ -273,6 +273,8 @@ SystemConfig makeAts9371QualificationSimulatorConfig();
 std::uint32_t derivedAScanCount(const SystemConfig& config);
 std::uint64_t derivedFramePointCount(const SystemConfig& config);
 double derivedMcuFrameTimeMs(const SystemConfig& config);
+double derivedMeasuredFrameRateHz(const SystemConfig& config, double dma_bscan_rate_hz);
+double derivedMeasuredFrameTimeMs(const SystemConfig& config, double dma_bscan_rate_hz);
 double derivedRecordPeriodSeconds(const SystemConfig& config);
 
 std::string toString(DigitizerChannel value);

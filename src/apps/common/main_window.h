@@ -104,10 +104,7 @@ class MainWindow final : public QMainWindow {
   bool mcu_uploading_ = false;
   McuUploadProgress mcu_upload_progress_state_;
   QElapsedTimer mcu_upload_elapsed_timer_;
-  QElapsedTimer generated_frame_rate_timer_;
   QElapsedTimer stop_stage_elapsed_timer_;
-  std::uint64_t generated_frame_rate_count_ = 0;
-  double generated_frame_rate_hz_ = 0.0;
   QStringList log_entries_;
   QString displayed_stop_stage_;
 

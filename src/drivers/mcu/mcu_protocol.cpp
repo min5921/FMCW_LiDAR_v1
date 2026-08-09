@@ -315,7 +315,7 @@ std::vector<McuWaveformFrame> McuProtocol::buildFullFrameWaveform(const SystemCo
   std::vector<McuWaveformFrame> frames;
   frames.reserve(static_cast<std::size_t>(point_count));
   for (std::uint32_t y = 0; y < y_count; ++y) {
-    const auto y_normalized = -1.0 + 2.0 * static_cast<double>(y) /
+    const auto y_normalized = 1.0 - 2.0 * static_cast<double>(y) /
         static_cast<double>(y_count - 1U);
     for (std::uint32_t step = 0; step < x_count; ++step) {
       const auto x_index = config.scan.bidirectional && (y % 2U) != 0U

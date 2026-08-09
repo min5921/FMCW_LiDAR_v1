@@ -79,6 +79,15 @@ void testDefaultsAndRoundTrip() {
          "one frame contains A-scans per DMA buffer times B-scans per frame");
   expect(std::abs(fmcw::derivedMcuFrameTimeMs(defaults) - 16.0) < 1.0e-9,
          "MCU cycle time is derived from the full-frame waveform point count");
+  fmcw::SystemConfig measured_scan = defaults;
+  measured_scan.scan.y_line_count = 100U;
+  expect(std::abs(fmcw::derivedMeasuredFrameRateHz(measured_scan, 67.97) - 0.6797) < 1.0e-9 &&
+             std::abs(fmcw::derivedMeasuredFrameTimeMs(measured_scan, 67.97) -
+                      (1000.0 / 0.6797)) < 1.0e-9,
+         "raster FPS and frame time derive continuously from measured DMA B-scan rate");
+  expect(fmcw::derivedMeasuredFrameRateHz(measured_scan, 0.0) == 0.0 &&
+             fmcw::derivedMeasuredFrameTimeMs(measured_scan, 0.0) == 0.0,
+         "missing DMA timing produces an unavailable measured frame rate");
   const auto& board = fmcw::digitizerBoardCapabilities().front();
   expect(board.display_name.find("ATS9371") != std::string::npos && board.sample_rates_hz.size() == 20 &&
              board.minimum_record_samples == 256U && board.record_resolution_samples == 128U &&

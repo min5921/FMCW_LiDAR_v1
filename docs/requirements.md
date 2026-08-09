@@ -292,8 +292,8 @@ legacy 참고:
 
 - Azimuth at minimum fast-axis command
 - Azimuth at maximum fast-axis command
-- Elevation at minimum slow-axis command
-- Elevation at maximum slow-axis command
+- Elevation at bottom (final acquired B-scan line)
+- Elevation at top (first acquired B-scan line)
 - Scan direction
 - Bidirectional scan enable for generated raster mode; legacy X/Y/M direction is read from the waveform
 - A-scan count: Digitizer의 `Records per buffer`에서 읽기 전용으로 표시
