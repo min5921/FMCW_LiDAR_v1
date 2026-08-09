@@ -4,6 +4,9 @@
 protocol v2. The implementation is C++14; no Python node is used in the receive
 or publish path.
 
+For the complete Korean copy/build/test/run checklist, see
+[`ROS_NOETIC_DEPLOY_KO.md`](ROS_NOETIC_DEPLOY_KO.md).
+
 ## Data path and coordinate contract
 
 ```text
