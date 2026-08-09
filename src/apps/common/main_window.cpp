@@ -492,6 +492,11 @@ void applyDarkApplicationTheme(QApplication& application) {
 
 MainWindow::MainWindow(QString platform_name, QWidget* parent)
     : QMainWindow(parent), platform_name_(std::move(platform_name)) {
+  object_detection_weights_root_ = qEnvironmentVariable("FMCW_CENTERPOINT_WEIGHTS_ROOT");
+  if (object_detection_weights_root_.isEmpty()) {
+    object_detection_weights_root_ =
+        qEnvironmentVariable("FMCW_JETSON_CENTERPOINT_WEIGHTS_ROOT");
+  }
   config_ = makeAts9371QualificationSimulatorConfig();
   if (platform_name_.compare(QStringLiteral("Jetson"), Qt::CaseInsensitive) == 0) {
     config_.ui.plot_update_hz = 30.0;
@@ -807,6 +812,17 @@ QWidget* MainWindow::buildLivePage() {
   auto* save_cloud = new QToolButton(point_cloud_page);
   save_cloud->setIcon(style()->standardIcon(QStyle::SP_DialogSaveButton));
   save_cloud->setToolTip("Save current point cloud as CSV");
+  object_detection_weights_button_ = new QToolButton(point_cloud_page);
+  object_detection_weights_button_->setObjectName("objectDetectionWeightsButton");
+  object_detection_weights_button_->setText("Weights...");
+  object_detection_weights_button_->setToolTip(object_detection_weights_root_.isEmpty()
+      ? "Select the exported 04_pfn / 06_rpn / 07_head root"
+      : QString("CenterPoint weights: %1").arg(object_detection_weights_root_));
+  object_detection_toggle_ = new QToolButton(point_cloud_page);
+  object_detection_toggle_->setObjectName("objectDetectionToggle");
+  object_detection_toggle_->setText("Objects OFF");
+  object_detection_toggle_->setCheckable(true);
+  object_detection_toggle_->setEnabled(false);
   point_cloud_status_ = new QLabel("Waiting for complete raster frame", point_cloud_page);
   point_cloud_status_->setProperty("statusKind", "neutral");
   point_cloud_tools->addWidget(color_mode);
@@ -815,6 +831,8 @@ QWidget* MainWindow::buildLivePage() {
   point_cloud_tools->addWidget(show_axes);
   point_cloud_tools->addWidget(reset_camera);
   point_cloud_tools->addWidget(save_cloud);
+  point_cloud_tools->addWidget(object_detection_weights_button_);
+  point_cloud_tools->addWidget(object_detection_toggle_);
   point_cloud_tools->addStretch(1);
   point_cloud_tools->addWidget(point_cloud_status_);
   point_cloud_plot_ = new PointCloudWidget(point_cloud_page);
@@ -895,6 +913,29 @@ QWidget* MainWindow::buildLivePage() {
     if (!path.isEmpty() && !point_cloud_plot_->saveCurrentCloud(path)) {
       QMessageBox::critical(this, "Point cloud save failed", "The current point cloud could not be written.");
     }
+  });
+  connect(object_detection_weights_button_, &QToolButton::clicked, this, [this] {
+    const auto selected = QFileDialog::getExistingDirectory(
+        this, "Select exported CenterPoint weights root",
+        object_detection_weights_root_);
+    if (!selected.isEmpty()) {
+      object_detection_weights_root_ = selected;
+      object_detection_weights_button_->setToolTip(
+          QString("CenterPoint weights: %1").arg(selected));
+    }
+  });
+  connect(object_detection_toggle_, &QToolButton::toggled, this, [this](bool enabled) {
+    if (enabled && object_detection_weights_root_.isEmpty()) {
+      const auto selected = QFileDialog::getExistingDirectory(
+          this, "Select exported CenterPoint weights root");
+      if (selected.isEmpty()) {
+        QSignalBlocker blocker(object_detection_toggle_);
+        object_detection_toggle_->setChecked(false);
+        return;
+      }
+      object_detection_weights_root_ = selected;
+    }
+    controller_->setObjectDetectionEnabled(enabled, object_detection_weights_root_);
   });
   return content;
 }
@@ -1687,6 +1728,10 @@ void MainWindow::connectUi() {
     point_cloud_status_->setProperty("statusKind", "ready");
     repolish(point_cloud_status_);
   });
+  connect(controller_, &ApplicationController::objectDetectionsReady, this,
+          [this](DetectionSnapshotPtr snapshot) {
+            point_cloud_plot_->setDetections(std::move(snapshot));
+          });
   connect(controller_, &ApplicationController::segmentationSnapshotReady, this,
           [this](WaveformSnapshotPtr snapshot) {
             segmentation_plot_->setSnapshot(snapshot);
@@ -2906,6 +2951,10 @@ void MainWindow::updateStatus(RuntimeStatus status) {
       runtime_status_.connected != status.connected ||
       runtime_status_.running != status.running ||
       runtime_status_.recording != status.recording ||
+      runtime_status_.cuda_fft_active != status.cuda_fft_active ||
+      runtime_status_.object_detection_compiled != status.object_detection_compiled ||
+      runtime_status_.object_detection_enabled != status.object_detection_enabled ||
+      runtime_status_.object_detection_ready != status.object_detection_ready ||
       runtime_status_.config_revision != status.config_revision ||
       runtime_status_.processing_revision != status.processing_revision ||
       runtime_status_.source_name != status.source_name;
@@ -2940,6 +2989,32 @@ void MainWindow::updateStatus(RuntimeStatus status) {
   start_stop_button_->setText(stopping ? "STOPPING..." : runtime_status_.running ? "STOP" : "START");
   setStyledProperty(start_stop_button_, "runState",
                     stopping ? "stopping" : runtime_status_.running ? "stop" : "start");
+  if (object_detection_toggle_ != nullptr) {
+    const QSignalBlocker blocker(object_detection_toggle_);
+    object_detection_toggle_->setChecked(runtime_status_.object_detection_enabled);
+    object_detection_toggle_->setText(runtime_status_.object_detection_enabled
+        ? QString("Objects ON | %1").arg(runtime_status_.object_detection_frames_processed)
+        : "Objects OFF");
+    const bool can_enable = runtime_status_.configured &&
+        runtime_status_.cuda_fft_active && runtime_status_.object_detection_compiled && !stopping;
+    object_detection_toggle_->setEnabled(
+        runtime_status_.object_detection_enabled || can_enable);
+    QString detection_tip;
+    if (runtime_status_.object_detection_enabled) {
+      detection_tip = QString("CenterPoint running | %1 frames | %2 replaced\n%3")
+          .arg(runtime_status_.object_detection_frames_processed)
+          .arg(runtime_status_.object_detection_frames_replaced)
+          .arg(runtime_status_.object_detection_detail);
+    } else if (!runtime_status_.object_detection_compiled) {
+      detection_tip = "CenterPoint is not included in this build";
+    } else if (!runtime_status_.cuda_fft_active) {
+      detection_tip = "Apply CUDA cuFFT processing before enabling object detection";
+    } else {
+      detection_tip = "Enable CenterPoint on complete point-cloud frames";
+    }
+    object_detection_toggle_->setToolTip(detection_tip);
+    object_detection_weights_button_->setEnabled(!runtime_status_.object_detection_enabled);
+  }
   if (control_state_changed) {
     updateControlAvailability();
   }

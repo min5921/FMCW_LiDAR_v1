@@ -34,6 +34,8 @@ set(FMCW_CORE_SOURCES
   core/scan_trajectory.cpp
   core/system_state.cpp
   detection/centerpoint_input_builder.cpp
+  detection/object_detection_policy.cpp
+  detection/object_detection_service.cpp
   detection/object_detector.cpp
   drivers/alazar/alazar_digitizer.cpp
   drivers/alazar/alazar_sample_conversion.cpp
@@ -68,6 +70,7 @@ else()
 endif()
 
 set(FMCW_HAS_CENTERPOINT OFF)
+set(FMCW_CUDNN_RUNTIME_DLLS "")
 if(FMCW_WITH_CENTERPOINT)
   if(NOT FMCW_HAS_CUDA_FFT)
     message(FATAL_ERROR
@@ -105,8 +108,20 @@ if(FMCW_WITH_CENTERPOINT)
   )
   if(NOT FMCW_CUDNN_INCLUDE_DIR OR NOT FMCW_CUDNN_LIBRARY)
     message(FATAL_ERROR
-      "CenterPoint requires cuDNN headers and library. Install the JetPack cuDNN development "
-      "package or set FMCW_CUDNN_ROOT.")
+      "CenterPoint requires cuDNN headers and library. Install the cuDNN development "
+      "package for the selected CUDA toolkit or set FMCW_CUDNN_ROOT.")
+  endif()
+  if(WIN32)
+    get_filename_component(_fmcw_cudnn_library_dir "${FMCW_CUDNN_LIBRARY}" DIRECTORY)
+    file(GLOB_RECURSE FMCW_CUDNN_RUNTIME_DLLS CONFIGURE_DEPENDS
+      "${FMCW_CUDNN_ROOT}/bin/cudnn*.dll"
+      "${FMCW_CUDNN_ROOT}/bin/x64/cudnn*.dll"
+      "${FMCW_CUDNN_ROOT}/cudnn*.dll"
+      "${_fmcw_cudnn_library_dir}/../bin/cudnn*.dll"
+      "${_fmcw_cudnn_library_dir}/../../bin/cudnn*.dll"
+    )
+    set(FMCW_CUDNN_RUNTIME_DLLS "${FMCW_CUDNN_RUNTIME_DLLS}" CACHE INTERNAL
+        "cuDNN runtime DLLs copied beside the Windows application" FORCE)
   endif()
 
   set(_fmcw_centerpoint_cuda_sources
@@ -362,7 +377,10 @@ if(FMCW_BUILD_QT_APPS)
     add_executable(fmcw_lidar_windows WIN32 apps/windows/main.cpp)
     target_link_libraries(fmcw_lidar_windows PRIVATE fmcw_qt_common)
     target_compile_definitions(fmcw_lidar_windows PRIVATE FMCW_PLATFORM_NAME="Windows")
-    foreach(_runtime_dll IN ITEMS "${FMCW_FFTW_RUNTIME_DLL}" "${FMCW_CUFFT_RUNTIME_DLL}")
+    foreach(_runtime_dll IN ITEMS
+        "${FMCW_FFTW_RUNTIME_DLL}"
+        "${FMCW_CUFFT_RUNTIME_DLL}"
+        ${FMCW_CUDNN_RUNTIME_DLLS})
       if(EXISTS "${_runtime_dll}")
         add_custom_command(TARGET fmcw_lidar_windows POST_BUILD
           COMMAND ${CMAKE_COMMAND} -E copy_if_different

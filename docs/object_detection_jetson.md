@@ -95,14 +95,43 @@ FMCW_JETSON_CENTERPOINT_WEIGHTS_ROOT=/home/kopti/CenterPoint_Waymo/weights/expor
 manifests before CMake starts. The normal build remains independent of CenterPoint while the
 option is `OFF`.
 
+The packaged `run.sh` loads `jetson.env` and exports the configured weights path to the Qt
+application. In the **3D Point Cloud** toolbar, use **Objects OFF/ON** to control inference.
+The button remains disabled until an applied processing configuration is using CUDA cuFFT.
+
+## Windows CUDA build
+
+Windows uses the same asynchronous detector service and Qt controls as Jetson. The development
+machine must provide CUDA, cuFFT, and the cuDNN development files (`cudnn.h`, `cudnn.lib`, and
+the matching runtime DLLs). Build from an x64 Visual Studio Developer PowerShell:
+
+```powershell
+.\deploy\windows\build_centerpoint.ps1 `
+  -CenterPointSource C:\path\to\LiDAR_recon `
+  -WeightsRoot "\\wsl.localhost\Ubuntu-22.04\home\kopti\CenterPoint_Waymo\weights\exported\pointpillars_full_novelocity_epoch12" `
+  -CudnnRoot C:\path\to\cudnn
+```
+
+The weights stay outside the Git worktrees. The toolbar can select a different exported root at
+runtime, or it can use `FMCW_CENTERPOINT_WEIGHTS_ROOT`. Windows packaging copies discovered
+cuDNN runtime DLLs beside the executable.
+
+## Runtime behavior
+
+- Object detection is rejected unless the applied FFT backend is CUDA cuFFT.
+- Inference runs on a separate capacity-one latest-frame queue, so it never blocks acquisition
+  or adds backlog when the GPU is slower than the scan rate.
+- Switching the processing configuration stops detection and clears the box overlay.
+- Disabling the toolbar button stops the detector and removes boxes immediately.
+- Windows and Jetson share this policy and runtime implementation.
+
 ## Integration order
 
 1. Validate the point conversion contract and fixed intensity mapping on recorded FMCW frames.
-2. Build the CenterPoint backend as a Jetson-only optional target for CUDA architecture 87.
-3. Run offline single-frame inference with the full grid and record p50/p95 timing.
-4. Parameterize the CUDA grid and benchmark the narrow-FOV crop without changing voxel size.
-5. Run inference asynchronously on complete `PointCloudSnapshot` frames.
-6. Publish `DetectionSnapshot` results to the Qt point-cloud view.
+2. Install Windows cuDNN development files and complete the native SM120 CenterPoint build.
+3. Run offline single-frame inference on Windows and AGX Orin with the full grid; record p50/p95.
+4. Validate the asynchronous Qt toggle and matching box overlay on recorded FMCW frames.
+5. Parameterize the CUDA grid and benchmark the narrow-FOV crop without changing voxel size.
 
 The Qt view already accepts matching detection snapshots and renders oriented 3D boxes with
 class, score, object count, and total inference time. It intentionally ignores detections from a

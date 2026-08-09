@@ -3,6 +3,7 @@
 #include "core/config_types.h"
 #include "core/device_interfaces.h"
 #include "core/system_state.h"
+#include "detection/detection_types.h"
 #include "processing/processing_snapshots.h"
 
 #include <QObject>
@@ -36,6 +37,12 @@ struct RuntimeStatus {
   bool connected = false;
   bool running = false;
   bool recording = false;
+  bool cuda_fft_active = false;
+  bool object_detection_compiled = false;
+  bool object_detection_enabled = false;
+  bool object_detection_ready = false;
+  std::uint64_t object_detection_frames_processed = 0;
+  std::uint64_t object_detection_frames_replaced = 0;
   bool digitizer_ready = false;
   bool edfa_ready = false;
   bool edfa_bypassed = true;
@@ -107,6 +114,7 @@ struct RuntimeStatus {
   QString active_operation;
   QString mcu_last_ack;
   QString mcu_detail;
+  QString object_detection_detail;
   QString detail;
 };
 
@@ -131,6 +139,7 @@ class ApplicationController final : public QObject {
   void updateProcessing(const ProcessingConfig& config);
   void setSelectedAScan(std::uint32_t record_index);
   void setLivePlotIndex(int plot_index);
+  void setObjectDetectionEnabled(bool enabled, QString weights_root);
   void setEdfaOutput(bool enabled);
   void uploadMcuWaveform();
   void captureSegmentationSnapshot();
@@ -143,6 +152,7 @@ class ApplicationController final : public QObject {
   void scanLineReady(fmcw::ScanLineSnapshotPtr snapshot);
   void bscanReady(fmcw::BScanSnapshotPtr snapshot);
   void pointCloudReady(fmcw::PointCloudSnapshotPtr snapshot);
+  void objectDetectionsReady(fmcw::DetectionSnapshotPtr snapshot);
   void segmentationSnapshotReady(fmcw::WaveformSnapshotPtr snapshot);
   void mcuUploadProgressChanged(fmcw::McuUploadProgress progress);
   void logMessage(QString level, QString source, QString message);
@@ -156,6 +166,7 @@ class ApplicationController final : public QObject {
   void enqueueScanLine(ScanLineSnapshotPtr snapshot);
   void enqueueBScan(BScanSnapshotPtr snapshot);
   void enqueuePointCloud(PointCloudSnapshotPtr snapshot);
+  void enqueueObjectDetections(DetectionSnapshotPtr snapshot);
   void schedulePendingUiDispatchLocked();
   void drainPendingUiUpdates();
 
@@ -168,6 +179,8 @@ class ApplicationController final : public QObject {
   ScanLineSnapshotPtr pending_scan_line_;
   BScanSnapshotPtr pending_bscan_;
   PointCloudSnapshotPtr pending_point_cloud_;
+  DetectionSnapshotPtr pending_detections_;
+  bool pending_detections_changed_ = false;
   bool ui_dispatch_scheduled_ = false;
   UiDispatchMetrics ui_dispatch_metrics_;
 };
@@ -181,3 +194,4 @@ Q_DECLARE_METATYPE(fmcw::FftSnapshotPtr)
 Q_DECLARE_METATYPE(fmcw::ScanLineSnapshotPtr)
 Q_DECLARE_METATYPE(fmcw::BScanSnapshotPtr)
 Q_DECLARE_METATYPE(fmcw::PointCloudSnapshotPtr)
+Q_DECLARE_METATYPE(fmcw::DetectionSnapshotPtr)

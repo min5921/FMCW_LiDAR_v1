@@ -18,6 +18,7 @@ mkdir -p -- "${package_dir}/config"
 
 install -m 0755 "${source_executable}" "${package_dir}/FMCW_LiDAR_Jetson"
 install -m 0755 "${script_dir}/run.sh" "${package_dir}/run.sh"
+install -m 0644 "${script_dir}/jetson.env" "${package_dir}/jetson.env"
 cp -a "${root_dir}/config/." "${package_dir}/config/"
 
 revision="source-bundle"

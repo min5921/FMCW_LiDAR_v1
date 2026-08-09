@@ -1,5 +1,7 @@
 #include "detection/centerpoint_input_builder.h"
 #include "detection/detection_types.h"
+#include "detection/object_detection_policy.h"
+#include "detection/object_detection_service.h"
 #include "detection/object_detector.h"
 
 #include <chrono>
@@ -7,7 +9,9 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <memory>
 #include <string>
+#include <thread>
 
 namespace {
 
@@ -115,6 +119,87 @@ void testDetectorConfigurationValidation() {
   expect(!cleanup_error, "temporary CenterPoint validation files are removed");
 }
 
+class FakeObjectDetector final : public fmcw::ObjectDetector {
+ public:
+  const char* backendName() const override { return "fake detector"; }
+
+  bool initialize(const fmcw::ObjectDetectorConfig&, std::string& error) override {
+    ready_ = true;
+    error.clear();
+    return true;
+  }
+
+  bool ready() const override { return ready_; }
+
+  fmcw::DetectionSnapshot detect(const fmcw::CenterPointInput& input) override {
+    fmcw::DetectionSnapshot snapshot;
+    snapshot.last_frame_id = input.last_frame_id;
+    snapshot.scan_frame_index = input.scan_frame_index;
+    snapshot.processing_config_revision = input.processing_config_revision;
+    snapshot.source_frame_complete = input.source_frame_complete;
+    snapshot.backend_ready = true;
+    snapshot.status = "ok";
+    return snapshot;
+  }
+
+ private:
+  bool ready_ = false;
+};
+
+void testObjectDetectionGate() {
+  auto gate = fmcw::evaluateObjectDetectionGate(
+      false, fmcw::FftBackendKind::Cuda, true, true);
+  expect(!gate.can_enable, "object detection is blocked before configuration is applied");
+
+  gate = fmcw::evaluateObjectDetectionGate(
+      true, fmcw::FftBackendKind::Fftw, true, true);
+  expect(!gate.can_enable, "object detection is blocked for FFTW processing");
+
+  gate = fmcw::evaluateObjectDetectionGate(
+      true, fmcw::FftBackendKind::Cuda, true, true);
+  expect(gate.can_enable, "object detection is allowed for CUDA cuFFT processing");
+
+  gate = fmcw::evaluateObjectDetectionGate(
+      true, fmcw::FftBackendKind::Cuda, false, true);
+  expect(!gate.can_enable, "object detection is blocked when CenterPoint is not compiled");
+
+  gate = fmcw::evaluateObjectDetectionGate(
+      true, fmcw::FftBackendKind::Cuda, true, false);
+  expect(!gate.can_enable, "object detection is blocked without a CUDA runtime device");
+}
+
+void testObjectDetectionService() {
+  fmcw::ObjectDetectionService service(std::make_unique<FakeObjectDetector>());
+  fmcw::ObjectDetectorConfig config;
+  std::string error;
+  expect(service.initialize(config, error), "fake detection service initializes: " + error);
+  expect(service.start(error), "fake detection service starts: " + error);
+
+  auto incomplete = std::make_shared<fmcw::PointCloudSnapshot>();
+  expect(service.enqueue(incomplete) == fmcw::DetectionEnqueueResult::InvalidFrame,
+         "incomplete point-cloud frame is rejected");
+
+  auto complete = std::make_shared<fmcw::PointCloudSnapshot>();
+  complete->last_frame_id = 41;
+  complete->scan_frame_index = 7;
+  complete->processing_config_revision = 3;
+  complete->complete = true;
+  fmcw::PointXYZI point;
+  point.valid = true;
+  complete->points.push_back(point);
+  expect(service.enqueue(complete) == fmcw::DetectionEnqueueResult::Accepted,
+         "complete point-cloud frame enters the asynchronous detector");
+
+  for (int attempt = 0; attempt < 100 && service.latestSnapshot() == nullptr; ++attempt) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+  }
+  const auto result = service.latestSnapshot();
+  expect(result != nullptr && result->scan_frame_index == 7,
+         "asynchronous detector publishes the matching scan frame");
+  service.stop();
+  expect(!service.status().running, "detection service stops cleanly");
+}
+
 }  // namespace
 
 int main() {
@@ -122,6 +207,8 @@ int main() {
   testVelocityFeatureCanBeEnabledLater();
   testBoxClassNames();
   testDetectorConfigurationValidation();
+  testObjectDetectionGate();
+  testObjectDetectionService();
   if (failures != 0) {
     std::cerr << failures << " detection input test(s) failed\n";
     return 1;

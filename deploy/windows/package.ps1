@@ -54,7 +54,8 @@ Get-ChildItem -LiteralPath $configSource -Force | ForEach-Object {
 }
 
 Get-ChildItem -LiteralPath $buildRoot -File | Where-Object {
-  $_.Name -eq "fftw3f.dll" -or $_.Name -like "cufft64_*.dll"
+  $_.Name -eq "fftw3f.dll" -or $_.Name -like "cufft64_*.dll" -or
+      $_.Name -like "cudnn*.dll"
 } | ForEach-Object {
   Copy-Item -LiteralPath $_.FullName -Destination $outputRoot -Force
 }
