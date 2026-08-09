@@ -27,17 +27,40 @@ be reused after that refactor.
 
 ## External model files
 
-Keep weights outside both Git worktrees so they are not duplicated or committed:
+The selected training checkpoint is stored in WSL:
 
 ```text
-C:\Users\user\Desktop\Project\FMCW_LiDAR_Models\centerpoint\waymo_novelocity\
-  04_pfn\
-  06_rpn\
-  07_head\
+/home/kopti/CenterPoint_Waymo/weights/
+  centerpoint_waymo_pointpillars_full_novelocity_epoch12.pth
 ```
 
-Use the equivalent external path on Jetson and pass the root directory through runtime
-configuration. The application must verify all three directories before enabling inference.
+Its verified SHA-256 is:
+
+```text
+0dc61c02ef0385b9a7f768762f9154beaaa4a2b16dcef3340c2b9701d30de25b
+```
+
+The C++ runtime does not read the PyTorch checkpoint directly. The PFN, RPN, and CenterHead
+exporters produce the runtime root below while leaving the original checkpoint unchanged:
+
+```text
+/home/kopti/CenterPoint_Waymo/weights/exported/pointpillars_full_novelocity_epoch12/
+  04_pfn/
+  06_rpn/
+  07_head/
+```
+
+Windows can inspect the same root through:
+
+```text
+\\wsl.localhost\Ubuntu-22.04\home\kopti\CenterPoint_Waymo\weights\exported\
+  pointpillars_full_novelocity_epoch12\
+```
+
+Keep the runtime weights outside both Git worktrees so they are not duplicated or committed.
+Copy this exported root to an equivalent external path on Jetson and pass that root directory
+through runtime configuration. The application must verify all three directories before enabling
+inference.
 
 ## Integration order
 
