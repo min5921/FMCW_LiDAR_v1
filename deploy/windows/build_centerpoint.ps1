@@ -7,7 +7,9 @@ param(
   [string]$CudnnRoot,
   [string]$SamplePoints = $env:CENTERPOINT_SAMPLE_POINTS,
   [string]$QtRoot = $(if ($env:QT_ROOT) { $env:QT_ROOT } else { "C:\Qt\6.11.0\msvc2022_64" }),
-  [string]$BuildDirectory = "build/preset-windows-centerpoint-release"
+  [string]$BuildDirectory = "build/preset-windows-centerpoint-release",
+  [string]$PackageDirectory = "build/package/FMCW_LiDAR_CenterPoint",
+  [switch]$SkipPackage
 )
 
 Set-StrictMode -Version Latest
@@ -93,6 +95,16 @@ if ($LASTEXITCODE -ne 0) {
   throw "CenterPoint tests failed with exit code $LASTEXITCODE"
 }
 
+if (-not $SkipPackage) {
+  & (Join-Path $PSScriptRoot "package.ps1") `
+      -BuildDirectory (Join-Path $BuildDirectory "src") `
+      -OutputDirectory $PackageDirectory
+}
+
 Write-Host "Windows CenterPoint build completed: $buildPath"
+if (-not $SkipPackage) {
+  Write-Host "Launch the packaged application, not the development executable:"
+  Write-Host (Join-Path (Join-Path $repoRoot $PackageDirectory) "FMCW_LiDAR.exe")
+}
 Write-Host "Set FMCW_CENTERPOINT_WEIGHTS_ROOT before launching the application:"
 Write-Host ('$env:FMCW_CENTERPOINT_WEIGHTS_ROOT = "{0}"' -f $weightsPath)

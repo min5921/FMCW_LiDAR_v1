@@ -140,6 +140,16 @@ This configuration built the complete Windows Qt application and passed all 8 co
 The adapter inference smoke test consumed 183,680 points and returned 5 boxes in 24.82 ms on one
 run. Treat that timing as a functional smoke-test result, not a p50/p95 benchmark.
 
+The build script then creates the runnable package at:
+
+```text
+build\package\FMCW_LiDAR_CenterPoint\FMCW_LiDAR.exe
+```
+
+Launch this packaged executable. The executable under
+`build\preset-windows-centerpoint-release\src` is a development artifact and does not contain
+the Qt runtime DLLs or `platforms/qwindows.dll` needed for direct Explorer launch.
+
 The weights stay outside the Git worktrees. The toolbar can select a different exported root at
 runtime, or it can use `FMCW_CENTERPOINT_WEIGHTS_ROOT`. Windows packaging copies discovered
 cuDNN runtime DLLs beside the executable.

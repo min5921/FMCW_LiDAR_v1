@@ -80,6 +80,9 @@ if ($LASTEXITCODE -ne 0) {
 $requiredFiles = @(
   $packagedExe,
   (Join-Path $outputRoot "Qt6Core.dll"),
+  (Join-Path $outputRoot "Qt6Gui.dll"),
+  (Join-Path $outputRoot "Qt6OpenGL.dll"),
+  (Join-Path $outputRoot "Qt6OpenGLWidgets.dll"),
   (Join-Path $outputRoot "Qt6Widgets.dll"),
   (Join-Path $outputRoot "platforms/qwindows.dll")
 )
