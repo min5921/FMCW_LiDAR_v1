@@ -36,6 +36,9 @@ struct McuResponse {
   bool has_count = false;
 };
 
+bool mcuWaveformContractEquivalent(const SystemConfig& previous,
+                                   const SystemConfig& next);
+
 class McuProtocol {
  public:
   static std::vector<McuWaveformFrame> buildConfiguredWaveform(const SystemConfig& config,

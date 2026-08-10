@@ -18,6 +18,7 @@
 #include <limits>
 #include <memory>
 #include <mutex>
+#include <unordered_map>
 #include <vector>
 
 #ifndef FMCW_HAS_ALAZAR_SDK
@@ -152,6 +153,7 @@ struct AlazarDmaLeaseState {
   std::condition_variable condition;
   std::deque<U32> released_indices;
   std::size_t outstanding = 0U;
+  std::unordered_map<U32, std::chrono::steady_clock::time_point> acquired_at;
   bool repost_enabled = false;
 };
 
@@ -177,6 +179,7 @@ struct AlazarDmaLease {
     if (state->outstanding > 0U) {
       --state->outstanding;
     }
+    state->acquired_at.erase(buffer_index);
     if (state->repost_enabled) {
       state->released_indices.push_back(buffer_index);
     }
@@ -256,8 +259,27 @@ AlazarBoardDetection AlazarDigitizer::detectConnectedBoard() {
 std::string AlazarDigitizer::name() const { return "AlazarTech ATS AutoDMA digitizer"; }
 
 DigitizerTelemetry AlazarDigitizer::telemetry() const {
-  std::lock_guard<std::mutex> lock(telemetry_mutex_);
-  return telemetry_;
+  std::lock_guard<std::mutex> lock(mutex_);
+  DigitizerTelemetry snapshot;
+  {
+    std::lock_guard<std::mutex> telemetry_lock(telemetry_mutex_);
+    snapshot = telemetry_;
+  }
+#if FMCW_HAS_ALAZAR_SDK
+  snapshot.dma_buffers_configured = static_cast<std::uint32_t>(impl_->buffers.size());
+  snapshot.dma_buffers_posted = static_cast<std::uint32_t>(impl_->posted_indices.size());
+  if (impl_->lease_state) {
+    std::lock_guard<std::mutex> lease_lock(impl_->lease_state->mutex);
+    snapshot.dma_buffers_in_use = static_cast<std::uint32_t>(impl_->lease_state->outstanding);
+    const auto now = std::chrono::steady_clock::now();
+    for (const auto& entry : impl_->lease_state->acquired_at) {
+      snapshot.oldest_dma_lease_ms = std::max(
+          snapshot.oldest_dma_lease_ms,
+          std::chrono::duration<double, std::milli>(now - entry.second).count());
+    }
+  }
+#endif
+  return snapshot;
 }
 
 bool AlazarDigitizer::configure(const SystemConfig& config, std::string& error) {
@@ -370,22 +392,22 @@ bool AlazarDigitizer::connect(std::string& error) {
 
 void AlazarDigitizer::disconnect() {
   std::unique_lock<std::mutex> lock(mutex_);
+  std::string disconnect_detail = sdkAvailable() ? "Alazar disconnected" : "Alazar SDK not linked";
 #if FMCW_HAS_ALAZAR_SDK
-  std::string ignored;
-  if (!abortAsyncReadLocked(lock, ignored)) {
-    std::lock_guard<std::mutex> telemetry_lock(telemetry_mutex_);
-    telemetry_.device.detail = ignored;
-    return;
-  }
+  std::string cleanup_error;
+  const bool aborted = abortAsyncReadLocked(lock, cleanup_error);
   releaseBuffers();
   impl_->board = nullptr;
   impl_->capabilities = nullptr;
   impl_->bits_per_sample = 0U;
+  if (!aborted) {
+    disconnect_detail += "; cleanup warning: " + cleanup_error;
+  }
 #endif
   {
     std::lock_guard<std::mutex> telemetry_lock(telemetry_mutex_);
     telemetry_.device = {};
-    telemetry_.device.detail = sdkAvailable() ? "Alazar disconnected" : "Alazar SDK not linked";
+    telemetry_.device.detail = std::move(disconnect_detail);
   }
 }
 
@@ -634,6 +656,7 @@ FrameWaitResult AlazarDigitizer::waitForBatch(MutableRawFrameBatchPtr& batch,
   {
     std::lock_guard<std::mutex> lease_lock(impl_->lease_state->mutex);
     ++impl_->lease_state->outstanding;
+    impl_->lease_state->acquired_at[buffer_index] = std::chrono::steady_clock::now();
   }
   mutable_batch->sample_owner = std::make_shared<AlazarDmaLease>(
       impl_->buffers[buffer_index], impl_->lease_state, buffer_index);
@@ -735,12 +758,15 @@ bool AlazarDigitizer::abort(std::string& error) {
 bool AlazarDigitizer::stop(std::string& error) {
   std::unique_lock<std::mutex> lock(mutex_);
 #if FMCW_HAS_ALAZAR_SDK
-  if (!abortAsyncReadLocked(lock, error)) {
+  const bool aborted = abortAsyncReadLocked(lock, error);
+  releaseBuffers();
+  if (!aborted) {
     std::lock_guard<std::mutex> telemetry_lock(telemetry_mutex_);
+    telemetry_.device.running = false;
+    telemetry_.device.ready = telemetry_.device.connected;
     telemetry_.device.detail = error;
     return false;
   }
-  releaseBuffers();
 #endif
   {
     std::lock_guard<std::mutex> telemetry_lock(telemetry_mutex_);
@@ -753,20 +779,23 @@ bool AlazarDigitizer::stop(std::string& error) {
 }
 
 bool AlazarDigitizer::abortAsyncReadLocked(std::unique_lock<std::mutex>& lock,
-                                           std::string& error) {
+                                            std::string& error) {
 #if FMCW_HAS_ALAZAR_SDK
-  if (impl_->async_prepared && impl_->board != nullptr) {
-    if (!check(AlazarAbortAsyncRead(impl_->board), "AlazarAbortAsyncRead", error)) {
-      return false;
-    }
-    impl_->async_prepared = false;
-  }
   if (impl_->lease_state) {
     std::lock_guard<std::mutex> lease_lock(impl_->lease_state->mutex);
     impl_->lease_state->repost_enabled = false;
     impl_->lease_state->condition.notify_all();
   }
+  RETURN_CODE abort_code = ApiSuccess;
+  if (impl_->async_prepared && impl_->board != nullptr) {
+    abort_code = AlazarAbortAsyncRead(impl_->board);
+    impl_->async_prepared = false;
+  }
   impl_->api_wait_condition.wait(lock, [this] { return !impl_->api_wait_active; });
+  if (abort_code != ApiSuccess && abort_code != ApiDmaDone) {
+    error = std::string("AlazarAbortAsyncRead failed: ") + AlazarErrorToText(abort_code);
+    return false;
+  }
 #else
   static_cast<void>(lock);
 #endif
@@ -840,6 +869,7 @@ void AlazarDigitizer::releaseBuffers() {
     std::lock_guard<std::mutex> lease_lock(impl_->lease_state->mutex);
     impl_->lease_state->repost_enabled = false;
     impl_->lease_state->released_indices.clear();
+    impl_->lease_state->acquired_at.clear();
     impl_->lease_state->condition.notify_all();
   }
   impl_->posted_indices.clear();

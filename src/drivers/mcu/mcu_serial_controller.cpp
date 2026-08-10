@@ -23,12 +23,24 @@ bool McuSerialController::configure(const SystemConfig& config, std::string& err
     error = "Cannot configure MCU while scan output is active";
     return false;
   }
+  const bool retain_waveform = configured_ && loaded_waveform_ &&
+      mcuWaveformContractEquivalent(system_config_, config);
   config_ = config.mcu;
+  system_config_ = config;
   waveform_sample_rate_hz_ = config.scan.scanner_sample_rate_hz;
-  loaded_waveform_.reset();
+  const auto retained_waveform = retain_waveform ? loaded_waveform_ : McuWaveformSnapshotPtr{};
+  const auto retained_points = retain_waveform ? status_.waveform_points : 0U;
+  const auto retained_edges = retain_waveform ? status_.marker_rising_edges : 0U;
+  const auto retained_rate = retain_waveform ? status_.waveform_sample_rate_hz : 0.0;
+  loaded_waveform_ = retained_waveform;
   status_ = {};
+  status_.waveform_points = retained_points;
+  status_.marker_rising_edges = retained_edges;
+  status_.waveform_sample_rate_hz = retained_rate;
   status_.device.ready = !config_.enabled;
-  status_.device.detail = config_.enabled ? "MCU serial configured" : "MCU disabled by profile";
+  status_.device.detail = !config_.enabled
+      ? "MCU disabled by profile"
+      : retain_waveform ? "MCU serial configured; waveform retained" : "MCU serial configured";
   configured_ = true;
   error.clear();
   return true;
@@ -52,8 +64,10 @@ bool McuSerialController::connect(std::string& error) {
     return false;
   }
   status_.device.connected = true;
-  status_.device.ready = false;
-  status_.device.detail = "MCU connected; waveform upload required";
+  status_.device.ready = loaded_waveform_ && loaded_waveform_->valid() && status_.waveform_points > 0U;
+  status_.device.detail = status_.device.ready
+      ? "MCU connected; waveform retained"
+      : "MCU connected; waveform upload required";
   error.clear();
   return true;
 }
@@ -64,13 +78,12 @@ void McuSerialController::disconnect() {
   status_.device.connected = false;
   status_.device.running = false;
   status_.device.ready = !config_.enabled;
-  status_.waveform_points = 0;
-  status_.marker_rising_edges = 0;
-  status_.waveform_sample_rate_hz = 0.0;
   status_.scan_enabled = false;
-  loaded_waveform_.reset();
   status_.last_ack.clear();
-  status_.device.detail = config_.enabled ? "MCU disconnected" : "MCU bypass active";
+  status_.device.detail = !config_.enabled
+      ? "MCU bypass active"
+      : loaded_waveform_ ? "MCU disconnected; waveform retained in device RAM"
+                         : "MCU disconnected";
 }
 
 bool McuSerialController::uploadWaveform(const std::vector<McuWaveformFrame>& frames, std::string& error,

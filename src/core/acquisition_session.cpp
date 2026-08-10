@@ -53,7 +53,7 @@ AcquisitionSession::AcquisitionSession(IDigitizer& digitizer, IEdfaController& e
 AcquisitionSession::~AcquisitionSession() { disconnect(); }
 
 bool AcquisitionSession::configure(const SystemConfig& config, std::uint64_t config_revision, std::string& error) {
-  if (running_.load()) {
+  if (armed_.load() || running_.load()) {
     error = "Cannot configure devices while acquisition is running";
     return false;
   }
@@ -106,7 +106,7 @@ bool AcquisitionSession::connect(std::string& error) {
 }
 
 void AcquisitionSession::disconnect() {
-  if (running_.load()) {
+  if (armed_.load() || running_.load()) {
     std::string ignored;
     stopDevices(true, ignored);
   } else {
@@ -117,11 +117,13 @@ void AcquisitionSession::disconnect() {
   edfa_.disconnect();
   digitizer_.disconnect();
   connected_.store(false);
+  armed_.store(false);
+  running_.store(false);
 }
 
-bool AcquisitionSession::start(std::string& error) {
-  if (!configured_.load() || !connected_.load() || running_.load()) {
-    error = "Acquisition session is not configured and connected, or is already running";
+bool AcquisitionSession::arm(std::string& error) {
+  if (!configured_.load() || !connected_.load() || armed_.load() || running_.load()) {
+    error = "Acquisition session is not configured and connected, or is already armed";
     return false;
   }
 
@@ -155,11 +157,23 @@ bool AcquisitionSession::start(std::string& error) {
     edfa_.emergencyOff(ignored);
     return false;
   }
+
+  armed_.store(true);
+  error.clear();
+  return true;
+}
+
+bool AcquisitionSession::enableTrigger(std::string& error) {
+  if (!armed_.load() || running_.load()) {
+    error = "Acquisition session must be armed before enabling its trigger source";
+    return false;
+  }
   if (config_.mcu.enabled && !mcu_.startScan(error)) {
     std::string ignored;
     digitizer_.abort(ignored);
     digitizer_.stop(ignored);
     edfa_.emergencyOff(ignored);
+    armed_.store(false);
     return false;
   }
 
@@ -168,9 +182,16 @@ bool AcquisitionSession::start(std::string& error) {
   return true;
 }
 
+bool AcquisitionSession::start(std::string& error) {
+  if (!arm(error)) {
+    return false;
+  }
+  return enableTrigger(error);
+}
+
 FrameWaitResult AcquisitionSession::waitForFrame(RawFrame& frame, std::chrono::milliseconds timeout,
                                                   std::string& error) {
-  if (!running_.load()) {
+  if (!armed_.load()) {
     error = "Acquisition is not running";
     return FrameWaitResult::Stopped;
   }
@@ -178,6 +199,7 @@ FrameWaitResult AcquisitionSession::waitForFrame(RawFrame& frame, std::chrono::m
   if (result != FrameWaitResult::FrameReady) {
     if (result == FrameWaitResult::Stopped) {
       running_.store(false);
+      armed_.store(false);
     }
     return result;
   }
@@ -216,7 +238,7 @@ FrameWaitResult AcquisitionSession::waitForBatch(RawFrameBatchPtr& batch,
                                                  std::chrono::milliseconds timeout,
                                                  std::string& error) {
   batch.reset();
-  if (!running_.load()) {
+  if (!armed_.load()) {
     error = "Acquisition is not running";
     return FrameWaitResult::Stopped;
   }
@@ -226,6 +248,7 @@ FrameWaitResult AcquisitionSession::waitForBatch(RawFrameBatchPtr& batch,
   if (result != FrameWaitResult::FrameReady) {
     if (result == FrameWaitResult::Stopped) {
       running_.store(false);
+      armed_.store(false);
     }
     return result;
   }
@@ -295,6 +318,8 @@ bool AcquisitionSession::configured() const { return configured_.load(); }
 
 bool AcquisitionSession::connected() const { return connected_.load(); }
 
+bool AcquisitionSession::armed() const { return armed_.load(); }
+
 bool AcquisitionSession::running() const { return running_.load(); }
 
 AcquisitionTelemetrySnapshot AcquisitionSession::telemetry() const {
@@ -303,7 +328,7 @@ AcquisitionTelemetrySnapshot AcquisitionSession::telemetry() const {
   snapshot.config_revision = config_revision_.load();
   snapshot.configured = configured_.load();
   snapshot.connected = connected_.load();
-  snapshot.running = running_.load();
+  snapshot.running = armed_.load();
   snapshot.digitizer = digitizer_.telemetry();
   snapshot.edfa = edfa_.status();
   snapshot.mcu = mcu_.status();
@@ -323,7 +348,7 @@ bool AcquisitionSession::stopDevices(bool emergency, std::string& error) {
       success = false;
     }
   }
-  if (running_.load() || digitizer_.telemetry().device.running) {
+  if (armed_.load() || running_.load() || digitizer_.telemetry().device.running) {
     device_error.clear();
     if (!digitizer_.abort(device_error)) {
       appendError(error, "digitizer abort", device_error);
@@ -343,6 +368,7 @@ bool AcquisitionSession::stopDevices(bool emergency, std::string& error) {
       success = false;
     }
   }
+  armed_.store(false);
   running_.store(false);
   if (success) {
     error.clear();

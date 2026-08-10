@@ -58,6 +58,10 @@ struct RuntimeStatus {
   std::uint64_t trigger_misses = 0;
   double dma_bscan_rate_hz = 0.0;
   double dma_bscan_period_ms = 0.0;
+  std::uint32_t dma_buffers_configured = 0;
+  std::uint32_t dma_buffers_posted = 0;
+  std::uint32_t dma_buffers_in_use = 0;
+  double oldest_dma_lease_ms = 0.0;
   std::uint64_t config_revision = 0;
   std::uint64_t processing_revision = 0;
   std::uint64_t frames_received = 0;

@@ -25,11 +25,11 @@ namespace {
 constexpr std::array<char, 8> kRawV1Magic{{'F', 'M', 'C', 'W', 'R', 'A', 'W', '1'}};
 constexpr std::array<char, 8> kRawV2Magic{{'F', 'M', 'C', 'W', 'R', 'A', 'W', '2'}};
 constexpr std::array<char, 8> kRawV3Magic{{'F', 'M', 'C', 'W', 'R', 'A', 'W', '3'}};
-constexpr std::array<char, 8> kProcessedMagic{{'F', 'M', 'C', 'W', 'P', 'R', 'O', '2'}};
+constexpr std::array<char, 8> kPointCloudMagic{{'F', 'M', 'C', 'W', 'P', 'C', 'D', '1'}};
 constexpr std::uint32_t kRawRecordMagic = 0x314D5246U;
 constexpr std::uint32_t kRawBlockMagic = 0x32424D46U;
-constexpr std::uint32_t kProcessedRecordMagic = 0x31435250U;
-constexpr std::uint32_t kProcessedFormatVersion = 2U;
+constexpr std::uint32_t kPointCloudFrameMagic = 0x31444350U;
+constexpr std::uint32_t kPointCloudFormatVersion = 1U;
 constexpr std::uint64_t kMaximumReplayRecordSamples = 64U * 1024U * 1024U;
 constexpr std::uint64_t kMaximumReplayBatchSamples = 128U * 1024U * 1024U;
 constexpr std::uint64_t kMaximumReplayBatchPayloadBytes =
@@ -72,25 +72,6 @@ void appendScalar(std::vector<std::uint8_t>& bytes, const Value& value) {
   static_assert(std::is_arithmetic<Value>::value || std::is_enum<Value>::value, "Scalar required");
   const auto* first = reinterpret_cast<const std::uint8_t*>(&value);
   bytes.insert(bytes.end(), first, first + sizeof(Value));
-}
-
-bool writeString(std::ostream& stream, const std::string& value) {
-  if (value.size() > std::numeric_limits<std::uint32_t>::max()) {
-    return false;
-  }
-  const auto size = static_cast<std::uint32_t>(value.size());
-  return writeScalar(stream, size) &&
-      (size == 0U || static_cast<bool>(stream.write(value.data(), static_cast<std::streamsize>(size))));
-}
-
-bool writeFloatVector(std::ostream& stream, const std::vector<float>& values) {
-  if (values.size() > std::numeric_limits<std::uint32_t>::max()) {
-    return false;
-  }
-  const auto size = static_cast<std::uint32_t>(values.size());
-  return writeScalar(stream, size) &&
-      (size == 0U || static_cast<bool>(stream.write(reinterpret_cast<const char*>(values.data()),
-                                                    static_cast<std::streamsize>(size * sizeof(float)))));
 }
 
 std::string jsonEscape(const std::string& value) {
@@ -190,8 +171,8 @@ bool writeSidecar(const std::filesystem::path& path, const WriterOpenOptions& op
          << ",\n"
          << "  \"stream_type\": \"" << stream_type << "\",\n"
          << "  \"data_format_version\": "
-         << (std::strcmp(stream_type, "processed") == 0
-                 ? kProcessedFormatVersion
+         << (std::strcmp(stream_type, "point_cloud_xyziv") == 0
+                 ? kPointCloudFormatVersion
                  : open_options.raw_stream.format_version)
          << ",\n"
          << "  \"completed\": " << (finalize_options.completed ? "true" : "false") << ",\n"
@@ -448,44 +429,30 @@ bool writeRawBlock(std::ostream& stream, const RawFrameBatch& batch,
   return true;
 }
 
-bool writePeak(std::ostream& stream, const PeakMeasurement& peak) {
-  const auto state = static_cast<std::uint8_t>(peak.state);
-  const auto valid = static_cast<std::uint8_t>(peak.valid ? 1U : 0U);
-  return writeScalar(stream, peak.discrete_bin) && writeScalar(stream, peak.peak_bin) &&
-      writeScalar(stream, peak.magnitude_db) && writeScalar(stream, state) && writeScalar(stream, valid);
-}
-
-bool writeProcessedRecord(std::ostream& stream, const ProcessedFrame& frame) {
-  const auto scan_valid = static_cast<std::uint8_t>(frame.scan_position.valid ? 1U : 0U);
-  const auto angle_calibrated = static_cast<std::uint8_t>(
-      frame.scan_position.angle_calibrated ? 1U : 0U);
-  const auto fast_axis = static_cast<std::uint8_t>(frame.scan_position.fast_axis);
-  const auto fast_axis_direction = static_cast<std::uint8_t>(
-      frame.scan_position.fast_axis_direction);
-  const auto coordinate_source = static_cast<std::uint8_t>(frame.scan_position.source);
-  const auto measurement_valid = static_cast<std::uint8_t>(frame.measurement_valid ? 1U : 0U);
-  const auto point_valid = static_cast<std::uint8_t>(frame.point.valid ? 1U : 0U);
-  const auto stop_requested = static_cast<std::uint8_t>(frame.stop_requested ? 1U : 0U);
-  return writeScalar(stream, kProcessedRecordMagic) && writeScalar(stream, frame.frame_id) &&
-      writeScalar(stream, frame.source_timestamp_ns) && writeScalar(stream, frame.config_revision) &&
-      writeScalar(stream, frame.processing_config_revision) && writeScalar(stream, frame.scan_position.x_index) &&
-      writeScalar(stream, frame.scan_position.y_index) &&
-      writeScalar(stream, frame.scan_position.trajectory_sample_index) &&
-      writeScalar(stream, frame.scan_position.x_command) &&
-      writeScalar(stream, frame.scan_position.y_command) &&
-      writeScalar(stream, frame.scan_position.x_angle_deg) &&
-      writeScalar(stream, frame.scan_position.y_angle_deg) &&
-      writeScalar(stream, fast_axis) && writeScalar(stream, fast_axis_direction) &&
-      writeScalar(stream, coordinate_source) && writeScalar(stream, angle_calibrated) &&
-      writeScalar(stream, scan_valid) &&
-      writePeak(stream, frame.up_peak) && writePeak(stream, frame.down_peak) &&
-      writeScalar(stream, frame.distance_m) && writeScalar(stream, frame.velocity_mps) &&
-      writeScalar(stream, frame.point.x) && writeScalar(stream, frame.point.y) && writeScalar(stream, frame.point.z) &&
-      writeScalar(stream, frame.point.intensity) && writeScalar(stream, frame.point.velocity) &&
-      writeScalar(stream, frame.point.scan_x_command) && writeScalar(stream, frame.point.scan_y_command) &&
-      writeScalar(stream, point_valid) && writeScalar(stream, measurement_valid) && writeScalar(stream, stop_requested) &&
-      writeScalar(stream, frame.processing_latency_ms) && writeFloatVector(stream, frame.up_fft_magnitude_db) &&
-      writeFloatVector(stream, frame.down_fft_magnitude_db) && writeString(stream, frame.processing_note);
+bool writePointCloudFrame(std::ostream& stream, const PointCloudSnapshot& frame) {
+  const auto expected_points = static_cast<std::uint64_t>(frame.width) * frame.height;
+  if (!frame.complete || expected_points != frame.points.size() ||
+      frame.points.size() > std::numeric_limits<std::uint32_t>::max()) {
+    return false;
+  }
+  const auto point_count = static_cast<std::uint32_t>(frame.points.size());
+  if (!writeScalar(stream, kPointCloudFrameMagic) ||
+      !writeScalar(stream, frame.last_frame_id) ||
+      !writeScalar(stream, frame.scan_frame_index) ||
+      !writeScalar(stream, frame.processing_config_revision) ||
+      !writeScalar(stream, frame.width) || !writeScalar(stream, frame.height) ||
+      !writeScalar(stream, point_count)) {
+    return false;
+  }
+  for (const auto& point : frame.points) {
+    const auto valid = static_cast<std::uint8_t>(point.valid ? 1U : 0U);
+    if (!writeScalar(stream, point.x) || !writeScalar(stream, point.y) ||
+        !writeScalar(stream, point.z) || !writeScalar(stream, point.intensity) ||
+        !writeScalar(stream, point.velocity) || !writeScalar(stream, valid)) {
+      return false;
+    }
+  }
+  return true;
 }
 
 double throughputMbps(std::uint64_t bytes, std::chrono::steady_clock::time_point started) {
@@ -571,6 +538,7 @@ struct BinaryRawFrameWriter::Impl {
   std::uint64_t total_bytes = 0U;
   std::uint64_t split_bytes = 0U;
   std::chrono::steady_clock::time_point started;
+  std::chrono::steady_clock::time_point last_flush;
   bool finalized = false;
 };
 
@@ -637,6 +605,7 @@ bool BinaryRawFrameWriter::open(const WriterOpenOptions& options, std::string& e
   impl_->current_part_bytes = 0U;
   impl_->total_bytes = 0U;
   impl_->started = std::chrono::steady_clock::now();
+  impl_->last_flush = impl_->started;
   impl_->split_bytes = static_cast<std::uint64_t>(std::max(options.split_file_size_gb, 1.0e-6) * 1.0e9);
   impl_->status = {};
   impl_->status.open = true;
@@ -687,9 +656,16 @@ bool BinaryRawFrameWriter::write(const RawFrame& frame, std::string& error) {
   ++impl_->status.frames_written;
   ++impl_->status.blocks_written;
   impl_->status.bytes_written = impl_->total_bytes;
-  if (impl_->options.flush_interval_frames > 0U &&
-      impl_->status.frames_written % impl_->options.flush_interval_frames == 0U) {
+  const auto now = std::chrono::steady_clock::now();
+  if (now - impl_->last_flush >=
+      std::chrono::milliseconds(impl_->options.flush_interval_ms)) {
     impl_->stream.flush();
+    impl_->last_flush = now;
+    if (!impl_->stream) {
+      error = "Raw binary periodic flush failed";
+      impl_->status.detail = error;
+      return false;
+    }
   }
   impl_->status.throughput_mbps = throughputMbps(impl_->total_bytes, impl_->started);
   error.clear();
@@ -735,11 +711,16 @@ bool BinaryRawFrameWriter::writeBatch(const RawFrameBatch& batch, std::string& e
   ++impl_->status.blocks_written;
   impl_->status.frames_written += batch.records.size();
   impl_->status.bytes_written = impl_->total_bytes;
-  if (impl_->options.flush_interval_frames > 0U &&
-      impl_->status.frames_written / impl_->options.flush_interval_frames !=
-          (impl_->status.frames_written - batch.records.size()) /
-              impl_->options.flush_interval_frames) {
+  const auto now = std::chrono::steady_clock::now();
+  if (now - impl_->last_flush >=
+      std::chrono::milliseconds(impl_->options.flush_interval_ms)) {
     impl_->stream.flush();
+    impl_->last_flush = now;
+    if (!impl_->stream) {
+      error = "Raw DMA block periodic flush failed";
+      impl_->status.detail = error;
+      return false;
+    }
   }
   impl_->status.throughput_mbps = throughputMbps(impl_->total_bytes, impl_->started);
   error.clear();
@@ -753,6 +734,7 @@ bool BinaryRawFrameWriter::flush(std::string& error) {
     return false;
   }
   impl_->stream.flush();
+  impl_->last_flush = std::chrono::steady_clock::now();
   if (!impl_->stream) {
     error = "Raw writer flush failed";
     return false;
@@ -797,7 +779,7 @@ WriterStatus BinaryRawFrameWriter::status() const {
   return impl_->status;
 }
 
-struct BinaryProcessedFrameWriter::Impl {
+struct BinaryPointCloudFrameWriter::Impl {
   mutable std::mutex mutex;
   WriterOpenOptions options;
   std::ofstream stream;
@@ -805,16 +787,17 @@ struct BinaryProcessedFrameWriter::Impl {
   std::filesystem::path data_file;
   std::uint64_t bytes_written = 0U;
   std::chrono::steady_clock::time_point started;
+  std::chrono::steady_clock::time_point last_flush;
   bool finalized = false;
 };
 
-BinaryProcessedFrameWriter::BinaryProcessedFrameWriter() : impl_(std::make_unique<Impl>()) {}
-BinaryProcessedFrameWriter::~BinaryProcessedFrameWriter() = default;
+BinaryPointCloudFrameWriter::BinaryPointCloudFrameWriter() : impl_(std::make_unique<Impl>()) {}
+BinaryPointCloudFrameWriter::~BinaryPointCloudFrameWriter() = default;
 
-bool BinaryProcessedFrameWriter::open(const WriterOpenOptions& options, std::string& error) {
+bool BinaryPointCloudFrameWriter::open(const WriterOpenOptions& options, std::string& error) {
   std::lock_guard<std::mutex> lock(impl_->mutex);
   if (!littleEndianHost() || impl_->status.open || options.session_directory.empty() || options.file_stem.empty()) {
-    error = "Processed writer open options are invalid or the writer is already open";
+    error = "Point cloud writer open options are invalid or the writer is already open";
     return false;
   }
   std::error_code directory_error;
@@ -830,15 +813,16 @@ bool BinaryProcessedFrameWriter::open(const WriterOpenOptions& options, std::str
   impl_->options = options;
   impl_->stream.clear();
   impl_->bytes_written = 0U;
-  impl_->data_file = options.session_directory / (options.file_stem + ".processed.bin");
+  impl_->data_file = options.session_directory / (options.file_stem + ".pointcloud.bin");
   impl_->stream.open(impl_->data_file, std::ios::binary | std::ios::trunc);
-  impl_->stream.write(kProcessedMagic.data(), static_cast<std::streamsize>(kProcessedMagic.size()));
-  if (!impl_->stream || !writeScalar(impl_->stream, kProcessedFormatVersion)) {
-    error = "Unable to create processed binary stream";
+  impl_->stream.write(kPointCloudMagic.data(), static_cast<std::streamsize>(kPointCloudMagic.size()));
+  if (!impl_->stream || !writeScalar(impl_->stream, kPointCloudFormatVersion)) {
+    error = "Unable to create point cloud binary stream";
     return false;
   }
   impl_->bytes_written = static_cast<std::uint64_t>(impl_->stream.tellp());
   impl_->started = std::chrono::steady_clock::now();
+  impl_->last_flush = impl_->started;
   impl_->status = {};
   impl_->status.open = true;
   impl_->status.recording = true;
@@ -848,47 +832,56 @@ bool BinaryProcessedFrameWriter::open(const WriterOpenOptions& options, std::str
   return true;
 }
 
-bool BinaryProcessedFrameWriter::write(const ProcessedFrame& frame, std::string& error) {
+bool BinaryPointCloudFrameWriter::write(const PointCloudSnapshot& frame, std::string& error) {
   std::lock_guard<std::mutex> lock(impl_->mutex);
   if (!impl_->status.open || !impl_->status.recording) {
-    error = "Processed writer is not recording";
+    error = "Point cloud writer is not recording";
     return false;
   }
   const auto before = impl_->stream.tellp();
-  if (!writeProcessedRecord(impl_->stream, frame)) {
-    error = "Processed binary write failed";
+  if (!writePointCloudFrame(impl_->stream, frame)) {
+    error = "Point cloud binary write failed";
     impl_->status.detail = error;
     return false;
   }
   const auto after = impl_->stream.tellp();
   impl_->bytes_written += static_cast<std::uint64_t>(after - before);
+  ++impl_->status.blocks_written;
   ++impl_->status.frames_written;
   impl_->status.bytes_written = impl_->bytes_written;
-  if (impl_->options.flush_interval_frames > 0U &&
-      impl_->status.frames_written % impl_->options.flush_interval_frames == 0U) {
+  const auto now = std::chrono::steady_clock::now();
+  if (now - impl_->last_flush >=
+      std::chrono::milliseconds(impl_->options.flush_interval_ms)) {
     impl_->stream.flush();
+    impl_->last_flush = now;
+    if (!impl_->stream) {
+      error = "Point cloud periodic flush failed";
+      impl_->status.detail = error;
+      return false;
+    }
   }
   impl_->status.throughput_mbps = throughputMbps(impl_->bytes_written, impl_->started);
   error.clear();
   return true;
 }
 
-bool BinaryProcessedFrameWriter::flush(std::string& error) {
+bool BinaryPointCloudFrameWriter::flush(std::string& error) {
   std::lock_guard<std::mutex> lock(impl_->mutex);
   if (!impl_->status.open) {
-    error = "Processed writer is not open";
+    error = "Point cloud writer is not open";
     return false;
   }
   impl_->stream.flush();
+  impl_->last_flush = std::chrono::steady_clock::now();
   if (!impl_->stream) {
-    error = "Processed writer flush failed";
+    error = "Point cloud writer flush failed";
     return false;
   }
   error.clear();
   return true;
 }
 
-bool BinaryProcessedFrameWriter::finalize(const WriterFinalizeOptions& options, std::string& error) {
+bool BinaryPointCloudFrameWriter::finalize(const WriterFinalizeOptions& options, std::string& error) {
   std::lock_guard<std::mutex> lock(impl_->mutex);
   if (impl_->finalized) {
     error.clear();
@@ -899,7 +892,7 @@ bool BinaryProcessedFrameWriter::finalize(const WriterFinalizeOptions& options, 
   if (impl_->stream.is_open()) {
     impl_->stream.flush();
     if (!impl_->stream) {
-      stream_error = "Processed binary final flush failed";
+      stream_error = "Point cloud binary final flush failed";
       effective_options.completed = false;
       if (effective_options.stop_reason.empty()) {
         effective_options.stop_reason = stream_error;
@@ -909,9 +902,10 @@ bool BinaryProcessedFrameWriter::finalize(const WriterFinalizeOptions& options, 
   }
   impl_->status.recording = false;
   impl_->status.open = false;
-  impl_->status.detail = effective_options.completed ? "Processed stream finalized" : "Processed stream stopped with error";
-  const auto sidecar = impl_->options.session_directory / (impl_->options.file_stem + ".processed.json");
-  if (!writeSidecar(sidecar, impl_->options, effective_options, impl_->status, {impl_->data_file}, "processed", error)) {
+  impl_->status.detail = effective_options.completed ? "Point cloud stream finalized" : "Point cloud stream stopped with error";
+  const auto sidecar = impl_->options.session_directory / (impl_->options.file_stem + ".pointcloud.json");
+  if (!writeSidecar(sidecar, impl_->options, effective_options, impl_->status,
+                    {impl_->data_file}, "point_cloud_xyziv", error)) {
     return false;
   }
   impl_->finalized = true;
@@ -922,7 +916,7 @@ bool BinaryProcessedFrameWriter::finalize(const WriterFinalizeOptions& options, 
   return true;
 }
 
-WriterStatus BinaryProcessedFrameWriter::status() const {
+WriterStatus BinaryPointCloudFrameWriter::status() const {
   std::lock_guard<std::mutex> lock(impl_->mutex);
   return impl_->status;
 }

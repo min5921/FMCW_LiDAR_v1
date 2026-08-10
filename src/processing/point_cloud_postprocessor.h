@@ -49,8 +49,8 @@ class PointCloudPostProcessor {
  private:
   void rebuild();
 
-  std::uint32_t history_frame_count_ = 3U;
-  std::uint32_t vertical_interpolation_factor_ = 4U;
+  std::uint32_t history_frame_count_ = 1U;
+  std::uint32_t vertical_interpolation_factor_ = 1U;
   std::deque<std::shared_ptr<const PointCloudSnapshot>> history_;
   PointCloudDisplayFrame display_frame_;
 };

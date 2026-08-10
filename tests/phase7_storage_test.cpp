@@ -131,7 +131,7 @@ fmcw::WriterOpenOptions writerOptions(const fmcw::SystemConfig& config,
   options.raw_enabled = true;
   options.processed_enabled = false;
   options.queue_capacity = 4U;
-  options.flush_interval_frames = config.digitizer.records_per_buffer;
+  options.flush_interval_ms = 250U;
   options.split_file_size_gb = 0.015;
   options.preallocate_raw_parts = true;
   options.minimum_free_space_bytes = 1U * 1024U * 1024U;
@@ -488,16 +488,16 @@ class BlockingBatchWriter final : public fmcw::IRawFrameWriter {
   fmcw::WriterStatus status_;
 };
 
-class ImmediateProcessedWriter final : public fmcw::IProcessedFrameWriter {
+class ImmediatePointCloudWriter final : public fmcw::IPointCloudFrameWriter {
  public:
-  explicit ImmediateProcessedWriter(std::shared_ptr<ParallelWriterState> state) : state_(std::move(state)) {}
+  explicit ImmediatePointCloudWriter(std::shared_ptr<ParallelWriterState> state) : state_(std::move(state)) {}
   bool open(const fmcw::WriterOpenOptions&, std::string& error) override {
     status_.open = true;
     status_.recording = true;
     error.clear();
     return true;
   }
-  bool write(const fmcw::ProcessedFrame&, std::string& error) override {
+  bool write(const fmcw::PointCloudSnapshot&, std::string& error) override {
     std::lock_guard<std::mutex> lock(state_->mutex);
     state_->processed_written = true;
     ++status_.frames_written;
@@ -528,7 +528,7 @@ void testIndependentRawAndProcessedWorkers() {
   }
   auto state = std::make_shared<ParallelWriterState>();
   fmcw::AsyncStorageService storage(std::make_unique<BlockingBatchWriter>(state),
-                                    std::make_unique<ImmediateProcessedWriter>(state));
+                                    std::make_unique<ImmediatePointCloudWriter>(state));
   auto options = writerOptions(config, uniqueTestDirectory("parallel"));
   options.processed_enabled = true;
   options.queue_capacity = 1U;
@@ -541,10 +541,15 @@ void testIndependentRawAndProcessedWorkers() {
     expect(state->condition.wait_for(lock, std::chrono::seconds(2), [&] { return state->raw_started; }),
            "raw writer is blocked independently");
   }
-  auto processed = std::make_shared<fmcw::ProcessedFrame>();
-  processed->frame_id = 1U;
-  expect(storage.enqueueProcessed(processed, error) == fmcw::EnqueueResult::Accepted,
-         "processed result enters its separate queue");
+  auto point_cloud = std::make_shared<fmcw::PointCloudSnapshot>();
+  point_cloud->last_frame_id = 1U;
+  point_cloud->width = 1U;
+  point_cloud->height = 1U;
+  point_cloud->completed_lines = 1U;
+  point_cloud->complete = true;
+  point_cloud->points.resize(1U);
+  expect(storage.enqueuePointCloud(point_cloud, error) == fmcw::EnqueueResult::Accepted,
+         "point cloud frame enters its separate queue");
   {
     std::unique_lock<std::mutex> lock(state->mutex);
     expect(state->condition.wait_for(lock, std::chrono::seconds(2), [&] { return state->processed_written; }),

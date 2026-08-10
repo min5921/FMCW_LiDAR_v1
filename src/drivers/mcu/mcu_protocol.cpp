@@ -260,6 +260,34 @@ void finalizeConfiguredWaveform(const SystemConfig& config,
 
 }  // namespace
 
+bool mcuWaveformContractEquivalent(const SystemConfig& previous,
+                                   const SystemConfig& next) {
+  const auto& old_mcu = previous.mcu;
+  const auto& new_mcu = next.mcu;
+  if (!old_mcu.enabled || !new_mcu.enabled ||
+      old_mcu.port != new_mcu.port ||
+      old_mcu.baud_rate != new_mcu.baud_rate ||
+      old_mcu.parity != new_mcu.parity ||
+      old_mcu.stop_bits != new_mcu.stop_bits ||
+      old_mcu.waveform_source != new_mcu.waveform_source ||
+      old_mcu.waveform_file != new_mcu.waveform_file ||
+      previous.scan.trigger_shift_samples != next.scan.trigger_shift_samples ||
+      previous.scan.scanner_sample_rate_hz != next.scan.scanner_sample_rate_hz ||
+      previous.scan.y_line_count != next.scan.y_line_count) {
+    return false;
+  }
+
+  if (new_mcu.waveform_source == McuWaveformSource::LegacyXymFile) {
+    return true;
+  }
+  return previous.digitizer.records_per_buffer == next.digitizer.records_per_buffer &&
+      previous.scan.x_start_deg == next.scan.x_start_deg &&
+      previous.scan.x_end_deg == next.scan.x_end_deg &&
+      previous.scan.y_start_deg == next.scan.y_start_deg &&
+      previous.scan.y_end_deg == next.scan.y_end_deg &&
+      previous.scan.bidirectional == next.scan.bidirectional;
+}
+
 std::vector<McuWaveformFrame> McuProtocol::buildConfiguredWaveform(const SystemConfig& config,
                                                                    McuWaveformInfo& info,
                                                                    std::string& error) {

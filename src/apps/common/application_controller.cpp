@@ -21,9 +21,11 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -48,6 +50,7 @@ class RuntimeWorker final : public QObject {
 
  public:
   explicit RuntimeWorker(QString platform_name) : platform_name_(std::move(platform_name)) {}
+  ~RuntimeWorker() override { stopEdfaMonitor(); }
 
  public slots:
   void initialize() {
@@ -86,6 +89,7 @@ class RuntimeWorker final : public QObject {
     }
     connected_ = true;
     state_ = OperationState::Ready;
+    startEdfaMonitor();
     emitLog("INFO", "Device", qString(adapters_.display_name) + " adapters connected");
     publishStatus(qString(adapters_.display_name) + " connected and ready");
     emit commandCompleted("Connect", qString(adapters_.display_name) + " is ready");
@@ -95,6 +99,7 @@ class RuntimeWorker final : public QObject {
     if (running_) {
       stopRuntime(false, "Disconnected by operator");
     }
+    stopEdfaMonitor();
     if (session_ != nullptr) {
       session_->disconnect();
     }
@@ -124,6 +129,7 @@ class RuntimeWorker final : public QObject {
         return;
       }
       connected_ = true;
+      startEdfaMonitor();
     }
 
     const auto preflight = session_->telemetry();
@@ -208,7 +214,7 @@ class RuntimeWorker final : public QObject {
       options.queue_capacity = config_.storage.queue_capacity;
       options.overflow_policy = config_.storage.overflow_policy;
       options.split_file_size_gb = config_.storage.split_file_size_gb;
-      options.flush_interval_frames = config_.storage.flush_interval_frames;
+      options.flush_interval_ms = config_.storage.flush_interval_ms;
       std::string core_error;
       if (!storage_->start(options, core_error)) {
         storage_.reset();
@@ -232,9 +238,12 @@ class RuntimeWorker final : public QObject {
       if (udp_ != nullptr) {
         udp_->enqueue(frame);
       }
+    });
+    processing_->setPointCloudFrameCallback(
+        [this](std::shared_ptr<const PointCloudSnapshot> frame) {
       if (storage_ != nullptr && config_.storage.processed_enabled) {
         std::string error_message;
-        const auto result = storage_->enqueueProcessed(std::move(frame), error_message);
+        const auto result = storage_->enqueuePointCloud(std::move(frame), error_message);
         if (result != EnqueueResult::Accepted) {
           storage_failure_pending_ = true;
         }
@@ -250,8 +259,8 @@ class RuntimeWorker final : public QObject {
     }
 
     state_ = OperationState::Preview;
-    publishStatus("Starting devices in EDFA, digitizer, MCU order...");
-    if (session_ == nullptr || !session_->start(core_error)) {
+    publishStatus("Arming EDFA and digitizer before enabling the MCU trigger...");
+    if (session_ == nullptr || !session_->arm(core_error)) {
       const auto start_error = core_error;
       processing_->requestStop("Device start failed");
       processing_->waitUntilStopped(core_error);
@@ -261,8 +270,6 @@ class RuntimeWorker final : public QObject {
       return;
     }
 
-    running_ = true;
-    recording_ = config_.storage.raw_enabled || config_.storage.processed_enabled;
     storage_failure_pending_ = false;
     acquisition_accepting_.store(true);
     acquisition_worker_ = std::make_unique<ContinuousAcquisitionWorker>(*session_);
@@ -270,12 +277,12 @@ class RuntimeWorker final : public QObject {
             [this](RawFrameBatchPtr batch, std::string& batch_error) {
               return consumeBatch(std::move(batch), batch_error);
             },
-            [this](bool failed, std::string reason) {
-              QMetaObject::invokeMethod(this,
-                  [this, failed, reason = std::move(reason)] {
-                    if (running_) {
-                      stopRuntime(false, qString(reason), failed);
-                    }
+             [this](bool failed, std::string reason) {
+               QMetaObject::invokeMethod(this,
+                   [this, failed, reason = std::move(reason)] {
+                     if (running_ || (session_ != nullptr && session_->armed())) {
+                       stopRuntime(false, qString(reason), failed);
+                     }
                   },
                   Qt::QueuedConnection);
             },
@@ -292,6 +299,23 @@ class RuntimeWorker final : public QObject {
       fail("Start", qString(worker_error));
       return;
     }
+    publishStatus("DMA worker ready; enabling the MCU trigger source...");
+    if (!session_->enableTrigger(core_error)) {
+      const auto trigger_error = core_error;
+      acquisition_accepting_.store(false);
+      acquisition_worker_->requestStop();
+      std::string stop_error;
+      session_->stop(stop_error);
+      waitForAcquisitionWorker();
+      stopProcessing("Trigger source failed to start");
+      stopUdp();
+      stopStorage("Trigger source failed to start");
+      fail("Start", qString(trigger_error));
+      return;
+    }
+
+    running_ = true;
+    recording_ = config_.storage.raw_enabled || config_.storage.processed_enabled;
     state_ = recording_ ? OperationState::Recording : OperationState::Acquiring;
     ui_timer_->setInterval(std::max(
         16, static_cast<int>(std::lround(1000.0 / std::clamp(config_.ui.plot_update_hz, 1.0, 60.0)))));
@@ -584,6 +608,7 @@ class RuntimeWorker final : public QObject {
     if (running_) {
       stopRuntime(true, "Application shutdown");
     }
+    stopEdfaMonitor();
     if (session_ != nullptr) {
       session_->disconnect();
     }
@@ -632,7 +657,12 @@ class RuntimeWorker final : public QObject {
     }
 
     const bool reconnect = connected_;
+    const bool retain_mcu_waveform = configured_ &&
+        mcu_waveform_revision_ == config_revision_ &&
+        active_source_ == config.runtime.acquisition_source &&
+        mcuWaveformContractEquivalent(config_, config);
     if (reconnect) {
+      stopEdfaMonitor();
       if (session_ != nullptr) {
         session_->disconnect();
       }
@@ -664,9 +694,13 @@ class RuntimeWorker final : public QObject {
     config_ = config;
     config_revision_ = next_revision;
     processing_revision_ = next_revision;
-    mcu_waveform_revision_ = 0;
-    uploaded_legacy_waveform_bytes_.clear();
-    uploaded_legacy_waveform_extension_.clear();
+    if (retain_mcu_waveform) {
+      mcu_waveform_revision_ = next_revision;
+    } else {
+      mcu_waveform_revision_ = 0;
+      uploaded_legacy_waveform_bytes_.clear();
+      uploaded_legacy_waveform_extension_.clear();
+    }
     configured_ = true;
     state_ = OperationState::Configured;
 
@@ -677,12 +711,16 @@ class RuntimeWorker final : public QObject {
       }
       connected_ = true;
       state_ = OperationState::Ready;
+      startEdfaMonitor();
     }
     publishStatus(reconnect ? "Configuration applied and devices reconnected" : "Configuration applied");
     emitLog("INFO", "Configuration",
             QString("Applied profile '%1' as revision %2")
                 .arg(qString(config_.profile.name))
                 .arg(config_revision_));
+    if (retain_mcu_waveform) {
+      emitLog("INFO", "MCU", "Existing waveform retained; scanner upload contract is unchanged");
+    }
     error.clear();
     return true;
   }
@@ -714,6 +752,89 @@ class RuntimeWorker final : public QObject {
     }
     error.clear();
     return true;
+  }
+
+  void startEdfaMonitor() {
+    stopEdfaMonitor();
+    if (!connected_ || adapters_.edfa == nullptr ||
+        config_.edfa.mode != EdfaMode::Controlled) {
+      return;
+    }
+
+    edfa_monitor_stop_.store(false);
+    const auto generation = ++edfa_monitor_generation_;
+    auto* controller = adapters_.edfa.get();
+    const bool stop_on_disconnect = config_.edfa.stop_acquisition_on_disconnect;
+    edfa_monitor_thread_ = std::thread([this, controller, stop_on_disconnect, generation] {
+      std::uint32_t consecutive_failures = 0U;
+      bool failure_reported = false;
+      while (!edfa_monitor_stop_.load()) {
+        {
+          std::unique_lock<std::mutex> lock(edfa_monitor_mutex_);
+          if (edfa_monitor_cv_.wait_for(lock, std::chrono::seconds(1),
+                                        [this] { return edfa_monitor_stop_.load(); })) {
+            break;
+          }
+        }
+
+        std::string poll_error;
+        if (controller->pollStatus(poll_error)) {
+          consecutive_failures = 0U;
+          if (failure_reported) {
+            failure_reported = false;
+            QMetaObject::invokeMethod(this, [this, generation] {
+              if (generation != edfa_monitor_generation_.load()) {
+                return;
+              }
+              emitLog("INFO", "EDFA", "Periodic status communication recovered");
+              publishStatus(running_ ? "Acquiring DMA batches" : "EDFA status restored");
+            }, Qt::QueuedConnection);
+          } else {
+            QMetaObject::invokeMethod(this, [this, generation] {
+              if (generation != edfa_monitor_generation_.load()) {
+                return;
+              }
+              if (connected_) {
+                publishStatus(running_ ? "Acquiring DMA batches" : "EDFA status updated");
+              }
+            }, Qt::QueuedConnection);
+          }
+          continue;
+        }
+
+        ++consecutive_failures;
+        if (consecutive_failures < 3U || failure_reported) {
+          continue;
+        }
+        failure_reported = true;
+        const auto message = QString("EDFA status poll failed 3 consecutive times: %1")
+                                 .arg(qString(poll_error));
+        if (stop_on_disconnect) {
+          edfa_monitor_stop_.store(true);
+        }
+        QMetaObject::invokeMethod(this, [this, message, stop_on_disconnect, generation] {
+          if (generation != edfa_monitor_generation_.load()) {
+            return;
+          }
+          emitLog("ERROR", "EDFA", message);
+          if (stop_on_disconnect && running_) {
+            stopEdfaMonitor();
+            stopRuntime(false, message, true);
+          } else {
+            publishStatus(message);
+          }
+        }, Qt::QueuedConnection);
+      }
+    });
+  }
+
+  void stopEdfaMonitor() {
+    edfa_monitor_stop_.store(true);
+    ++edfa_monitor_generation_;
+    edfa_monitor_cv_.notify_all();
+    if (edfa_monitor_thread_.joinable()) {
+      edfa_monitor_thread_.join();
+    }
   }
 
   void publishPeriodic() {
@@ -965,6 +1086,10 @@ class RuntimeWorker final : public QObject {
     status.trigger_misses = telemetry.digitizer.trigger_misses;
     status.dma_bscan_rate_hz = telemetry.digitizer.dma_buffer_rate_hz;
     status.dma_bscan_period_ms = telemetry.digitizer.dma_buffer_period_ms;
+    status.dma_buffers_configured = telemetry.digitizer.dma_buffers_configured;
+    status.dma_buffers_posted = telemetry.digitizer.dma_buffers_posted;
+    status.dma_buffers_in_use = telemetry.digitizer.dma_buffers_in_use;
+    status.oldest_dma_lease_ms = telemetry.digitizer.oldest_dma_lease_ms;
     if (processing_ != nullptr) {
       const auto processing_status = processing_->status();
       status.frames_processed = processing_status.frames_processed;
@@ -1067,6 +1192,11 @@ class RuntimeWorker final : public QObject {
   QString active_operation_;
   std::atomic_bool acquisition_accepting_{false};
   std::atomic_bool storage_failure_pending_{false};
+  std::atomic_bool edfa_monitor_stop_{true};
+  std::atomic_uint64_t edfa_monitor_generation_{0U};
+  std::mutex edfa_monitor_mutex_;
+  std::condition_variable edfa_monitor_cv_;
+  std::thread edfa_monitor_thread_;
 };
 
 ApplicationController::ApplicationController(QString platform_name, QObject* parent) : QObject(parent) {

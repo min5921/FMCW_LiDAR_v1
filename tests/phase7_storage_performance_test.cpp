@@ -76,7 +76,7 @@ int main() {
   options.raw_enabled = true;
   options.processed_enabled = false;
   options.queue_capacity = 64U;
-  options.flush_interval_frames = config.digitizer.records_per_buffer * 16U;
+  options.flush_interval_ms = 60000U;
   options.split_file_size_gb = FMCW_STORAGE_REALTIME_PACING ? 4.0 : 1.0;
   options.preallocate_raw_parts = true;
   options.minimum_free_space_bytes = expected_payload_bytes + 64U * 1024U * 1024U;

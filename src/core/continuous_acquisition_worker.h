@@ -3,6 +3,7 @@
 #include "core/acquisition_session.h"
 
 #include <atomic>
+#include <condition_variable>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -13,6 +14,7 @@
 namespace fmcw {
 
 struct ContinuousAcquisitionStatus {
+  bool ready = false;
   bool running = false;
   bool stop_requested = false;
   bool failed = false;
@@ -44,6 +46,7 @@ class ContinuousAcquisitionWorker {
 
   AcquisitionSession& session_;
   mutable std::mutex mutex_;
+  std::condition_variable condition_;
   std::thread worker_;
   RawBatchHandler batch_handler_;
   AcquisitionExitHandler exit_handler_;

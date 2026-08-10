@@ -100,7 +100,7 @@ storage:
   queue_capacity: 64
   overflow_policy: stop_acquisition
   split_file_size_gb: 4
-  flush_interval_frames: 128
+  flush_interval_ms: 250
 ui:
   plot_update_hz: 60
   point_cloud_update_hz: 10

@@ -256,7 +256,7 @@ ConfigDocument ConfigProfileCodec::encode(const SystemConfig& config) {
   setUnsigned(document, "storage.queue_capacity", config.storage.queue_capacity);
   document.setString("storage.overflow_policy", toString(config.storage.overflow_policy));
   document.setNumber("storage.split_file_size_gb", config.storage.split_file_size_gb);
-  setUnsigned(document, "storage.flush_interval_frames", config.storage.flush_interval_frames);
+  setUnsigned(document, "storage.flush_interval_ms", config.storage.flush_interval_ms);
 
   document.setNumber("ui.plot_update_hz", config.ui.plot_update_hz);
   document.setNumber("ui.point_cloud_update_hz", config.ui.point_cloud_update_hz);
@@ -397,7 +397,16 @@ bool ConfigProfileCodec::decode(const ConfigDocument& document, SystemConfig& co
   readInteger(document, "storage.queue_capacity", config.storage.queue_capacity, issues, source);
   readEnum(document, "storage.overflow_policy", config.storage.overflow_policy, issues, source);
   readNumber(document, "storage.split_file_size_gb", config.storage.split_file_size_gb, issues, source);
-  readInteger(document, "storage.flush_interval_frames", config.storage.flush_interval_frames, issues, source);
+  if (document.contains("storage.flush_interval_ms")) {
+    readInteger(document, "storage.flush_interval_ms", config.storage.flush_interval_ms, issues, source);
+  } else if (document.contains("storage.flush_interval_frames")) {
+    std::uint32_t legacy_flush_interval = 0U;
+    readInteger(document, "storage.flush_interval_frames", legacy_flush_interval, issues, source);
+    config.storage.flush_interval_ms = 250U;
+  } else {
+    addIssue(issues, source, "storage.flush_interval_ms",
+             "Required configuration key is missing");
+  }
 
   readNumber(document, "ui.plot_update_hz", config.ui.plot_update_hz, issues, source);
   readNumber(document, "ui.point_cloud_update_hz", config.ui.point_cloud_update_hz, issues, source);

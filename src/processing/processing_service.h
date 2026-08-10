@@ -74,6 +74,8 @@ struct ProcessingServiceStatus {
 };
 
 using ProcessedFrameCallback = std::function<void(ProcessedFramePtr)>;
+using PointCloudFrameCallback =
+    std::function<void(std::shared_ptr<const PointCloudSnapshot>)>;
 
 class ProcessingService {
  public:
@@ -90,6 +92,7 @@ class ProcessingService {
   bool updateRuntimeConfig(const ProcessingConfig& config, std::uint64_t processing_config_revision,
                            std::string& error);
   void setProcessedFrameCallback(ProcessedFrameCallback callback);
+  void setPointCloudFrameCallback(PointCloudFrameCallback callback);
   void requestStop(std::string reason,
                    ProcessingStopMode mode = ProcessingStopMode::DrainPending);
   bool waitUntilStopped(std::string& error);

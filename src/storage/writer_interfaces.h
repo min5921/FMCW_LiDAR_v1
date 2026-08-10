@@ -2,6 +2,7 @@
 
 #include "core/config_types.h"
 #include "core/frame_types.h"
+#include "processing/processing_snapshots.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -53,7 +54,7 @@ struct WriterOpenOptions {
   std::size_t queue_capacity = 64;
   QueueOverflowPolicy overflow_policy = QueueOverflowPolicy::StopAcquisition;
   double split_file_size_gb = 4.0;
-  std::uint32_t flush_interval_frames = 128;
+  std::uint32_t flush_interval_ms = 250;
   bool preallocate_raw_parts = true;
   std::uint64_t minimum_free_space_bytes = 64U * 1024U * 1024U;
 };
@@ -83,11 +84,11 @@ class IRawFrameWriter {
   virtual WriterStatus status() const = 0;
 };
 
-class IProcessedFrameWriter {
+class IPointCloudFrameWriter {
  public:
-  virtual ~IProcessedFrameWriter() = default;
+  virtual ~IPointCloudFrameWriter() = default;
   virtual bool open(const WriterOpenOptions& options, std::string& error) = 0;
-  virtual bool write(const ProcessedFrame& frame, std::string& error) = 0;
+  virtual bool write(const PointCloudSnapshot& frame, std::string& error) = 0;
   virtual bool flush(std::string& error) = 0;
   virtual bool finalize(const WriterFinalizeOptions& options, std::string& error) = 0;
   virtual WriterStatus status() const = 0;
@@ -126,7 +127,8 @@ class IStorageService {
   virtual bool start(const WriterOpenOptions& options, std::string& error) = 0;
   virtual EnqueueResult enqueueRawBatch(RawFrameBatchPtr batch, std::string& error) = 0;
   virtual EnqueueResult enqueueRaw(RawFramePtr frame, std::string& error) = 0;
-  virtual EnqueueResult enqueueProcessed(ProcessedFramePtr frame, std::string& error) = 0;
+  virtual EnqueueResult enqueuePointCloud(std::shared_ptr<const PointCloudSnapshot> frame,
+                                          std::string& error) = 0;
   virtual void requestStop(std::string reason) = 0;
   virtual bool waitUntilStopped(std::string& error) = 0;
   virtual StorageStatus status() const = 0;

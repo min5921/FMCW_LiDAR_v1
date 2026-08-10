@@ -306,9 +306,9 @@ ValidationResult ConfigValidator::validate(const SystemConfig& config) {
     add(result, ValidationSeverity::Error, "storage.output_directory", "Enabled storage requires an output directory",
         "Select a writable session data directory");
   }
-  if (!(config.storage.split_file_size_gb > 0.0) || config.storage.flush_interval_frames == 0) {
+  if (!(config.storage.split_file_size_gb > 0.0) || config.storage.flush_interval_ms == 0) {
     add(result, ValidationSeverity::Error, "storage.split_file_size_gb", "Storage split size and flush interval must be positive",
-        "Set a positive split_file_size_gb and flush_interval_frames");
+        "Set a positive split_file_size_gb and flush_interval_ms");
   }
 
   if (config.ui.plot_update_hz <= 0.0 || config.ui.plot_update_hz > 60.0 ||

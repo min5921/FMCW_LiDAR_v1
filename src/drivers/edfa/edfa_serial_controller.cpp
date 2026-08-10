@@ -100,6 +100,35 @@ void EdfaSerialController::disconnect() {
   status_.device.detail = config_.mode == EdfaMode::None ? "EDFA bypass active" : "EDFA disconnected";
 }
 
+bool EdfaSerialController::pollStatus(std::string& error) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (config_.mode != EdfaMode::Controlled) {
+    error.clear();
+    return true;
+  }
+  if (!transport_->isOpen()) {
+    status_.device.connected = false;
+    status_.device.ready = false;
+    status_.telemetry_valid = false;
+    status_.device.detail = "EDFA status poll failed: serial port is closed";
+    error = "EDFA serial port is closed";
+    return false;
+  }
+  if (!refreshDeviceState(error)) {
+    status_.device.ready = false;
+    status_.telemetry_valid = false;
+    status_.device.detail = "EDFA status poll failed: " + error;
+    return false;
+  }
+  status_.device.connected = true;
+  status_.device.ready = true;
+  status_.device.detail = status_.output_enabled
+      ? "EDFA connected | output enabled"
+      : "EDFA connected | output disabled";
+  error.clear();
+  return true;
+}
+
 bool EdfaSerialController::setControlMode(EdfaControlMode mode, std::string& error) {
   std::lock_guard<std::mutex> lock(mutex_);
   if (config_.mode != EdfaMode::Controlled || !transport_->isOpen()) {

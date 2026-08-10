@@ -24,8 +24,9 @@ std::uint64_t utcNowNs() {
 struct AsyncStorageService::Impl {
   using RawQueueItem = std::variant<RawFramePtr, RawFrameBatchPtr>;
 
-  Impl(std::unique_ptr<IRawFrameWriter> raw, std::unique_ptr<IProcessedFrameWriter> processed)
-      : raw_writer(std::move(raw)), processed_writer(std::move(processed)) {}
+  Impl(std::unique_ptr<IRawFrameWriter> raw,
+       std::unique_ptr<IPointCloudFrameWriter> point_cloud)
+      : raw_writer(std::move(raw)), point_cloud_writer(std::move(point_cloud)) {}
 
   WriterFinalizeOptions finalizeOptions() const {
     std::lock_guard<std::mutex> lock(mutex);
@@ -44,7 +45,7 @@ struct AsyncStorageService::Impl {
     failed = true;
     accepting = false;
     raw_queue.clear();
-    processed_queue.clear();
+    point_cloud_queue.clear();
     raw_condition.notify_all();
     processed_condition.notify_all();
   }
@@ -95,30 +96,30 @@ struct AsyncStorageService::Impl {
     finishWorker(true);
   }
 
-  void processedWorkerLoop() {
+  void pointCloudWorkerLoop() {
     while (true) {
-      ProcessedFramePtr frame;
+      std::shared_ptr<const PointCloudSnapshot> frame;
       {
         std::unique_lock<std::mutex> lock(mutex);
-        processed_condition.wait(lock, [this] { return !processed_queue.empty() || !accepting; });
-        if (processed_queue.empty() && !accepting) {
+        processed_condition.wait(lock, [this] { return !point_cloud_queue.empty() || !accepting; });
+        if (point_cloud_queue.empty() && !accepting) {
           break;
         }
-        frame = std::move(processed_queue.front());
-        processed_queue.pop_front();
+        frame = std::move(point_cloud_queue.front());
+        point_cloud_queue.pop_front();
       }
 
       std::string error;
-      if (!frame || !processed_writer->write(*frame, error)) {
-        failWriter(std::move(error), "Processed storage writer failure");
+      if (!frame || !point_cloud_writer->write(*frame, error)) {
+        failWriter(std::move(error), "Point cloud storage writer failure");
         break;
       }
     }
 
     auto finalize = finalizeOptions();
     std::string error;
-    if (!processed_writer->finalize(finalize, error)) {
-      failWriter(std::move(error), "Processed writer finalization failed");
+    if (!point_cloud_writer->finalize(finalize, error)) {
+      failWriter(std::move(error), "Point cloud writer finalization failed");
     }
     finishWorker(false);
   }
@@ -153,7 +154,8 @@ struct AsyncStorageService::Impl {
     return EnqueueResult::Accepted;
   }
 
-  EnqueueResult enqueueProcessedItem(ProcessedFramePtr frame, std::string& error) {
+  EnqueueResult enqueuePointCloudItem(std::shared_ptr<const PointCloudSnapshot> frame,
+                                      std::string& error) {
     std::lock_guard<std::mutex> lock(mutex);
     if (!options.processed_enabled) {
       error.clear();
@@ -163,20 +165,20 @@ struct AsyncStorageService::Impl {
       error = stop_reason.empty() ? "Storage service is stopping" : stop_reason;
       return EnqueueResult::Stopping;
     }
-    if (processed_queue.size() >= options.queue_capacity) {
+    if (point_cloud_queue.size() >= options.queue_capacity) {
       stop_requested = true;
       failed = true;
-      stop_reason = "Processed storage queue capacity exceeded";
+      stop_reason = "Point cloud storage queue capacity exceeded";
       accepting = false;
       raw_condition.notify_all();
       processed_condition.notify_all();
       error = stop_reason;
       return EnqueueResult::Overflow;
     }
-    last_accepted_frame_id = frame->frame_id;
-    processed_queue.push_back(std::move(frame));
+    last_accepted_frame_id = frame->last_frame_id;
+    point_cloud_queue.push_back(std::move(frame));
     processed_queue_high_water_mark = std::max(
-        processed_queue_high_water_mark, processed_queue.size());
+        processed_queue_high_water_mark, point_cloud_queue.size());
     processed_condition.notify_one();
     error.clear();
     return EnqueueResult::Accepted;
@@ -186,11 +188,11 @@ struct AsyncStorageService::Impl {
   std::condition_variable raw_condition;
   std::condition_variable processed_condition;
   std::deque<RawQueueItem> raw_queue;
-  std::deque<ProcessedFramePtr> processed_queue;
+  std::deque<std::shared_ptr<const PointCloudSnapshot>> point_cloud_queue;
   std::thread raw_worker;
   std::thread processed_worker;
   std::unique_ptr<IRawFrameWriter> raw_writer;
-  std::unique_ptr<IProcessedFrameWriter> processed_writer;
+  std::unique_ptr<IPointCloudFrameWriter> point_cloud_writer;
   WriterOpenOptions options;
   std::size_t raw_queue_high_water_mark = 0U;
   std::size_t processed_queue_high_water_mark = 0U;
@@ -208,11 +210,11 @@ struct AsyncStorageService::Impl {
 
 AsyncStorageService::AsyncStorageService()
     : AsyncStorageService(std::make_unique<BinaryRawFrameWriter>(),
-                          std::make_unique<BinaryProcessedFrameWriter>()) {}
+                          std::make_unique<BinaryPointCloudFrameWriter>()) {}
 
 AsyncStorageService::AsyncStorageService(std::unique_ptr<IRawFrameWriter> raw_writer,
-                                         std::unique_ptr<IProcessedFrameWriter> processed_writer)
-    : impl_(std::make_unique<Impl>(std::move(raw_writer), std::move(processed_writer))) {}
+                                         std::unique_ptr<IPointCloudFrameWriter> point_cloud_writer)
+    : impl_(std::make_unique<Impl>(std::move(raw_writer), std::move(point_cloud_writer))) {}
 
 AsyncStorageService::~AsyncStorageService() {
   requestStop("Storage service destroyed");
@@ -222,7 +224,7 @@ AsyncStorageService::~AsyncStorageService() {
 
 bool AsyncStorageService::start(const WriterOpenOptions& options, std::string& error) {
   std::lock_guard<std::mutex> lock(impl_->mutex);
-  if (impl_->raw_writer == nullptr || impl_->processed_writer == nullptr || impl_->running ||
+  if (impl_->raw_writer == nullptr || impl_->point_cloud_writer == nullptr || impl_->running ||
       impl_->raw_worker.joinable() || impl_->processed_worker.joinable() ||
       (!options.raw_enabled && !options.processed_enabled) || options.queue_capacity == 0U) {
     error = "Storage service options are invalid or the service is already active";
@@ -231,9 +233,9 @@ bool AsyncStorageService::start(const WriterOpenOptions& options, std::string& e
   if (options.raw_enabled && !impl_->raw_writer->open(options, error)) {
     return false;
   }
-  if (options.processed_enabled && !impl_->processed_writer->open(options, error)) {
+  if (options.processed_enabled && !impl_->point_cloud_writer->open(options, error)) {
     if (options.raw_enabled) {
-      WriterFinalizeOptions finalize{utcNowNs(), "Processed writer failed to open", false};
+      WriterFinalizeOptions finalize{utcNowNs(), "Point cloud writer failed to open", false};
       std::string ignored;
       impl_->raw_writer->finalize(finalize, ignored);
     }
@@ -242,7 +244,7 @@ bool AsyncStorageService::start(const WriterOpenOptions& options, std::string& e
 
   impl_->options = options;
   impl_->raw_queue.clear();
-  impl_->processed_queue.clear();
+  impl_->point_cloud_queue.clear();
   impl_->raw_queue_high_water_mark = 0U;
   impl_->processed_queue_high_water_mark = 0U;
   impl_->last_accepted_frame_id = 0U;
@@ -259,7 +261,7 @@ bool AsyncStorageService::start(const WriterOpenOptions& options, std::string& e
     impl_->raw_worker = std::thread([this] { impl_->rawWorkerLoop(); });
   }
   if (options.processed_enabled) {
-    impl_->processed_worker = std::thread([this] { impl_->processedWorkerLoop(); });
+    impl_->processed_worker = std::thread([this] { impl_->pointCloudWorkerLoop(); });
   }
   error.clear();
   return true;
@@ -285,12 +287,13 @@ EnqueueResult AsyncStorageService::enqueueRaw(RawFramePtr frame, std::string& er
   return impl_->enqueueRawItem(std::move(frame), frame_id, sequence, error);
 }
 
-EnqueueResult AsyncStorageService::enqueueProcessed(ProcessedFramePtr frame, std::string& error) {
-  if (!frame) {
-    error = "Cannot enqueue a null processed frame";
+EnqueueResult AsyncStorageService::enqueuePointCloud(
+    std::shared_ptr<const PointCloudSnapshot> frame, std::string& error) {
+  if (!frame || !frame->complete) {
+    error = "Cannot enqueue a null or incomplete point cloud frame";
     return EnqueueResult::Error;
   }
-  return impl_->enqueueProcessedItem(std::move(frame), error);
+  return impl_->enqueuePointCloudItem(std::move(frame), error);
 }
 
 void AsyncStorageService::requestStop(std::string reason) {
@@ -330,7 +333,7 @@ StorageStatus AsyncStorageService::status() const {
     status.raw_queue_size = impl_->raw_queue.size();
     status.raw_queue_capacity = impl_->options.raw_enabled ? impl_->options.queue_capacity : 0U;
     status.raw_queue_high_water_mark = impl_->raw_queue_high_water_mark;
-    status.processed_queue_size = impl_->processed_queue.size();
+    status.processed_queue_size = impl_->point_cloud_queue.size();
     status.processed_queue_capacity = impl_->options.processed_enabled ? impl_->options.queue_capacity : 0U;
     status.processed_queue_high_water_mark = impl_->processed_queue_high_water_mark;
     status.queue_size = std::max(status.raw_queue_size, status.processed_queue_size);
@@ -345,7 +348,7 @@ StorageStatus AsyncStorageService::status() const {
     status.stop_reason = impl_->stop_reason;
   }
   status.raw_writer = impl_->raw_writer->status();
-  status.processed_writer = impl_->processed_writer->status();
+  status.processed_writer = impl_->point_cloud_writer->status();
   return status;
 }
 

@@ -800,7 +800,7 @@ QWidget* MainWindow::buildLivePage() {
   point_size->setToolTip("Point size");
   auto* temporal_frames = new QSpinBox(point_cloud_page);
   temporal_frames->setRange(1, 5);
-  temporal_frames->setValue(3);
+  temporal_frames->setValue(1);
   temporal_frames->setSuffix(" frames");
   temporal_frames->setFixedWidth(92);
   temporal_frames->setToolTip(
@@ -809,7 +809,7 @@ QWidget* MainWindow::buildLivePage() {
   vertical_interpolation->addItem("Y native", 1U);
   vertical_interpolation->addItem("Y 2x", 2U);
   vertical_interpolation->addItem("Y 4x", 4U);
-  vertical_interpolation->setCurrentIndex(2);
+  vertical_interpolation->setCurrentIndex(0);
   vertical_interpolation->setToolTip(
       "Insert display-only Y rows when neighboring ranges pass the edge discontinuity gate");
   auto* show_axes = new QCheckBox("XYZ axes", point_cloud_page);
@@ -1386,7 +1386,7 @@ QWidget* MainWindow::buildStorageUdpPage() {
   auto* storage_form = new QFormLayout(storage);
   tuneForm(storage_form);
   raw_enabled_ = new QCheckBox("Write full-period raw frames", storage);
-  processed_enabled_ = new QCheckBox("Write processed measurements", storage);
+  processed_enabled_ = new QCheckBox("Write point cloud XYZIV frames", storage);
   output_directory_ = new QLineEdit(storage);
   auto* path_row = new QWidget(storage);
   auto* path_layout = new QHBoxLayout(path_row);
@@ -1406,7 +1406,7 @@ QWidget* MainWindow::buildStorageUdpPage() {
   storage_status_->setWordWrap(true);
   storage_status_->setProperty("statusKind", "neutral");
   storage_form->addRow("Raw", raw_enabled_);
-  storage_form->addRow("Processed", processed_enabled_);
+  storage_form->addRow("Point cloud", processed_enabled_);
   storage_form->addRow("Output directory", path_row);
   storage_form->addRow("Writer queue", storage_queue_);
   storage_form->addRow("Split size", split_size_);
@@ -3018,16 +3018,24 @@ void MainWindow::updateStatus(RuntimeStatus status) {
     overview_frames_->setText(QString("0.00 FPS\nwaiting | %1 complete")
                                   .arg(completed_frames));
   }
-  overview_queues_->setText(QString("Signal %1/%2\nRaw %3/%4 | Result %5/%6")
+  const auto dma_line = runtime_status_.dma_buffers_configured > 0U
+      ? QString("\nDMA posted %1/%2 | leased %3 | oldest %4 ms")
+            .arg(runtime_status_.dma_buffers_posted)
+            .arg(runtime_status_.dma_buffers_configured)
+            .arg(runtime_status_.dma_buffers_in_use)
+            .arg(runtime_status_.oldest_dma_lease_ms, 0, 'f', 2)
+      : QString{};
+  overview_queues_->setText(QString("Signal %1/%2\nRaw %3/%4 | Point cloud %5/%6%7")
                                 .arg(runtime_status_.processing_queue_size)
                                 .arg(runtime_status_.processing_queue_capacity)
                                 .arg(runtime_status_.raw_storage_queue_size)
                                 .arg(runtime_status_.raw_storage_queue_capacity)
                                 .arg(runtime_status_.processed_storage_queue_size)
-                                .arg(runtime_status_.processed_storage_queue_capacity));
+                                .arg(runtime_status_.processed_storage_queue_capacity)
+                                .arg(dma_line));
   const auto raw_megabytes = static_cast<double>(runtime_status_.raw_bytes_written) / 1.0e6;
   storage_status_->setText(runtime_status_.storage_stop_reason.isEmpty()
-      ? QString("Raw %1/%2 (peak %3) | Result %4/%5 (peak %6)\n"
+      ? QString("Raw %1/%2 (peak %3) | Point cloud %4/%5 (peak %6)\n"
                 "%7 blocks | %8 MB | %9 + %10 Mb/s")
             .arg(runtime_status_.raw_storage_queue_size)
             .arg(runtime_status_.raw_storage_queue_capacity)

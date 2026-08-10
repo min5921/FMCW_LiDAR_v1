@@ -80,6 +80,13 @@ void testTemporalFusionFillsCurrentFrameHoles() {
              "even-count temporal median averages the two center samples");
 }
 
+void testNativeSingleFrameDefaults() {
+  fmcw::PointCloudPostProcessor processor;
+  expect(processor.historyFrameCount() == 1U &&
+             processor.verticalInterpolationFactor() == 1U,
+         "point-cloud display defaults to one native complete raster frame");
+}
+
 void testHistoryBoundAndSessionReset() {
   fmcw::PointCloudPostProcessor processor;
   processor.setHistoryFrameCount(3U);
@@ -165,6 +172,7 @@ void testRejectsMalformedSnapshot() {
 }  // namespace
 
 int main() {
+  testNativeSingleFrameDefaults();
   testTemporalFusionFillsCurrentFrameHoles();
   testHistoryBoundAndSessionReset();
   testVerticalInterpolationAndEdgeGate();

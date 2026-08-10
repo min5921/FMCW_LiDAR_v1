@@ -23,6 +23,7 @@ class FakeMcuController final : public IMcuController {
  private:
   mutable std::mutex mutex_;
   McuConfig config_;
+  SystemConfig system_config_;
   McuStatus status_;
   McuWaveformSnapshotPtr loaded_waveform_;
   double waveform_sample_rate_hz_ = 0.0;

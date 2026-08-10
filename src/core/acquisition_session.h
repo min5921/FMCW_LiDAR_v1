@@ -19,6 +19,8 @@ class AcquisitionSession {
   bool configure(const SystemConfig& config, std::uint64_t config_revision, std::string& error);
   bool connect(std::string& error);
   void disconnect();
+  bool arm(std::string& error);
+  bool enableTrigger(std::string& error);
   bool start(std::string& error);
   FrameWaitResult waitForBatch(RawFrameBatchPtr& batch, std::chrono::milliseconds timeout,
                                std::string& error);
@@ -28,6 +30,7 @@ class AcquisitionSession {
 
   bool configured() const;
   bool connected() const;
+  bool armed() const;
   bool running() const;
   AcquisitionTelemetrySnapshot telemetry() const;
 
@@ -43,6 +46,7 @@ class AcquisitionSession {
   std::atomic_uint64_t config_revision_{0};
   std::atomic_bool configured_{false};
   std::atomic_bool connected_{false};
+  std::atomic_bool armed_{false};
   std::atomic_bool running_{false};
 };
 

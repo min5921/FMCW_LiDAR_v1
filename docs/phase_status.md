@@ -216,7 +216,7 @@ ATS record-length and legacy XYZIV contract audit (2026-07-15):
 - Peak search remains strict-threshold, integer-bin processing with no interpolation. Invalid UP or DOWN detection propagates `NaN` through distance, velocity, intensity, and XYZ.
 - Distance and velocity equations were checked algebraically against the legacy CUDA pipeline while retaining the configured sweep rate instead of the legacy hard-coded 200 kHz value.
 - Cartesian conversion uses the ROS/RViz right-handed contract: X is forward, Y is left, and Z is up. Configured azimuth/elevation offsets are applied before conversion.
-- The B-scan stores forward depth from `point.x`; the 3D viewer, processed storage, CSV, and UDP packet all use the same finite `x, y, z, intensity, velocity` output contract.
+- The B-scan stores forward depth from `point.x`; the 3D viewer, complete-frame point-cloud storage, CSV, and UDP packet all use the same finite `x, y, z, intensity, velocity` output contract.
 - Windows MSVC Release and CTest 5/5 passed, including the explicit local CUDA/FFTW full-result parity test. The packaged EXE smoke test passed.
 - Packaged GUI verification confirmed 4992 acceptance, 5000 input rejection, live B-scan depth output, and a nonblank XYZ point cloud with intensity, velocity, and distance color modes.
 - Packaged EXE SHA-256: `EB67F68B958C12FF6EE465715224C11DAE1C24385CFE1341B4B2F75053352C06`.
@@ -716,3 +716,31 @@ Point-cloud integration on Windows and Jetson source paths (2026-08-10):
   endpoint responded but rejected non-interactive authentication, so this
   workstation could validate and export the Jetson source path but could not
   claim an ARM64 build result.
+
+Runtime resilience and point-cloud recording contract (2026-08-10):
+
+- START now arms the EDFA and digitizer, waits until the acquisition worker is
+  inside its DMA wait loop, and only then enables the MCU trigger waveform.
+- Alazar stop/disconnect always disables DMA reposting, aborts the asynchronous
+  read, waits for an active SDK call to return, and releases host buffers even
+  when cleanup reports an SDK error. Posted, leased, and oldest-lease telemetry
+  is visible in the Overview queue panel; large DMA blocks are not split.
+- The former processed-frame writer is replaced by complete-raster point-cloud
+  storage. `FMCWPCD1` blocks contain frame metadata followed by only XYZIV and
+  validity per point. Raw recording remains one block per DMA buffer and uses a
+  time-based 250 ms periodic flush instead of an A-scan counter.
+- Runtime peak/preprocessing changes wait for the next `y_index == 0` raster
+  boundary, preventing mixed processing revisions inside one B-scan frame.
+  The 3D viewer now defaults to one complete frame at native Y density; temporal
+  fusion and Y interpolation remain optional display-only controls.
+- Controlled EDFA mode polls full device state once per second on a dedicated
+  worker. Three consecutive failures are logged and stop an active acquisition
+  when `stop_acquisition_on_disconnect` is enabled.
+- Apply Setup preserves an uploaded MCU waveform when its serial endpoint,
+  source file/mode, B-trigger shift, line count, and playback rate are unchanged.
+  Digitizer, laser, storage, processing, or coordinate-only changes therefore
+  do not require another upload; waveform-contract changes still do.
+- Windows MSVC Release built successfully and the complete CTest suite passed
+  11/11. Jetson uses the same `src` and Qt common targets through
+  `deploy/jetson/build.sh`; native AGX Orin compilation remains a device-side
+  verification step.

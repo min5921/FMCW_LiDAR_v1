@@ -63,6 +63,18 @@ void FakeEdfaController::disconnect() {
   status_.device.detail = config_.mode == EdfaMode::None ? "EDFA bypass active" : "EDFA simulator disconnected";
 }
 
+bool FakeEdfaController::pollStatus(std::string& error) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (config_.mode == EdfaMode::Controlled && !status_.device.connected) {
+    status_.telemetry_valid = false;
+    error = "Simulated EDFA is disconnected";
+    return false;
+  }
+  status_.telemetry_valid = config_.mode == EdfaMode::Controlled;
+  error.clear();
+  return true;
+}
+
 bool FakeEdfaController::setControlMode(EdfaControlMode mode, std::string& error) {
   std::lock_guard<std::mutex> lock(mutex_);
   if (config_.mode != EdfaMode::Controlled || !status_.device.connected) {

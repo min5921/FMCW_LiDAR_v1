@@ -35,6 +35,10 @@ struct DigitizerTelemetry {
   double trigger_jitter_ns = 0.0;
   double dma_buffer_rate_hz = 0.0;
   double dma_buffer_period_ms = 0.0;
+  std::uint32_t dma_buffers_configured = 0;
+  std::uint32_t dma_buffers_posted = 0;
+  std::uint32_t dma_buffers_in_use = 0;
+  double oldest_dma_lease_ms = 0.0;
 };
 
 class IDigitizer {
@@ -79,6 +83,10 @@ class IEdfaController {
   virtual bool configure(const SystemConfig& config, std::string& error) = 0;
   virtual bool connect(std::string& error) = 0;
   virtual void disconnect() = 0;
+  virtual bool pollStatus(std::string& error) {
+    error.clear();
+    return true;
+  }
   virtual bool setControlMode(EdfaControlMode mode, std::string& error) = 0;
   virtual bool setOutputSetpoint(const OpticalPowerSetpoint& setpoint, std::string& error) = 0;
   virtual bool setOutputEnabled(bool enabled, std::string& error) = 0;

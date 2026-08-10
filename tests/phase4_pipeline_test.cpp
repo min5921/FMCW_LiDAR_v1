@@ -823,6 +823,71 @@ void testProcessingServiceSnapshots(const fmcw::SystemConfig& config,
          "an incomplete raster does not expose a partial B-scan image");
 }
 
+void testProcessingUpdateWaitsForRasterBoundary(
+    const fmcw::SystemConfig& config,
+    const std::vector<fmcw::RawFramePtr>& frames) {
+  fmcw::ProcessingService service(std::make_unique<fmcw::FftwBackend>());
+  std::mutex callback_mutex;
+  std::condition_variable callback_condition;
+  std::vector<std::uint64_t> revisions;
+  service.setProcessedFrameCallback(
+      [&](fmcw::ProcessedFramePtr frame) {
+        std::lock_guard<std::mutex> lock(callback_mutex);
+        revisions.push_back(frame->processing_config_revision);
+        callback_condition.notify_all();
+      });
+
+  std::string error;
+  expect(service.configure(config, 10U, error) && service.start(error),
+         "frame-boundary processing service starts");
+  const auto line = [&](std::uint32_t y, std::uint64_t sequence) {
+    auto batch = std::make_shared<fmcw::RawFrameBatch>();
+    batch->metadata.sequence = sequence;
+    for (std::uint32_t x = 0; x < config.scan.x_pixel_count; ++x) {
+      auto record = *frames.at(x % frames.size());
+      record.metadata.scan_position.valid = true;
+      record.metadata.scan_position.x_index = x;
+      record.metadata.scan_position.y_index = y;
+      batch->records.push_back(std::move(record));
+    }
+    return batch;
+  };
+
+  expect(service.enqueueBatch(line(0U, 1U), error) ==
+             fmcw::ProcessingEnqueueResult::Accepted,
+         "first raster line is queued with the original revision");
+  {
+    std::unique_lock<std::mutex> lock(callback_mutex);
+    expect(callback_condition.wait_for(lock, std::chrono::seconds(2), [&] {
+             return revisions.size() >= config.scan.x_pixel_count;
+           }),
+           "first raster line completes before the runtime update");
+  }
+
+  auto update = config.processing;
+  update.peak_threshold_db -= 1.0;
+  expect(service.updateRuntimeConfig(update, 11U, error),
+         "runtime update is queued during an incomplete raster frame");
+  expect(service.enqueueBatch(line(1U, 2U), error) ==
+             fmcw::ProcessingEnqueueResult::Accepted &&
+             service.enqueueBatch(line(0U, 3U), error) ==
+             fmcw::ProcessingEnqueueResult::Accepted,
+         "remaining old-frame and next-frame boundary lines are queued");
+  service.requestStop("Frame-boundary update test complete");
+  expect(service.waitUntilStopped(error), "frame-boundary processing test drains cleanly");
+
+  const auto points_per_line = static_cast<std::size_t>(config.scan.x_pixel_count);
+  expect(revisions.size() == points_per_line * 3U,
+         "all three raster lines produce processed records");
+  if (revisions.size() == points_per_line * 3U) {
+    expect(std::all_of(revisions.begin(), revisions.begin() + points_per_line * 2U,
+                       [](std::uint64_t revision) { return revision == 10U; }) &&
+               std::all_of(revisions.begin() + points_per_line * 2U, revisions.end(),
+                           [](std::uint64_t revision) { return revision == 11U; }),
+           "processing revision changes only at the next y=0 raster boundary");
+  }
+}
+
 void testProcessingServiceBatch(const fmcw::SystemConfig& config,
                                 const std::vector<fmcw::RawFramePtr>& frames) {
   fmcw::ProcessingService service(std::make_unique<fmcw::FftwBackend>());
@@ -1016,7 +1081,7 @@ void testBinaryStorageAndReplay(const fmcw::SystemConfig& config, fmcw::RawFrame
   options.raw_enabled = true;
   options.processed_enabled = true;
   options.queue_capacity = 8;
-  options.flush_interval_frames = 1;
+  options.flush_interval_ms = 1;
   options.split_file_size_gb = 1.0e-6;
 
   fmcw::AsyncStorageService storage;
@@ -1025,9 +1090,17 @@ void testBinaryStorageAndReplay(const fmcw::SystemConfig& config, fmcw::RawFrame
   expect(storage.enqueueRaw(raw, error) == fmcw::EnqueueResult::Accepted, "raw frame enters writer queue");
   expect(storage.enqueueRaw(second_raw, error) == fmcw::EnqueueResult::Accepted,
          "second raw frame enters the split writer queue");
-  expect(storage.enqueueProcessed(std::make_shared<const fmcw::ProcessedFrame>(processed), error) ==
-             fmcw::EnqueueResult::Accepted,
-         "processed frame enters writer queue");
+  auto point_cloud = std::make_shared<fmcw::PointCloudSnapshot>();
+  point_cloud->last_frame_id = processed.frame_id;
+  point_cloud->scan_frame_index = 0U;
+  point_cloud->processing_config_revision = processed.processing_config_revision;
+  point_cloud->width = 1U;
+  point_cloud->height = 1U;
+  point_cloud->completed_lines = 1U;
+  point_cloud->complete = true;
+  point_cloud->points.push_back(processed.point);
+  expect(storage.enqueuePointCloud(point_cloud, error) == fmcw::EnqueueResult::Accepted,
+         "complete point cloud frame enters writer queue");
   storage.requestStop("unit-test stop");
   expect(storage.waitUntilStopped(error), "storage drains and finalizes both streams");
   const auto status = storage.status();
@@ -1037,17 +1110,17 @@ void testBinaryStorageAndReplay(const fmcw::SystemConfig& config, fmcw::RawFrame
   const auto raw_path = directory / "session.raw.0000.bin";
   expect(std::filesystem::exists(raw_path) && std::filesystem::exists(directory / "session.raw.0001.bin") &&
              std::filesystem::exists(directory / "session.raw.json") &&
-             std::filesystem::exists(directory / "session.processed.bin") &&
-             std::filesystem::exists(directory / "session.processed.json"),
+             std::filesystem::exists(directory / "session.pointcloud.bin") &&
+             std::filesystem::exists(directory / "session.pointcloud.json"),
          "binary streams and JSON sidecars are created");
   {
-    std::ifstream processed_stream(directory / "session.processed.bin", std::ios::binary);
+    std::ifstream processed_stream(directory / "session.pointcloud.bin", std::ios::binary);
     std::array<char, 8> magic{};
     std::uint32_t version = 0U;
     processed_stream.read(magic.data(), static_cast<std::streamsize>(magic.size()));
     processed_stream.read(reinterpret_cast<char*>(&version), sizeof(version));
-    expect(processed_stream && std::string(magic.data(), magic.size()) == "FMCWPRO2" && version == 2U,
-           "processed stream declares the trajectory-aware v2 format");
+    expect(processed_stream && std::string(magic.data(), magic.size()) == "FMCWPCD1" && version == 1U,
+           "point cloud stream declares the XYZIV frame format");
   }
   fmcw::RawReplayReader replay;
   expect(replay.open(raw_path, error), "raw replay opens the stored stream");
@@ -1276,7 +1349,7 @@ void testSelectedAScanSnapshots() {
 void testStorageOverflow(fmcw::RawFramePtr raw) {
   auto state = std::make_shared<BlockingWriterState>();
   fmcw::AsyncStorageService storage(std::make_unique<BlockingRawWriter>(state),
-                                    std::make_unique<fmcw::BinaryProcessedFrameWriter>());
+                                    std::make_unique<fmcw::BinaryPointCloudFrameWriter>());
   fmcw::WriterOpenOptions options;
   options.session_directory = uniqueTestDirectory();
   options.file_stem = "overflow";
@@ -1347,6 +1420,8 @@ int main() {
     const auto processed = testSignalProcessing(config, frames);
     std::cout << "[Phase4] Processing service\n" << std::flush;
     testProcessingServiceSnapshots(config, frames);
+    std::cout << "[Phase4] Processing frame-boundary update\n" << std::flush;
+    testProcessingUpdateWaitsForRasterBoundary(config, frames);
     std::cout << "[Phase7.2] Processing DMA batch\n" << std::flush;
     testProcessingServiceBatch(config, frames);
     std::cout << "[Phase4] Processing overflow\n" << std::flush;

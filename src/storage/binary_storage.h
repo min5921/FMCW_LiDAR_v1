@@ -24,13 +24,13 @@ class BinaryRawFrameWriter final : public IRawFrameWriter {
   std::unique_ptr<Impl> impl_;
 };
 
-class BinaryProcessedFrameWriter final : public IProcessedFrameWriter {
+class BinaryPointCloudFrameWriter final : public IPointCloudFrameWriter {
  public:
-  BinaryProcessedFrameWriter();
-  ~BinaryProcessedFrameWriter() override;
+  BinaryPointCloudFrameWriter();
+  ~BinaryPointCloudFrameWriter() override;
 
   bool open(const WriterOpenOptions& options, std::string& error) override;
-  bool write(const ProcessedFrame& frame, std::string& error) override;
+  bool write(const PointCloudSnapshot& frame, std::string& error) override;
   bool flush(std::string& error) override;
   bool finalize(const WriterFinalizeOptions& options, std::string& error) override;
   WriterStatus status() const override;

@@ -110,7 +110,7 @@ Waveform/FFT는 processed frame마다 교체한다. Scan line은 한 B-scan line
 - `BScanSnapshot` and `PointCloudSnapshot` carry one complete raster. Every published snapshot has `completed_lines == height` and `complete == true`; partial raster work buffers are never exposed to either viewer.
 - After publication, the visible 3D viewer owns an independent display-only post-processor. It can median-fuse the most recent one to five complete organized frames and insert edge-gated Y rows at 2x or 4x density. The immutable source snapshots and all storage/UDP payloads remain unchanged.
 - `WaveformSnapshot` and `FftSnapshot` are published only for the configured zero-based `record_index_in_buffer`.
-- This is the legacy-compatible display selection. Every A-scan still passes through FFT, peak measurement, scan-line/B-scan/point-cloud aggregation, raw/processed storage, and UDP assembly.
+- This is the legacy-compatible display selection. Every A-scan still passes through FFT, peak measurement, scan-line/B-scan/point-cloud aggregation, raw storage, complete-frame point-cloud storage, and UDP assembly.
 
 ## 7. Processing Service
 
@@ -135,8 +135,8 @@ CUDA mode uses `processing/cuda/cuda_signal_pipeline.cu` for the complete batch 
 - `<stem>.raw.0000.bin`, `<stem>.raw.0001.bin`, ...
 - `<stem>.raw.json`
 - `<stem>.setup.yaml`
-- `<stem>.processed.bin`
-- `<stem>.processed.json`
+- `<stem>.pointcloud.bin`
+- `<stem>.pointcloud.json`
 
 Raw binary는 stream header 뒤에 frame record를 순차 기록한다. 각 record에는 frame/config/trigger/scan/optical/segment metadata와 full-period `int16` payload가 들어간다. Raw frame을 segment로 자른 뒤 저장하지 않는다.
 
@@ -144,7 +144,7 @@ Raw streams record their explicit `SampleFormat`. Simulator input may use signed
 
 Phase 7.4 changes production acquisition ownership: one `RawFrameBatch` references a contiguous DMA payload and each record exposes a sample view into that allocation. Raw storage enqueues and writes once per DMA block. CUDA copies native external DMA storage directly to its persistent device input; only non-external input uses one contiguous pinned staging copy. Raw/result writers have separate queues and workers. Raw parts are preallocated, split only between complete blocks, truncated to committed bytes, and guarded by free-space preflight.
 
-Processed binary에는 up/down FFT magnitude, peak와 validity, distance, velocity, XYZ, intensity, point velocity, latency, processing revision을 기록한다. UDP point payload도 동일한 `x, y, z, intensity, velocity` 순서를 사용한다.
+Point-cloud binary에는 complete raster frame 단위로 XYZIV와 validity만 기록한다. UDP point payload도 동일한 `x, y, z, intensity, velocity` 순서를 사용한다.
 
 Raw writer는 stream open 시점에 `<stem>.setup.yaml`을 먼저 기록하며 JSON sidecar의 `setup_file`과 `coordinate_frame`이 이를 참조한다. MCU legacy X/Y/M 파일을 사용하는 session은 적용된 waveform을 같은 session directory에 보관하고 setup의 상대 경로를 그 사본으로 바꾼다.
 
@@ -159,7 +159,7 @@ JSON sidecar에는 다음을 기록한다.
 
 `split_file_size_gb`를 넘으면 다음 numbered raw part를 연다. 한 frame은 두 part로 분할하지 않으므로 part 크기는 최대 한 frame만큼 설정값을 초과할 수 있다.
 
-Processed binary format v2 additionally records the trajectory sample index, source X/Y commands, calibrated azimuth/elevation angles, detected fast axis/direction, coordinate source, and command coordinates copied into the final point. Point-cloud CSV exports `x_forward_m, y_left_m, z_up_m, intensity_db, velocity_mps, scan_x_command, scan_y_command`. UDP packet v2 keeps five floats per point and fixes XYZ as `X forward, Y left, Z up`; legacy-axis v1 is rejected.
+Point-cloud binary format v1 records one complete organized raster per block. Its per-point payload is only `x, y, z, intensity, velocity, valid`; setup and processing revision metadata remain at frame/session level. Point-cloud CSV exports `x_forward_m, y_left_m, z_up_m, intensity_db, velocity_mps, scan_x_command, scan_y_command`. UDP packet v2 keeps five floats per point and fixes XYZ as `X forward, Y left, Z up`; legacy-axis v1 is rejected.
 
 ## 9. Replay
 

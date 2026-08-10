@@ -217,7 +217,7 @@ struct StorageConfig {
   std::uint32_t queue_capacity = 64;
   QueueOverflowPolicy overflow_policy = QueueOverflowPolicy::StopAcquisition;
   double split_file_size_gb = 4.0;
-  std::uint32_t flush_interval_frames = 128;
+  std::uint32_t flush_interval_ms = 250;
 };
 
 struct UiConfig {

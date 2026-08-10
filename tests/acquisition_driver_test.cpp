@@ -687,8 +687,24 @@ void testSerialControllers() {
          "MCU restarts after STOP without another waveform upload");
   expect(mcu.stopScan(error), "MCU stops cleanly after the no-reupload restart");
   mcu.disconnect();
-  expect(mcu.status().waveform_points == 0 && !mcu.status().device.connected,
-         "MCU disconnect invalidates volatile waveform readiness");
+  expect(mcu.status().waveform_points == frames.size() && !mcu.status().device.connected &&
+             !mcu.status().device.ready && mcu.loadedWaveform() != nullptr,
+         "MCU serial disconnect retains the waveform known to remain in device RAM");
+  expect(mcu.connect(error) && mcu.status().device.ready && mcu.startScan(error),
+         "MCU reconnect reuses a retained waveform without another upload");
+  expect(mcu.stopScan(error), "MCU stops after reconnecting with retained waveform");
+  mcu.disconnect();
+
+  auto unrelated_config = mcu_config;
+  unrelated_config.laser.sweep_bandwidth_hz += 1.0e6;
+  expect(mcu.configure(unrelated_config, error) && mcu.loadedWaveform() != nullptr &&
+             mcu.status().waveform_points == frames.size(),
+         "Unrelated setup changes preserve the uploaded MCU waveform contract");
+  auto waveform_config = unrelated_config;
+  waveform_config.scan.trigger_shift_samples = 1;
+  expect(mcu.configure(waveform_config, error) && mcu.loadedWaveform() == nullptr &&
+             mcu.status().waveform_points == 0U,
+         "A B-trigger waveform contract change requires another MCU upload");
 
   auto edfa_transport = std::make_shared<ScriptedSerialTransport>();
   fmcw::EdfaSerialController edfa(edfa_transport);
@@ -698,6 +714,7 @@ void testSerialControllers() {
   edfa_config.edfa.output_setpoint = {19.99, fmcw::OpticalPowerUnit::Dbm};
   expect(edfa.configure(edfa_config, error), "EDFA serial controller configures");
   expect(edfa.connect(error), "EDFA complete state query confirms connection");
+  expect(edfa.pollStatus(error), "EDFA periodic state poll refreshes the complete serial state");
   expect(edfa.status().telemetry_valid && edfa.status().measured_current_ma == 1000.0 &&
              edfa.status().measured_input_dbm == -10.0 &&
              edfa.status().measured_output_dbm == 20.0,
@@ -1003,8 +1020,8 @@ void testContinuousAcquisitionWorker() {
   config.digitizer.a_scan_count = 4;
   config.scan.x_pixel_count = 4;
   std::string error;
-  expect(session.configure(config, 19, error) && session.connect(error) && session.start(error),
-         "finite session starts for continuous worker test");
+  expect(session.configure(config, 19, error) && session.connect(error) && session.arm(error),
+         "finite session arms before its trigger source is enabled");
 
   fmcw::ContinuousAcquisitionWorker worker(session);
   std::mutex mutex;
@@ -1024,7 +1041,9 @@ void testContinuousAcquisitionWorker() {
         exited = true;
         condition.notify_all();
       },
-      error), "continuous acquisition worker starts");
+      error), "continuous acquisition worker reaches its wait state while armed");
+  expect(session.enableTrigger(error),
+         "trigger source is enabled only after the acquisition worker is ready");
   {
     std::unique_lock<std::mutex> lock(mutex);
     expect(condition.wait_for(lock, std::chrono::seconds(2), [&] { return exited; }),

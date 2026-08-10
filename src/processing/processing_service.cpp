@@ -106,6 +106,14 @@ struct ProcessingService::Impl {
     std::uint64_t revision = 0;
   };
 
+  static bool beginsRasterFrame(const RawFrameBatchPtr& batch) {
+    if (!batch || batch->records.empty()) {
+      return false;
+    }
+    const auto& position = batch->records.front().metadata.scan_position;
+    return !position.valid || position.y_index == 0U;
+  }
+
   struct BatchTiming {
     std::uint64_t enqueue_timestamp_ns = 0;
     std::uint64_t processing_start_timestamp_ns = 0;
@@ -177,9 +185,11 @@ struct ProcessingService::Impl {
   }
 
   bool publishProcessedBatch(const RawFrameBatchPtr& batch,
-                             const ProcessedFrameCallback& current_callback,
-                             std::uint64_t& line_completed_timestamp_ns,
-                             std::string& error) {
+                              const ProcessedFrameCallback& current_callback,
+                              const PointCloudFrameCallback& current_point_cloud_callback,
+                              std::uint64_t& line_completed_timestamp_ns,
+                              std::string& error) {
+    const auto previous_point_cloud = snapshots.latestPointCloud();
     if (!batch || processed_batch_workspace.size() != batch->records.size() ||
         !snapshots.publishBatch(*batch, processed_batch_workspace)) {
       error = "DMA batch snapshot publication received an invalid result count";
@@ -215,6 +225,11 @@ struct ProcessingService::Impl {
       for (auto& processed : processed_batch_workspace) {
         current_callback(std::make_shared<ProcessedFrame>(std::move(processed)));
       }
+    }
+    const auto completed_point_cloud = snapshots.latestPointCloud();
+    if (current_point_cloud_callback && completed_point_cloud &&
+        completed_point_cloud != previous_point_cloud && completed_point_cloud->complete) {
+      current_point_cloud_callback(completed_point_cloud);
     }
     error.clear();
     return !processing_stop_requested;
@@ -253,6 +268,7 @@ struct ProcessingService::Impl {
       QueuedBatch queued_batch;
       std::optional<PendingRuntimeConfig> runtime_update;
       ProcessedFrameCallback current_callback;
+      PointCloudFrameCallback current_point_cloud_callback;
       {
         std::unique_lock<std::mutex> lock(mutex);
         condition.wait(lock, [this] { return !queue.empty() || !accepting; });
@@ -261,9 +277,12 @@ struct ProcessingService::Impl {
         }
         queued_batch = std::move(queue.front());
         queue.pop_front();
-        runtime_update = std::move(pending_runtime_config);
-        pending_runtime_config.reset();
+        if (pending_runtime_config.has_value() && beginsRasterFrame(queued_batch.batch)) {
+          runtime_update = std::move(pending_runtime_config);
+          pending_runtime_config.reset();
+        }
         current_callback = callback;
+        current_point_cloud_callback = point_cloud_callback;
       }
       std::string error;
       if (runtime_update.has_value() &&
@@ -275,6 +294,10 @@ struct ProcessingService::Impl {
         accepting = false;
         queue.clear();
         break;
+      }
+      if (runtime_update.has_value()) {
+        std::lock_guard<std::mutex> lock(mutex);
+        config.processing = runtime_update->config;
       }
       bool batch_complete = true;
       std::uint64_t line_completed_timestamp_ns = 0U;
@@ -292,6 +315,7 @@ struct ProcessingService::Impl {
       }
       if (batch_complete &&
           !publishProcessedBatch(queued_batch.batch, current_callback,
+                                 current_point_cloud_callback,
                                  line_completed_timestamp_ns, error)) {
         if (!error.empty()) {
           std::lock_guard<std::mutex> lock(mutex);
@@ -327,11 +351,12 @@ struct ProcessingService::Impl {
   }
 
   bool publishAsyncBatch(const RawFrameBatchPtr& batch,
-                         const BatchTiming& timing,
-                         const ProcessedFrameCallback& current_callback) {
+                          const BatchTiming& timing,
+                          const ProcessedFrameCallback& current_callback,
+                          const PointCloudFrameCallback& current_point_cloud_callback) {
     std::uint64_t line_completed_timestamp_ns = 0U;
     std::string error;
-    if (!publishProcessedBatch(batch, current_callback,
+    if (!publishProcessedBatch(batch, current_callback, current_point_cloud_callback,
                                line_completed_timestamp_ns, error)) {
       if (!error.empty()) {
         failAsyncWorker(std::move(error), "Signal processing failed");
@@ -364,7 +389,8 @@ struct ProcessingService::Impl {
       std::optional<PendingRuntimeConfig> runtime_update;
       {
         std::lock_guard<std::mutex> lock(mutex);
-        if (pending_runtime_config.has_value() && processor.inFlightBatchCount() == 0U) {
+        if (pending_runtime_config.has_value() && processor.inFlightBatchCount() == 0U &&
+            !queue.empty() && beginsRasterFrame(queue.front().batch)) {
           runtime_update = std::move(pending_runtime_config);
           pending_runtime_config.reset();
         }
@@ -377,13 +403,16 @@ struct ProcessingService::Impl {
           failed = true;
           break;
         }
+        std::lock_guard<std::mutex> lock(mutex);
+        config.processing = runtime_update->config;
       }
 
       while (processor.inFlightBatchCount() < processor.asyncBatchCapacity()) {
         QueuedBatch queued_batch;
         {
           std::lock_guard<std::mutex> lock(mutex);
-          if (pending_runtime_config.has_value() || queue.empty()) {
+          if (queue.empty() ||
+              (pending_runtime_config.has_value() && beginsRasterFrame(queue.front().batch))) {
             break;
           }
           queued_batch = std::move(queue.front());
@@ -435,11 +464,14 @@ struct ProcessingService::Impl {
           const auto timing = in_flight_timings.front();
           in_flight_timings.pop_front();
           ProcessedFrameCallback current_callback;
+          PointCloudFrameCallback current_point_cloud_callback;
           {
             std::lock_guard<std::mutex> lock(mutex);
             current_callback = callback;
+            current_point_cloud_callback = point_cloud_callback;
           }
-          if (!publishAsyncBatch(completed_batch, timing, current_callback)) {
+          if (!publishAsyncBatch(completed_batch, timing, current_callback,
+                                 current_point_cloud_callback)) {
             failed = true;
             break;
           }
@@ -458,7 +490,7 @@ struct ProcessingService::Impl {
         break;
       }
       condition.wait(lock, [this] {
-        return !queue.empty() || pending_runtime_config.has_value() || !accepting;
+        return !queue.empty() || !accepting;
       });
     }
 
@@ -478,6 +510,7 @@ struct ProcessingService::Impl {
   SystemConfig config;
   std::optional<PendingRuntimeConfig> pending_runtime_config;
   ProcessedFrameCallback callback;
+  PointCloudFrameCallback point_cloud_callback;
   std::size_t queue_capacity = 0;
   std::size_t queue_high_water_mark = 0;
   std::uint64_t batches_discarded_on_stop = 0;
@@ -636,8 +669,8 @@ bool ProcessingService::updateRuntimeConfig(const ProcessingConfig& config,
     error = "FFT backend, queue capacity, and overflow policy cannot change while running";
     return false;
   }
-  impl_->config.processing = config;
   impl_->pending_runtime_config = Impl::PendingRuntimeConfig{config, processing_config_revision};
+  impl_->condition.notify_all();
   error.clear();
   return true;
 }
@@ -645,6 +678,11 @@ bool ProcessingService::updateRuntimeConfig(const ProcessingConfig& config,
 void ProcessingService::setProcessedFrameCallback(ProcessedFrameCallback callback) {
   std::lock_guard<std::mutex> lock(impl_->mutex);
   impl_->callback = std::move(callback);
+}
+
+void ProcessingService::setPointCloudFrameCallback(PointCloudFrameCallback callback) {
+  std::lock_guard<std::mutex> lock(impl_->mutex);
+  impl_->point_cloud_callback = std::move(callback);
 }
 
 void ProcessingService::requestStop(std::string reason, ProcessingStopMode mode) {

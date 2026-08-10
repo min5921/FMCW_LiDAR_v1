@@ -418,7 +418,7 @@ CPU FFT 요구사항:
 - threshold를 초과하는 peak가 없으면 이전 값을 유지하지 않고 해당 결과를 invalid로 기록하며, 모든 실수형 peak 및 측정값을 `NaN`으로 전달한다.
 - 유효한 peak pair는 distance와 velocity calibration을 거친 뒤 일반적인 ROS/RViz right-handed LiDAR 좌표계인 `X forward, Y left, Z up`으로 변환하고 최종 point에 `x, y, z, intensity, velocity`를 모두 기록한다.
 - Cartesian 변환 전에 calibration profile의 `x_angle_offset_deg`, `y_angle_offset_deg`를 scanner angle에 더한다.
-- B-scan depth map은 Cartesian forward depth인 `point.x`를 사용하며, 3D/processed storage/UDP는 같은 `X forward, Y left, Z up` XYZIV를 유지한다.
+- B-scan depth map은 Cartesian forward depth인 `point.x`를 사용하며, 3D/point-cloud storage/UDP는 같은 `X forward, Y left, Z up` XYZIV를 유지한다.
 - 설정 변경이 처리 결과에 반영된 frame 번호를 기록한다.
 - raw replay 모드에서도 동일한 processing pipeline을 사용한다.
 - GPU FFT와 CPU FFT 결과 차이를 검증하는 regression test를 제공한다.
