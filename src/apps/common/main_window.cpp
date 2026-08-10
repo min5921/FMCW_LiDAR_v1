@@ -798,6 +798,20 @@ QWidget* MainWindow::buildLivePage() {
   point_size->setValue(3);
   point_size->setFixedWidth(110);
   point_size->setToolTip("Point size");
+  auto* temporal_frames = new QSpinBox(point_cloud_page);
+  temporal_frames->setRange(1, 5);
+  temporal_frames->setValue(3);
+  temporal_frames->setSuffix(" frames");
+  temporal_frames->setFixedWidth(92);
+  temporal_frames->setToolTip(
+      "Median-fuse this many recent complete raster frames; older valid cells fill temporary holes");
+  auto* vertical_interpolation = new QComboBox(point_cloud_page);
+  vertical_interpolation->addItem("Y native", 1U);
+  vertical_interpolation->addItem("Y 2x", 2U);
+  vertical_interpolation->addItem("Y 4x", 4U);
+  vertical_interpolation->setCurrentIndex(2);
+  vertical_interpolation->setToolTip(
+      "Insert display-only Y rows when neighboring ranges pass the edge discontinuity gate");
   auto* show_axes = new QCheckBox("XYZ axes", point_cloud_page);
   show_axes->setChecked(true);
   show_axes->setToolTip("Show or hide the X, Y, and Z reference axes");
@@ -812,12 +826,19 @@ QWidget* MainWindow::buildLivePage() {
   point_cloud_tools->addWidget(color_mode);
   point_cloud_tools->addWidget(new QLabel("Point size", point_cloud_page));
   point_cloud_tools->addWidget(point_size);
+  point_cloud_tools->addWidget(new QLabel("Temporal", point_cloud_page));
+  point_cloud_tools->addWidget(temporal_frames);
+  point_cloud_tools->addWidget(vertical_interpolation);
   point_cloud_tools->addWidget(show_axes);
   point_cloud_tools->addWidget(reset_camera);
   point_cloud_tools->addWidget(save_cloud);
   point_cloud_tools->addStretch(1);
   point_cloud_tools->addWidget(point_cloud_status_);
   point_cloud_plot_ = new PointCloudWidget(point_cloud_page);
+  point_cloud_plot_->setTemporalFusionFrames(
+      static_cast<std::uint32_t>(temporal_frames->value()));
+  point_cloud_plot_->setVerticalInterpolationFactor(
+      vertical_interpolation->currentData().toUInt());
   point_cloud_layout->addLayout(point_cloud_tools);
   point_cloud_layout->addWidget(point_cloud_plot_, 1);
   live_tabs_->addTab(time_plot_, "Time Domain");
@@ -887,6 +908,14 @@ QWidget* MainWindow::buildLivePage() {
   connect(point_size, &QSlider::valueChanged, point_cloud_page, [this](int value) {
     point_cloud_plot_->setPointSize(static_cast<float>(value));
   });
+  connect(temporal_frames, &QSpinBox::valueChanged, point_cloud_page, [this](int value) {
+    point_cloud_plot_->setTemporalFusionFrames(static_cast<std::uint32_t>(value));
+  });
+  connect(vertical_interpolation, &QComboBox::currentIndexChanged,
+          point_cloud_page, [this, vertical_interpolation](int) {
+            point_cloud_plot_->setVerticalInterpolationFactor(
+                vertical_interpolation->currentData().toUInt());
+          });
   connect(show_axes, &QCheckBox::toggled, point_cloud_plot_, &PointCloudWidget::setAxesVisible);
   connect(reset_camera, &QToolButton::clicked, point_cloud_plot_, &PointCloudWidget::resetCamera);
   connect(save_cloud, &QToolButton::clicked, this, [this] {
@@ -1681,11 +1710,13 @@ void MainWindow::connectUi() {
       point_cloud_update_timer_.start();
     }
     point_cloud_plot_->setSnapshot(snapshot);
-    const auto valid_points = std::count_if(snapshot->points.begin(), snapshot->points.end(),
-                                            [](const PointXYZI& point) { return point.valid; });
-    point_cloud_status_->setText(QString("Frame %1 complete | %2 points")
+    const auto stats = point_cloud_plot_->displayStats();
+    point_cloud_status_->setText(QString("Frame %1 | %2 source -> %3 fused + %4 interp = %5")
                                      .arg(snapshot->scan_frame_index + 1U)
-                                     .arg(valid_points));
+                                     .arg(stats.source_valid_points)
+                                     .arg(stats.fused_points)
+                                     .arg(stats.interpolated_points)
+                                     .arg(stats.displayed_points));
     point_cloud_status_->setProperty("statusKind", "ready");
     repolish(point_cloud_status_);
   });

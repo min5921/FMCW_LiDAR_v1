@@ -672,3 +672,47 @@ Three-point quadratic peak refinement (2026-08-09):
 - The refreshed Jetson source bundle contains the same CUDA refinement and 269
   verified manifest entries with zero mismatches. Its four Bash scripts passed
   syntax checks.
+
+Point-cloud display post-processing and GPU rendering (2026-08-09):
+
+- The visible 3D tab now median-fuses a bounded one-to-five-frame history of
+  complete organized rasters. Historical valid cells can fill temporary holes;
+  session, geometry, and processing-revision changes reset the history.
+- Edge-aware viewer-only Y interpolation supports native, 2x, and 4x density.
+  The adaptive range gate rejects large depth discontinuities, and CSV export
+  marks interpolated points and the contributing temporal observation count.
+- The point renderer uploads packed XYZ/color vertices to an OpenGL VBO and
+  draws circular point sprites with depth testing. Shader or buffer setup
+  failure retains the CPU painter fallback without entering the acquisition or
+  signal-processing path.
+- The dedicated post-processing test covers temporal hole recovery, bounded
+  history expiry, session reset, smooth-row interpolation, edge rejection, and
+  malformed organized clouds. Windows Release build and GUI smoke passed. The
+  simulator rendered 24,950 source points as 96,806 displayed points through
+  the GPU VBO path. Normal CTest passed 9/10; the existing realtime probe was
+  the sole failure because this local Visual Studio configuration did not make
+  a CUDA runtime device available, while its FFTW portion reported HARD_PASS.
+
+Point-cloud integration on Windows and Jetson source paths (2026-08-10):
+
+- The point-cloud fusion branch was merged with the three-point peak-refinement
+  branch. Both features are present in `main`; the merge preserves the existing
+  MCU workspace metadata change outside the application source.
+- Display post-processing is owned by the platform-independent `fmcw_core`
+  library, and the OpenGL VBO renderer is owned by `fmcw_qt_common`. Therefore
+  both `fmcw_lidar_windows` and `fmcw_lidar_jetson` compile the same PCD display
+  implementation. The Jetson build keeps Qt 6.2 OpenGL/OpenGLWidgets and CUDA
+  as required dependencies and does not enable FFTW.
+- The renderer detects whether Qt uses desktop OpenGL or OpenGL ES. It requests
+  a 3.3 core context with GLSL 330 on desktop and an ES 3.0 context with GLSL
+  ES 300 on Jetson Qt builds backed by GLES; desktop-only point-size state is
+  not referenced on the GLES path.
+- A fresh Windows configure enabled Qt 6.11, ATS-SDK, FFTW, and CUDA/cuFFT. The
+  complete build and CTest passed 11/11, including the point-cloud
+  post-processor and real CUDA processing tests. The packaged EXE smoke test
+  exited 0; SHA-256 is
+  `9E2FA4E0D0DC7C0D25EFE2D444993EB06E0D4767191CB1D1CD015BF3DFCC81B9`.
+- Native Jetson compilation remains to be run on the AGX Orin. The saved SSH
+  endpoint responded but rejected non-interactive authentication, so this
+  workstation could validate and export the Jetson source path but could not
+  claim an ARM64 build result.

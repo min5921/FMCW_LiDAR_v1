@@ -198,6 +198,9 @@ Peak Analysis 탭은 FFT spectrum을 다시 그리지 않는다. 다음 두 plot
 - Changing the selected A-scan is display-only and applies while acquisition is running; it does not restart or reconfigure the digitizer.
 - Peak Analysis, Distance/Velocity, B-scan, 3D, UDP, and raw/processed storage continue to consume all A-scans.
 - The 3D tab consumes complete immutable point-cloud frames only. `ui.point_cloud_update_hz` caps rendering independently from acquisition and never exposes partial raster assembly.
+- The 3D tab may median-fuse a bounded history of one to five complete frames. A historical valid cell may fill a temporary invalid hole, but history is reset on session, geometry, or processing-revision changes and never feeds storage, UDP, B-scan, or signal processing.
+- Viewer-only Y interpolation supports native, 2x, and 4x display density. Inserted rows require valid endpoints and an adaptive angular-spacing range gate so a large depth discontinuity is never bridged. Interpolated points remain explicitly marked in display export.
+- Point rendering uses a GPU VBO and circular point-sprite shader. Shader or buffer initialization failure falls back to the bounded CPU painter without affecting acquisition.
 - The Qt/OpenGL-backed renderer supports rotate, pan, zoom, reset, point size, optional XYZ axes, color mode, freeze, PNG capture, and CSV point export.
 - UDP uses a dedicated bounded sender queue. Socket I/O never runs on the UI, acquisition, or processing thread.
 - Global STOP first stops device input, drains processing, then finalizes UDP and storage workers.

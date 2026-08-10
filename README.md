@@ -10,7 +10,7 @@ FMCW LiDAR 시스템을 Windows와 Jetson에서 함께 운용하기 위한 v1 �
 - CPU FFT: FFTW
 - GPU FFT: CUDA/cuFFT
 - Raw storage: high-speed binary + JSON metadata
-- 3D viewer: Qt/OpenGL lightweight point cloud renderer
+- 3D viewer: Qt/OpenGL GPU VBO point-sprite renderer with bounded temporal fusion and edge-aware Y interpolation
 - Live Time/FFT: one operator-selected A-scan from each DMA buffer
 - UDP: asynchronous versioned raster point-frame sender
 - Point axes: ROS/RViz convention (`+X` forward, `+Y` left, `+Z` up)

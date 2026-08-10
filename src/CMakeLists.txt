@@ -49,6 +49,7 @@ set(FMCW_CORE_SOURCES
   network/udp_sender_service.cpp
   processing/cpu/fftw_backend.cpp
   processing/fft_backends.cpp
+  processing/point_cloud_postprocessor.cpp
   processing/processing_service.cpp
   processing/processing_snapshots.cpp
   processing/signal_processor.cpp

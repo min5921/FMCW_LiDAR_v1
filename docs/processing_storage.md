@@ -108,6 +108,7 @@ Waveform/FFT는 processed frame마다 교체한다. Scan line은 한 B-scan line
 ### Selected Display And 3D Snapshot
 
 - `BScanSnapshot` and `PointCloudSnapshot` carry one complete raster. Every published snapshot has `completed_lines == height` and `complete == true`; partial raster work buffers are never exposed to either viewer.
+- After publication, the visible 3D viewer owns an independent display-only post-processor. It can median-fuse the most recent one to five complete organized frames and insert edge-gated Y rows at 2x or 4x density. The immutable source snapshots and all storage/UDP payloads remain unchanged.
 - `WaveformSnapshot` and `FftSnapshot` are published only for the configured zero-based `record_index_in_buffer`.
 - This is the legacy-compatible display selection. Every A-scan still passes through FFT, peak measurement, scan-line/B-scan/point-cloud aggregation, raw/processed storage, and UDP assembly.
 

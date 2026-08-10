@@ -1,13 +1,22 @@
 #pragma once
 
-#include "processing/processing_snapshots.h"
+#include "processing/point_cloud_postprocessor.h"
 
+#include <QOpenGLBuffer>
 #include <QOpenGLFunctions>
+#include <QOpenGLShaderProgram>
+#include <QOpenGLVertexArrayObject>
 #include <QOpenGLWidget>
 #include <QPoint>
+#include <QString>
 
+#include <cstddef>
+#include <functional>
 #include <memory>
 #include <vector>
+
+class QPainter;
+class QPointF;
 
 namespace fmcw {
 
@@ -15,6 +24,15 @@ enum class PointCloudColorMode {
   Intensity,
   Velocity,
   Distance,
+};
+
+struct PointCloudDisplayStats {
+  std::size_t source_valid_points = 0U;
+  std::size_t fused_points = 0U;
+  std::size_t interpolated_points = 0U;
+  std::size_t displayed_points = 0U;
+  std::uint32_t source_height = 0U;
+  std::uint32_t display_height = 0U;
 };
 
 class PointCloudWidget final : public QOpenGLWidget, protected QOpenGLFunctions {
@@ -26,6 +44,9 @@ class PointCloudWidget final : public QOpenGLWidget, protected QOpenGLFunctions 
   void setColorMode(PointCloudColorMode mode);
   void setPointSize(float pixels);
   void setAxesVisible(bool visible);
+  void setTemporalFusionFrames(std::uint32_t frame_count);
+  void setVerticalInterpolationFactor(std::uint32_t factor);
+  PointCloudDisplayStats displayStats() const;
   void resetCamera();
   bool saveCurrentCloud(const QString& path) const;
 
@@ -45,14 +66,25 @@ class PointCloudWidget final : public QOpenGLWidget, protected QOpenGLFunctions 
     float r;
     float g;
     float b;
+    float alpha;
   };
 
+  void rebuildDisplayCloud();
   void rebuildVertices();
   void fitSpatialBounds();
+  void initializeGpuRenderer();
+  void uploadVertices();
+  void drawGpuPoints();
+  void drawPainterFallback(QPainter& painter, const std::function<QPointF(double, double, double)>& project);
 
   std::shared_ptr<const PointCloudSnapshot> snapshot_;
-  std::vector<PointXYZI> current_points_;
+  PointCloudPostProcessor post_processor_;
+  std::vector<PointCloudDisplayPoint> current_points_;
   std::vector<Vertex> vertices_;
+  std::unique_ptr<QOpenGLShaderProgram> point_program_;
+  QOpenGLBuffer vertex_buffer_{QOpenGLBuffer::VertexBuffer};
+  QOpenGLVertexArrayObject vertex_array_;
+  QString gpu_renderer_error_;
   QPoint last_mouse_position_;
   PointCloudColorMode color_mode_ = PointCloudColorMode::Intensity;
   float point_size_ = 3.0F;
@@ -67,6 +99,8 @@ class PointCloudWidget final : public QOpenGLWidget, protected QOpenGLFunctions 
   float extent_ = 1.0F;
   bool axes_visible_ = true;
   bool spatial_bounds_valid_ = false;
+  bool gpu_renderer_ready_ = false;
+  bool vertices_dirty_ = true;
 };
 
 }  // namespace fmcw
