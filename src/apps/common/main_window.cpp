@@ -809,6 +809,11 @@ QWidget* MainWindow::buildLivePage() {
   auto* reset_camera = new QToolButton(point_cloud_page);
   reset_camera->setIcon(style()->standardIcon(QStyle::SP_BrowserReload));
   reset_camera->setToolTip("Fit the current cloud and reset the 3D camera");
+  point_cloud_open_button_ = new QToolButton(point_cloud_page);
+  point_cloud_open_button_->setObjectName("pointCloudOpenButton");
+  point_cloud_open_button_->setText("Open Cloud...");
+  point_cloud_open_button_->setToolTip(
+      "Open CenterPoint Nx5 .bin, raw Waymo Nx6 .bin, or ASCII/binary .pcd");
   auto* save_cloud = new QToolButton(point_cloud_page);
   save_cloud->setIcon(style()->standardIcon(QStyle::SP_DialogSaveButton));
   save_cloud->setToolTip("Save current point cloud as CSV");
@@ -830,6 +835,7 @@ QWidget* MainWindow::buildLivePage() {
   point_cloud_tools->addWidget(point_size);
   point_cloud_tools->addWidget(show_axes);
   point_cloud_tools->addWidget(reset_camera);
+  point_cloud_tools->addWidget(point_cloud_open_button_);
   point_cloud_tools->addWidget(save_cloud);
   point_cloud_tools->addWidget(object_detection_weights_button_);
   point_cloud_tools->addWidget(object_detection_toggle_);
@@ -907,6 +913,18 @@ QWidget* MainWindow::buildLivePage() {
   });
   connect(show_axes, &QCheckBox::toggled, point_cloud_plot_, &PointCloudWidget::setAxesVisible);
   connect(reset_camera, &QToolButton::clicked, point_cloud_plot_, &PointCloudWidget::resetCamera);
+  connect(point_cloud_open_button_, &QToolButton::clicked, this, [this] {
+    const auto path = QFileDialog::getOpenFileName(
+        this, "Open point cloud", {},
+        "Point cloud (*.bin *.pcd);;CenterPoint / Waymo binary (*.bin);;PCD (*.pcd)");
+    if (path.isEmpty()) {
+      return;
+    }
+    point_cloud_status_->setText("Loading external point cloud...");
+    point_cloud_status_->setProperty("statusKind", "neutral");
+    repolish(point_cloud_status_);
+    controller_->loadPointCloudFile(path);
+  });
   connect(save_cloud, &QToolButton::clicked, this, [this] {
     const auto path = QFileDialog::getSaveFileName(this, "Save point cloud", "point_cloud.csv",
                                                    "CSV point cloud (*.csv)");
@@ -2667,6 +2685,9 @@ void MainWindow::updateControlAvailability() {
   load_button_->setEnabled(editable);
   save_button_->setEnabled(editable);
   profile_combo_->setEnabled(editable);
+  if (point_cloud_open_button_ != nullptr) {
+    point_cloud_open_button_->setEnabled(editable);
+  }
   for (auto* control : restart_required_controls_) {
     control->setEnabled(editable);
   }

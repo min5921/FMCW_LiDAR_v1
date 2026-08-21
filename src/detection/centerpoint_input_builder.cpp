@@ -67,11 +67,17 @@ CenterPointInput buildCenterPointInput(const PointCloudSnapshot& snapshot,
     input.features.push_back(point.x);
     input.features.push_back(point.y);
     input.features.push_back(point.z);
-    input.features.push_back(normalizeCenterPointIntensity(point.intensity, config));
-    const auto fifth = config.fifth_feature == CenterPointFifthFeature::Velocity &&
-            std::isfinite(point.velocity)
-        ? point.velocity
-        : 0.0F;
+    const bool waymo_features = snapshot.feature_encoding ==
+        PointCloudFeatureEncoding::CenterPointWaymo;
+    input.features.push_back(waymo_features
+        ? point.intensity
+        : normalizeCenterPointIntensity(point.intensity, config));
+    const auto fifth = waymo_features && std::isfinite(point.elongation)
+        ? point.elongation
+        : config.fifth_feature == CenterPointFifthFeature::Velocity &&
+                std::isfinite(point.velocity)
+            ? point.velocity
+            : 0.0F;
     input.features.push_back(fifth);
   }
 

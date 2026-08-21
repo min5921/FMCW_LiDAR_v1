@@ -124,11 +124,12 @@ bool PointCloudWidget::saveCurrentCloud(const QString& path) const {
     return false;
   }
   QTextStream stream(&file);
-  stream << "x_forward_m,y_left_m,z_up_m,intensity_db,velocity_mps,"
+  stream << "x_forward_m,y_left_m,z_up_m,intensity,elongation,velocity_mps,"
             "scan_x_command,scan_y_command\n";
   for (const auto& point : current_points_) {
     stream << point.x << ',' << point.y << ',' << point.z << ',' << point.intensity << ','
-           << point.velocity << ',' << point.scan_x_command << ',' << point.scan_y_command << '\n';
+           << point.elongation << ',' << point.velocity << ',' << point.scan_x_command << ','
+           << point.scan_y_command << '\n';
   }
   return stream.status() == QTextStream::Ok;
 }

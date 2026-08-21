@@ -62,6 +62,13 @@ struct BScanSnapshot {
   std::vector<std::uint8_t> valid;
 };
 
+enum class PointCloudFeatureEncoding : std::uint8_t {
+  FmcwDbVelocity,
+  // [x, y, z, tanh(intensity), elongation], matching the validated Waymo
+  // CenterPoint points.bin contract.
+  CenterPointWaymo,
+};
+
 struct PointCloudSnapshot {
   std::uint64_t last_frame_id = 0;
   std::uint64_t scan_frame_index = 0;
@@ -70,6 +77,8 @@ struct PointCloudSnapshot {
   std::uint32_t height = 0;
   std::uint32_t completed_lines = 0;
   bool complete = false;
+  PointCloudFeatureEncoding feature_encoding =
+      PointCloudFeatureEncoding::FmcwDbVelocity;
   std::vector<PointXYZI> points;
 };
 

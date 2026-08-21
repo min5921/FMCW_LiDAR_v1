@@ -41,6 +41,8 @@ out/
 # Runtime data
 data/raw/*
 data/processed/*
+data/*.zip
+data/waymo_demo/
 outputs/*
 !data/raw/.gitkeep
 !data/processed/.gitkeep

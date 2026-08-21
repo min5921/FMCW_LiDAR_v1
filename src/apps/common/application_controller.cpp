@@ -7,6 +7,7 @@
 #include "detection/object_detection_policy.h"
 #include "detection/object_detection_service.h"
 #include "detection/object_detector.h"
+#include "detection/point_cloud_file_loader.h"
 #include "drivers/mcu/mcu_protocol.h"
 #include "drivers/runtime_adapter_factory.h"
 #include "network/udp_sender_service.h"
@@ -128,6 +129,9 @@ class RuntimeWorker final : public QObject {
       }
       connected_ = true;
     }
+
+    external_point_cloud_snapshot_.reset();
+    emit objectDetectionsReady({});
 
     const auto preflight = session_->telemetry();
     if (config_.mcu.enabled &&
@@ -413,6 +417,51 @@ class RuntimeWorker final : public QObject {
     publishSnapshots();
   }
 
+  void loadPointCloudFileRuntime(QString path) {
+    if (running_) {
+      reject("Point cloud import", "Stop acquisition before loading an external point cloud");
+      return;
+    }
+    const auto utf8_path = path.trimmed().toUtf8();
+    const auto file_path = std::filesystem::u8path(
+        utf8_path.constData(), utf8_path.constData() + utf8_path.size());
+    PointCloudFileLoadResult loaded;
+    std::string error;
+    const auto frame_index = external_point_cloud_sequence_++;
+    if (!loadCenterPointCloudFile(file_path, frame_index, loaded, error)) {
+      reject("Point cloud import", qString(error));
+      return;
+    }
+
+    external_point_cloud_snapshot_ = std::move(loaded.snapshot);
+    last_point_cloud_snapshot_.reset();
+    last_detection_input_snapshot_.reset();
+    last_detection_snapshot_.reset();
+    emit objectDetectionsReady({});
+    emit pointCloudReady(external_point_cloud_snapshot_);
+
+    if (detection_ != nullptr) {
+      last_detection_input_snapshot_ = external_point_cloud_snapshot_;
+      const auto enqueue_result = detection_->enqueue(external_point_cloud_snapshot_);
+      if (enqueue_result == DetectionEnqueueResult::NotRunning ||
+          enqueue_result == DetectionEnqueueResult::InvalidFrame) {
+        reject("Point cloud import", "CenterPoint rejected the imported point cloud");
+        return;
+      }
+      pollExternalDetection(frame_index, 0);
+    }
+
+    const auto point_count = external_point_cloud_snapshot_->points.size();
+    emitLog("INFO", "Point cloud import",
+            QString("Loaded %1 points from %2 | %3")
+                .arg(point_count)
+                .arg(path)
+                .arg(qString(loaded.format_detail)));
+    publishStatus(QString("External point cloud loaded: %1 points").arg(point_count));
+    emit commandCompleted("Point cloud import",
+                          QString("Loaded %1 points").arg(point_count));
+  }
+
   void setObjectDetectionRuntime(bool enabled, QString weights_root) {
     if (!enabled) {
       stopObjectDetection("Disabled by operator");
@@ -458,6 +507,11 @@ class RuntimeWorker final : public QObject {
             QString("CenterPoint enabled with weights: %1").arg(weights_root));
     publishStatus("Object detection enabled");
     emit commandCompleted("Object detection", "CenterPoint inference enabled");
+    if (external_point_cloud_snapshot_ != nullptr) {
+      last_detection_input_snapshot_ = external_point_cloud_snapshot_;
+      detection_->enqueue(external_point_cloud_snapshot_);
+      pollExternalDetection(external_point_cloud_snapshot_->scan_frame_index, 0);
+    }
     publishSnapshots();
   }
 
@@ -838,7 +892,9 @@ class RuntimeWorker final : public QObject {
         break;
       }
       case 5: {
-        const auto snapshot = processing_->snapshots().latestPointCloud();
+        const auto snapshot = external_point_cloud_snapshot_ != nullptr
+            ? external_point_cloud_snapshot_
+            : processing_->snapshots().latestPointCloud();
         if (snapshot != nullptr && snapshot != last_point_cloud_snapshot_) {
           last_point_cloud_snapshot_ = snapshot;
           emit pointCloudReady(snapshot);
@@ -850,7 +906,9 @@ class RuntimeWorker final : public QObject {
     }
 
     if (detection_ != nullptr) {
-      const auto input = processing_->snapshots().latestPointCloud();
+      const auto input = external_point_cloud_snapshot_ != nullptr
+          ? external_point_cloud_snapshot_
+          : processing_->snapshots().latestPointCloud();
       if (input != nullptr && input->complete && input != last_detection_input_snapshot_) {
         last_detection_input_snapshot_ = input;
         detection_->enqueue(input);
@@ -995,6 +1053,36 @@ class RuntimeWorker final : public QObject {
     last_detection_snapshot_.reset();
     emit objectDetectionsReady({});
     emitLog("INFO", "Object detection", reason);
+  }
+
+  void pollExternalDetection(std::uint64_t scan_frame_index, int attempt) {
+    if (detection_ == nullptr || external_point_cloud_snapshot_ == nullptr ||
+        external_point_cloud_snapshot_->scan_frame_index != scan_frame_index) {
+      return;
+    }
+    const auto detections = detection_->latestSnapshot();
+    if (detections != nullptr && detections->scan_frame_index == scan_frame_index) {
+      if (detections != last_detection_snapshot_) {
+        last_detection_snapshot_ = detections;
+        emit objectDetectionsReady(detections);
+      }
+      publishStatus(detections->status == "ok"
+          ? QString("External CenterPoint inference: %1 objects | %2 ms")
+                .arg(detections->boxes.size())
+                .arg(detections->timing.total_ms, 0, 'f', 1)
+          : QString("External CenterPoint inference failed: %1")
+                .arg(qString(detections->status)));
+      return;
+    }
+    if (attempt >= 600) {
+      emitLog("WARNING", "Object detection",
+              "Timed out waiting for external point-cloud inference");
+      publishStatus("External CenterPoint inference timed out");
+      return;
+    }
+    QTimer::singleShot(16, this, [this, scan_frame_index, attempt] {
+      pollExternalDetection(scan_frame_index, attempt + 1);
+    });
   }
 
   void publishStatus(const QString& detail) {
@@ -1153,8 +1241,12 @@ class RuntimeWorker final : public QObject {
   ScanLineSnapshotPtr last_scan_line_snapshot_;
   BScanSnapshotPtr last_bscan_snapshot_;
   PointCloudSnapshotPtr last_point_cloud_snapshot_;
+  PointCloudSnapshotPtr external_point_cloud_snapshot_;
   PointCloudSnapshotPtr last_detection_input_snapshot_;
   DetectionSnapshotPtr last_detection_snapshot_;
+  // Keep imported frames outside the normal acquisition sequence so an old
+  // detector result cannot be mistaken for the newly opened cloud.
+  std::uint64_t external_point_cloud_sequence_ = std::uint64_t{1} << 63U;
   AcquisitionSource active_source_ = AcquisitionSource::Simulator;
   ContinuousAcquisitionStatus acquisition_status_;
   bool configured_ = false;
@@ -1373,6 +1465,14 @@ void ApplicationController::setLivePlotIndex(int plot_index) {
   QMetaObject::invokeMethod(worker_, [worker = worker_, plot_index] {
     worker->setLivePlotIndexRuntime(plot_index);
   }, Qt::QueuedConnection);
+}
+
+void ApplicationController::loadPointCloudFile(QString path) {
+  QMetaObject::invokeMethod(worker_,
+      [worker = worker_, path = std::move(path)] {
+        worker->loadPointCloudFileRuntime(path);
+      },
+      Qt::QueuedConnection);
 }
 
 void ApplicationController::setObjectDetectionEnabled(bool enabled, QString weights_root) {

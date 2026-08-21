@@ -22,7 +22,9 @@ dpkg-query -W 'libcudnn*' 2>/dev/null
 
 - Coordinate system: `+X` forward, `+Y` left, `+Z` up, in meters.
 - Feature order: `[x, y, z, intensity, fifth]` as five `float32` values.
-- The current no-velocity weights use `fifth = 0`.
+- Live FMCW frames currently use normalized intensity and `fifth = 0`.
+- Imported Waymo frames use `tanh(intensity)` and `fifth = elongation`, matching the
+  validated reference model input. See [waymo_point_cloud_demo.md](waymo_point_cloud_demo.md).
 - A future velocity model can select `fifth = velocity_mps` without changing the snapshot API.
 - Invalid points and points outside the configured range are removed before inference.
 - Intensity uses fixed dB bounds, never per-frame min/max normalization.

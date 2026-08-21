@@ -3,7 +3,9 @@
 #include "detection/object_detection_policy.h"
 #include "detection/object_detection_service.h"
 #include "detection/object_detector.h"
+#include "detection/point_cloud_file_loader.h"
 
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
@@ -79,6 +81,82 @@ void testVelocityFeatureCanBeEnabledLater() {
   expect(input.pointCount() == 1, "velocity input point is accepted");
   expectNear(input.features[3], 1.0F, 1.0e-6F, "fixed intensity normalization clamps high values");
   expectNear(input.features[4], -4.25F, 1.0e-6F, "velocity can become the fifth feature");
+}
+
+void testWaymoFeatureContract() {
+  fmcw::PointCloudSnapshot snapshot;
+  snapshot.complete = true;
+  snapshot.feature_encoding = fmcw::PointCloudFeatureEncoding::CenterPointWaymo;
+  auto value = point(5.0F, -1.0F, 0.2F, 0.625F, 0.0F);
+  value.elongation = 0.375F;
+  snapshot.points.push_back(value);
+
+  const auto input = fmcw::buildCenterPointInput(snapshot);
+  expect(input.pointCount() == 1, "Waymo point is accepted");
+  expectNear(input.features[3], 0.625F, 1.0e-6F,
+             "preprocessed Waymo intensity is preserved");
+  expectNear(input.features[4], 0.375F, 1.0e-6F,
+             "Waymo elongation is preserved as the fifth feature");
+}
+
+void testPointCloudFileLoading() {
+  const auto unique = std::chrono::steady_clock::now().time_since_epoch().count();
+  const auto root = std::filesystem::temp_directory_path() /
+      ("fmcw_point_cloud_import_" + std::to_string(unique));
+  std::filesystem::create_directories(root);
+
+  const std::array<float, 10> binary_points{
+      1.0F, 2.0F, 3.0F, 0.25F, 0.5F,
+      4.0F, 5.0F, 1.0F, 0.75F, 0.125F};
+  const auto binary_path = root / "points.bin";
+  {
+    std::ofstream stream(binary_path, std::ios::binary);
+    stream.write(reinterpret_cast<const char*>(binary_points.data()),
+                 static_cast<std::streamsize>(sizeof(binary_points)));
+  }
+  fmcw::PointCloudFileLoadResult loaded;
+  std::string error;
+  expect(fmcw::loadCenterPointCloudFile(binary_path, 7U, loaded, error),
+         "CenterPoint Nx5 binary loads: " + error);
+  expect(loaded.snapshot != nullptr && loaded.snapshot->points.size() == 2U,
+         "binary loader publishes both points");
+  expect(loaded.snapshot != nullptr &&
+             loaded.snapshot->feature_encoding ==
+                 fmcw::PointCloudFeatureEncoding::CenterPointWaymo,
+         "binary loader marks the Waymo feature encoding");
+  if (loaded.snapshot != nullptr && loaded.snapshot->points.size() == 2U) {
+    expectNear(loaded.snapshot->points[1].elongation, 0.125F, 1.0e-6F,
+               "binary loader preserves elongation");
+  }
+
+  const auto pcd_path = root / "sample.pcd";
+  {
+    std::ofstream stream(pcd_path);
+    stream << "# .PCD v0.7\n"
+              "VERSION 0.7\n"
+              "FIELDS x y z intensity elongation\n"
+              "SIZE 4 4 4 4 4\n"
+              "TYPE F F F F F\n"
+              "COUNT 1 1 1 1 1\n"
+              "WIDTH 1\nHEIGHT 1\nPOINTS 1\nDATA ascii\n"
+              "6 7 8 0.9 0.4\n";
+  }
+  loaded = {};
+  error.clear();
+  expect(fmcw::loadCenterPointCloudFile(pcd_path, 8U, loaded, error),
+         "ASCII PCD loads: " + error);
+  expect(loaded.snapshot != nullptr && loaded.snapshot->points.size() == 1U,
+         "PCD loader publishes one point");
+  if (loaded.snapshot != nullptr && !loaded.snapshot->points.empty()) {
+    expectNear(loaded.snapshot->points[0].intensity, 0.9F, 1.0e-6F,
+               "PCD loader preserves model-ready intensity");
+    expectNear(loaded.snapshot->points[0].elongation, 0.4F, 1.0e-6F,
+               "PCD loader preserves elongation");
+  }
+
+  std::error_code cleanup_error;
+  std::filesystem::remove_all(root, cleanup_error);
+  expect(!cleanup_error, "temporary point-cloud import files are removed");
 }
 
 void testBoxClassNames() {
@@ -290,6 +368,8 @@ void testObjectDetectionService() {
 int main() {
   testInputContract();
   testVelocityFeatureCanBeEnabledLater();
+  testWaymoFeatureContract();
+  testPointCloudFileLoading();
   testBoxClassNames();
   testDetectorConfigurationValidation();
   testReferenceGpuInferenceWhenConfigured();

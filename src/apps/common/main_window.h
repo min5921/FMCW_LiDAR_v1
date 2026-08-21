@@ -149,6 +149,7 @@ class MainWindow final : public QMainWindow {
   HeatmapWidget* bscan_plot_ = nullptr;
   PointCloudWidget* point_cloud_plot_ = nullptr;
   QLabel* point_cloud_status_ = nullptr;
+  QToolButton* point_cloud_open_button_ = nullptr;
   QToolButton* object_detection_toggle_ = nullptr;
   QToolButton* object_detection_weights_button_ = nullptr;
   QString object_detection_weights_root_;

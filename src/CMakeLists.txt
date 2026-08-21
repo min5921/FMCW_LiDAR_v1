@@ -37,6 +37,7 @@ set(FMCW_CORE_SOURCES
   detection/object_detection_policy.cpp
   detection/object_detection_service.cpp
   detection/object_detector.cpp
+  detection/point_cloud_file_loader.cpp
   drivers/alazar/alazar_digitizer.cpp
   drivers/alazar/alazar_sample_conversion.cpp
   drivers/edfa/edfa_protocol.cpp

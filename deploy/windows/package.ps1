@@ -101,6 +101,24 @@ try {
   Pop-Location
 }
 
-$hash = (Get-FileHash -LiteralPath $packagedExe -Algorithm SHA256).Hash
+$getFileHash = Get-Command Get-FileHash -ErrorAction SilentlyContinue
+if ($getFileHash) {
+  $hash = (Get-FileHash -LiteralPath $packagedExe -Algorithm SHA256).Hash
+} else {
+  # Windows PowerShell normally provides Get-FileHash, but some stripped-down
+  # deployment shells do not load Microsoft.PowerShell.Utility. Keep packaging
+  # deterministic by falling back to the .NET SHA-256 implementation.
+  $stream = [System.IO.File]::OpenRead($packagedExe)
+  try {
+    $sha256 = [System.Security.Cryptography.SHA256]::Create()
+    try {
+      $hash = [System.BitConverter]::ToString($sha256.ComputeHash($stream)).Replace("-", "")
+    } finally {
+      $sha256.Dispose()
+    }
+  } finally {
+    $stream.Dispose()
+  }
+}
 Write-Host "Windows package ready: $outputRoot"
 Write-Host "Executable SHA-256: $hash"

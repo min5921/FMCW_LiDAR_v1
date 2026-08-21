@@ -139,6 +139,7 @@ class ApplicationController final : public QObject {
   void updateProcessing(const ProcessingConfig& config);
   void setSelectedAScan(std::uint32_t record_index);
   void setLivePlotIndex(int plot_index);
+  void loadPointCloudFile(QString path);
   void setObjectDetectionEnabled(bool enabled, QString weights_root);
   void setEdfaOutput(bool enabled);
   void uploadMcuWaveform();

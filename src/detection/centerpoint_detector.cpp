@@ -64,7 +64,8 @@ class CenterPointObjectDetector final : public ObjectDetector {
       return false;
     }
     if (config.input.fifth_feature != CenterPointFifthFeature::Zero) {
-      error = "the selected no-velocity CenterPoint weights require fifth feature = 0";
+      error = "live FMCW CenterPoint input currently requires fifth feature = 0; "
+              "imported Waymo frames provide elongation separately";
       return false;
     }
     if (!matchesValidatedValues(config.input.voxel_size_m, kValidatedVoxelSize) ||
