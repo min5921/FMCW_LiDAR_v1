@@ -82,6 +82,35 @@ ctest --preset jetson-release
 Replace `87` with the numeric CUDA architecture for the target Jetson. The
 canonical `build.sh` path performs this detection automatically.
 
+### Jetson performance mode
+
+The build and run scripts do not change the Jetson power mode. Maximum clocks
+are optional and should be enabled only for ATS DMA, CUDA/cuFFT, NVMe, or
+sustained performance acceptance with adequate power and cooling:
+
+```bash
+sudo nvpmodel -q --verbose
+sudo jetson_clocks --show
+
+sudo nvpmodel -m 0
+sudo jetson_clocks
+
+sudo nvpmodel -q --verbose
+sudo jetson_clocks --show
+tegrastats --interval 1000
+```
+
+For the project's AGX Orin target, mode ID `0` is MAXN; verify the configured
+mode IDs before using this command on another Jetson model. Record the original
+mode ID before changing it. Because `nvpmodel` cannot be changed after
+`jetson_clocks` in the same boot, reboot first, then restore the original mode
+with `sudo nvpmodel -m <original-mode-id>`. Reboot again if `nvpmodel` requests
+it. The power mode persists across power cycles, while `jetson_clocks` must be
+applied again after a reboot. MAXN and fixed clocks do not prevent thermal or
+power throttling or guarantee the best sustained performance, so acceptance
+evidence must include the `nvpmodel`, `jetson_clocks`, and `tegrastats` output.
+See the detailed operator procedure in `deploy/jetson/README_KO.md`.
+
 ## External SDK Roots
 
 The following CMake cache variables are used for dependency discovery:

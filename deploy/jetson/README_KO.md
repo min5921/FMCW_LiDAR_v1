@@ -144,7 +144,70 @@ J30 UART1 기능을 활성화한 뒤 재부팅한다. `check_dependencies.sh`는
 `FMCW_JETSON_MCU_UART`의 존재 여부와 현재 사용자의 읽기/쓰기 권한을 경고로
 진단하며, 선택 장치가 없어도 빌드는 중단하지 않는다.
 
-## 8. 최초 검증 순서
+## 8. 성능 검증용 최대 클럭 고정
+
+일반 UI 확인에는 최대 클럭 고정이 필요하지 않다. 실제 ATS DMA, CUDA/cuFFT,
+NVMe 장시간 성능을 검증할 때만 충분한 전원과 냉각을 준비한 뒤 적용한다.
+`build.sh`와 `run.sh`는 시스템 전력 모드를 임의로 변경하지 않는다.
+
+먼저 현재 전력 모드와 클럭 상태를 확인하고, 나중에 복원할 전력 모드 ID를
+기록한다.
+
+```bash
+sudo nvpmodel -q --verbose
+sudo jetson_clocks --show
+```
+
+이 프로젝트의 AGX Orin 기준 mode ID `0`은 MAXN profile이다. 다른 Jetson
+모델이나 custom `nvpmodel.conf`를 사용한다면 장치에 정의된 mode ID를 먼저
+확인해야 한다. MAXN으로 전환한 뒤 CPU, GPU와 EMC 클럭을 해당 전력 모드에서
+허용하는 최대값으로 고정한다.
+
+```bash
+sudo nvpmodel -m 0
+sudo jetson_clocks
+
+sudo nvpmodel -q --verbose
+sudo jetson_clocks --show
+```
+
+성능 측정 중에는 별도 터미널에서 온도, 사용률, 클럭과 throttling 여부를
+계속 확인한다.
+
+```bash
+tegrastats --interval 1000
+```
+
+필요하면 테스트 중 팬을 최대로 고정할 수 있다. 소음이 커지므로 장시간
+일반 운용의 기본값으로 사용하지 않는다.
+
+```bash
+sudo jetson_clocks --fan
+```
+
+`jetson_clocks` 실행 후에는 같은 부팅 세션에서 `nvpmodel` mode를 변경할 수
+없다. 검증이 끝나면 먼저 재부팅하고, 다시 접속한 뒤 앞에서 기록한 전력
+모드 ID로 복원한다. 예를 들어 기존 모드가 `2`였다면 다음 순서로 실행한다.
+
+```bash
+sudo reboot
+
+# 재부팅 후 다시 접속
+sudo nvpmodel -m 2
+sudo nvpmodel -q --verbose
+```
+
+mode 변경 과정에서 재부팅을 요구하면 안내에 따라 한 번 더 재부팅한다.
+`nvpmodel` mode는 전원 재인가 후에도 유지되지만 `jetson_clocks` 고정은 재부팅
+후 해제되므로, 성능 acceptance를 다시 시작할 때마다 상태를 확인하고
+적용한다. MAXN은 제한 없는 실험용 mode이며 최고 지속 성능을 보장하지 않는다.
+전력 또는 온도 한계를 넘으면 하드웨어 throttling이 동작할 수 있으므로,
+측정 결과에는 `nvpmodel -q --verbose`, `jetson_clocks --show`와 `tegrastats`
+로그를 함께 남긴다.
+
+NVIDIA 공식 절차는 [Jetson Orin Platform Power and Performance](https://docs.nvidia.com/jetson/archives/r36.4/DeveloperGuide/SD/PlatformPowerAndPerformance/JetsonOrinNanoSeriesJetsonOrinNxSeriesAndJetsonAgxOrinSeries.html)를 기준으로 한다.
+
+## 9. 최초 검증 순서
 
 1. `Simulator + CUDA`로 Qt UI와 CUDA backend 확인
 2. System 1 / Board 1에서 자동 감지된 ATS 모델과 driver/device node 확인
