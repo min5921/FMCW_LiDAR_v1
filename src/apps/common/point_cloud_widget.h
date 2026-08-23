@@ -41,6 +41,7 @@ class PointCloudWidget final : public QOpenGLWidget, protected QOpenGLFunctions 
   ~PointCloudWidget() override;
 
   void setSnapshot(std::shared_ptr<const PointCloudSnapshot> snapshot);
+  void clearSnapshot();
   void setColorMode(PointCloudColorMode mode);
   void setPointSize(float pixels);
   void setAxesVisible(bool visible);

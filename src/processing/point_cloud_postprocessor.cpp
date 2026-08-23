@@ -13,11 +13,9 @@ constexpr std::uint32_t kMaximumHistoryFrames = 5U;
 constexpr float kMinimumRangeJumpGateM = 0.05F;
 constexpr float kAngularSpacingGateScale = 3.0F;
 
-bool finitePoint(const PointXYZI& point) {
+bool finiteGeometry(const PointXYZI& point) {
   return point.valid && std::isfinite(point.x) && std::isfinite(point.y) &&
-      std::isfinite(point.z) && std::isfinite(point.intensity) &&
-      std::isfinite(point.velocity) && std::isfinite(point.scan_x_command) &&
-      std::isfinite(point.scan_y_command);
+      std::isfinite(point.z);
 }
 
 template <std::size_t Capacity>
@@ -43,38 +41,50 @@ PointCloudDisplayPoint fuseCell(
   std::array<float, kMaximumHistoryFrames> velocity{};
   std::array<float, kMaximumHistoryFrames> scan_x{};
   std::array<float, kMaximumHistoryFrames> scan_y{};
-  std::size_t count = 0U;
+  std::size_t geometry_count = 0U;
+  std::size_t intensity_count = 0U;
+  std::size_t velocity_count = 0U;
+  std::size_t scan_x_count = 0U;
+  std::size_t scan_y_count = 0U;
   for (const auto& snapshot : history) {
     if (point_index >= snapshot->points.size()) {
       continue;
     }
     const auto& point = snapshot->points[point_index];
-    if (!finitePoint(point)) {
+    if (!finiteGeometry(point)) {
       continue;
     }
-    x[count] = point.x;
-    y[count] = point.y;
-    z[count] = point.z;
-    intensity[count] = point.intensity;
-    velocity[count] = point.velocity;
-    scan_x[count] = point.scan_x_command;
-    scan_y[count] = point.scan_y_command;
-    ++count;
+    x[geometry_count] = point.x;
+    y[geometry_count] = point.y;
+    z[geometry_count] = point.z;
+    ++geometry_count;
+    if (std::isfinite(point.intensity)) {
+      intensity[intensity_count++] = point.intensity;
+    }
+    if (std::isfinite(point.velocity)) {
+      velocity[velocity_count++] = point.velocity;
+    }
+    if (std::isfinite(point.scan_x_command)) {
+      scan_x[scan_x_count++] = point.scan_x_command;
+    }
+    if (std::isfinite(point.scan_y_command)) {
+      scan_y[scan_y_count++] = point.scan_y_command;
+    }
   }
 
   PointCloudDisplayPoint result;
-  if (count == 0U) {
+  if (geometry_count == 0U) {
     return result;
   }
-  result.point.x = median(x, count);
-  result.point.y = median(y, count);
-  result.point.z = median(z, count);
-  result.point.intensity = median(intensity, count);
-  result.point.velocity = median(velocity, count);
-  result.point.scan_x_command = median(scan_x, count);
-  result.point.scan_y_command = median(scan_y, count);
+  result.point.x = median(x, geometry_count);
+  result.point.y = median(y, geometry_count);
+  result.point.z = median(z, geometry_count);
+  result.point.intensity = median(intensity, intensity_count);
+  result.point.velocity = median(velocity, velocity_count);
+  result.point.scan_x_command = median(scan_x, scan_x_count);
+  result.point.scan_y_command = median(scan_y, scan_y_count);
   result.point.valid = true;
-  result.temporal_observations = static_cast<std::uint8_t>(count);
+  result.temporal_observations = static_cast<std::uint8_t>(geometry_count);
   return result;
 }
 
@@ -83,7 +93,7 @@ float pointRange(const PointXYZI& point) {
 }
 
 bool edgeCompatible(const PointXYZI& first, const PointXYZI& second) {
-  if (!finitePoint(first) || !finitePoint(second)) {
+  if (!finiteGeometry(first) || !finiteGeometry(second)) {
     return false;
   }
   const auto first_range = pointRange(first);
@@ -112,13 +122,20 @@ PointCloudDisplayPoint interpolate(const PointCloudDisplayPoint& first,
   const auto blend = [fraction](float start, float end) {
     return start + (end - start) * fraction;
   };
+  const auto blend_optional = [&blend](float start, float end) {
+    return std::isfinite(start) && std::isfinite(end)
+        ? blend(start, end)
+        : std::numeric_limits<float>::quiet_NaN();
+  };
   result.point.x = blend(first.point.x, second.point.x);
   result.point.y = blend(first.point.y, second.point.y);
   result.point.z = blend(first.point.z, second.point.z);
-  result.point.intensity = blend(first.point.intensity, second.point.intensity);
-  result.point.velocity = blend(first.point.velocity, second.point.velocity);
-  result.point.scan_x_command = blend(first.point.scan_x_command, second.point.scan_x_command);
-  result.point.scan_y_command = blend(first.point.scan_y_command, second.point.scan_y_command);
+  result.point.intensity = blend_optional(first.point.intensity, second.point.intensity);
+  result.point.velocity = blend_optional(first.point.velocity, second.point.velocity);
+  result.point.scan_x_command = blend_optional(first.point.scan_x_command,
+                                                second.point.scan_x_command);
+  result.point.scan_y_command = blend_optional(first.point.scan_y_command,
+                                                second.point.scan_y_command);
   result.point.valid = true;
   result.temporal_observations = std::min(first.temporal_observations,
                                           second.temporal_observations);
@@ -211,7 +228,7 @@ void PointCloudPostProcessor::rebuild() {
   display_frame_.source_height = latest.height;
   display_frame_.display_width = latest.width;
   display_frame_.source_valid_point_count = static_cast<std::size_t>(std::count_if(
-      latest.points.begin(), latest.points.end(), finitePoint));
+      latest.points.begin(), latest.points.end(), finiteGeometry));
 
   const auto source_point_count = static_cast<std::size_t>(latest.width) * latest.height;
   std::vector<PointCloudDisplayPoint> fused(source_point_count);

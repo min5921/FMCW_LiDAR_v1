@@ -21,6 +21,8 @@ out/
 *.log
 *.cache
 *.deps
+__pycache__/
+*.pyc
 
 # STM32 / embedded build artifacts
 *.o
@@ -41,9 +43,11 @@ out/
 # Runtime data
 data/raw/*
 data/processed/*
+data/samples/*
 outputs/*
 !data/raw/.gitkeep
 !data/processed/.gitkeep
+!data/samples/.gitkeep
 !outputs/.gitkeep
 
 # Local IDE settings

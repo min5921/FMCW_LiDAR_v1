@@ -138,21 +138,26 @@ void PointCloudWidget::setSnapshot(std::shared_ptr<const PointCloudSnapshot> sna
   if (!snapshot || !snapshot->complete || snapshot == snapshot_) {
     return;
   }
-  const bool reset_spatial_bounds = snapshot_ != nullptr &&
-      (snapshot->scan_frame_index <= snapshot_->scan_frame_index ||
-       snapshot->width != snapshot_->width || snapshot->height != snapshot_->height ||
-       snapshot->processing_config_revision != snapshot_->processing_config_revision);
   if (!post_processor_.push(snapshot)) {
     return;
   }
   snapshot_ = std::move(snapshot);
-  if (reset_spatial_bounds) {
-    spatial_bounds_valid_ = false;
-  }
   rebuildDisplayCloud();
   if (!spatial_bounds_valid_) {
     fitSpatialBounds();
   }
+  update();
+}
+
+void PointCloudWidget::clearSnapshot() {
+  snapshot_.reset();
+  post_processor_.reset();
+  current_points_.clear();
+  vertices_.clear();
+  vertices_dirty_ = true;
+  spatial_bounds_valid_ = false;
+  center_x_ = center_y_ = center_z_ = 0.0F;
+  extent_ = 1.0F;
   update();
 }
 
@@ -473,9 +478,14 @@ void PointCloudWidget::rebuildVertices() {
   float minimum_value = std::numeric_limits<float>::max();
   float maximum_value = std::numeric_limits<float>::lowest();
   const auto valueFor = [this](const PointXYZI& point) {
-    if (color_mode_ == PointCloudColorMode::Intensity) return point.intensity;
-    if (color_mode_ == PointCloudColorMode::Velocity) return point.velocity;
-    return std::sqrt(point.x * point.x + point.y * point.y + point.z * point.z);
+    const auto distance = std::sqrt(point.x * point.x + point.y * point.y + point.z * point.z);
+    if (color_mode_ == PointCloudColorMode::Intensity && std::isfinite(point.intensity)) {
+      return point.intensity;
+    }
+    if (color_mode_ == PointCloudColorMode::Velocity && std::isfinite(point.velocity)) {
+      return point.velocity;
+    }
+    return distance;
   };
   for (const auto& display_point : current_points_) {
     const auto value = valueFor(display_point.point);
@@ -502,26 +512,14 @@ void PointCloudWidget::fitSpatialBounds() {
     spatial_bounds_valid_ = false;
     return;
   }
-  float minimum_x = std::numeric_limits<float>::max();
-  float minimum_y = std::numeric_limits<float>::max();
-  float minimum_z = std::numeric_limits<float>::max();
-  float maximum_x = std::numeric_limits<float>::lowest();
-  float maximum_y = std::numeric_limits<float>::lowest();
-  float maximum_z = std::numeric_limits<float>::lowest();
+  float maximum_radius_squared = 0.0F;
   for (const auto& display_point : current_points_) {
     const auto& point = display_point.point;
-    minimum_x = std::min(minimum_x, point.x);
-    minimum_y = std::min(minimum_y, point.y);
-    minimum_z = std::min(minimum_z, point.z);
-    maximum_x = std::max(maximum_x, point.x);
-    maximum_y = std::max(maximum_y, point.y);
-    maximum_z = std::max(maximum_z, point.z);
+    maximum_radius_squared = std::max(
+        maximum_radius_squared, point.x * point.x + point.y * point.y + point.z * point.z);
   }
-  center_x_ = 0.5F * (minimum_x + maximum_x);
-  center_y_ = 0.5F * (minimum_y + maximum_y);
-  center_z_ = 0.5F * (minimum_z + maximum_z);
-  extent_ = std::max({maximum_x - minimum_x, maximum_y - minimum_y,
-                      maximum_z - minimum_z, 1.0e-4F});
+  center_x_ = center_y_ = center_z_ = 0.0F;
+  extent_ = std::max(2.0F * std::sqrt(maximum_radius_squared), 1.0e-4F);
   spatial_bounds_valid_ = true;
 }
 

@@ -74,6 +74,15 @@ target_compile_features(fmcw_point_cloud_postprocessor_tests PRIVATE cxx_std_17)
 
 add_test(NAME fmcw_point_cloud_postprocessor_tests COMMAND fmcw_point_cloud_postprocessor_tests)
 
+add_executable(fmcw_point_cloud_replay_tests
+  point_cloud_replay_test.cpp
+)
+
+target_link_libraries(fmcw_point_cloud_replay_tests PRIVATE fmcw_core)
+target_compile_features(fmcw_point_cloud_replay_tests PRIVATE cxx_std_17)
+
+add_test(NAME fmcw_point_cloud_replay_tests COMMAND fmcw_point_cloud_replay_tests)
+
 add_executable(fmcw_phase6_network_tests
   phase6_network_test.cpp
 )

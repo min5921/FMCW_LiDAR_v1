@@ -81,6 +81,7 @@ Scan-line and B-scan arrays are derived immutable snapshots. They are not embedd
 - Raw v1/v2 replay is allowed only when the adjacent JSON sidecar explicitly declares `coordinate_frame: ros_x_forward_y_left_z_up`. Missing or legacy coordinate metadata is rejected with a conversion-required error instead of being reinterpreted silently.
 - Before allocation, replay validates record dimensions, exact metadata bytes, payload arithmetic, remaining file length, a 100,000-record cap, and a 256 MiB payload cap. Allocation failures become replay errors rather than process termination.
 - Point-cloud binary v1 uses the `FMCWPCD1` magic and stores complete organized frames as XYZIV plus validity. Raw/point-cloud JSON sidecars use the same session/config revision identity as the source raw frame.
+- Point-cloud file replay also accepts PCD v0.7 ASCII/binary and delimited XYZ/XYZI/XYZIV text. External XYZ is interpreted directly as meter-scale `X forward, Y left, Z up`; absent intensity or velocity remains `NaN` and is never synthesized into stored or exported measurements. PCD `binary_compressed` is rejected with an explicit conversion-required error.
 
 ## UDP Point Packet V2
 

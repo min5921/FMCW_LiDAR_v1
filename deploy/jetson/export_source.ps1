@@ -69,6 +69,7 @@ $documents = @(
     "data_contract.md",
     "device_protocols.md",
     "hardware_acceptance.md",
+    "processing_storage.md",
     "phase_status.md"
 )
 foreach ($document in $documents) {

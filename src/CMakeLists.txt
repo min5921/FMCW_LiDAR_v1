@@ -55,6 +55,7 @@ set(FMCW_CORE_SOURCES
   processing/signal_processor.cpp
   storage/async_storage_service.cpp
   storage/binary_storage.cpp
+  storage/point_cloud_replay.cpp
 )
 
 if(FMCW_HAS_CUDA_FFT)

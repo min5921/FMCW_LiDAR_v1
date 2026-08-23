@@ -171,6 +171,49 @@ Replay frame은 hardware frame과 같은 `SignalProcessor` 또는 `ProcessingSer
 
 GUI에서 raw part를 선택하면 같은 stem의 `.setup.yaml`을 우선 읽고, 과거 recording은 `.raw.json`의 `config_snapshot`으로 fallback한다. 저장 당시의 ATS board profile, digitizer, laser/chirp, scanner geometry, calibration, processing 설정을 pending controls에 복원한다. 실제 MCU/EDFA 출력, UDP, raw/processed 재기록은 안전을 위해 비활성화하며 사용자가 `Apply Setup`으로 재생 설정을 확정한다.
 
+### 9.1 Point-cloud file replay
+
+`Live View > 3D Point Cloud`의 별도 replay toolbar는 acquisition START/STOP과 독립적으로
+완성된 point cloud를 직접 표시한다. 실제 acquisition이 시작되면 파일 replay timer를
+중지하고 display history를 비워 서로 다른 source가 temporal fusion되지 않게 한다.
+
+지원 입력은 다음과 같다.
+
+- 프로젝트 전용 `<stem>.pointcloud.bin`: `FMCWPCD1` complete organized raster를 여러
+  frame 순서로 재생한다. Play/Pause, single-step, rewind, loop, 0.5-60 FPS를 지원한다.
+- PCD v0.7 `DATA ascii` 또는 `DATA binary`: `x`, `y`, `z`가 필수이고 `intensity`,
+  `velocity`, `valid`는 선택 사항이다. `WIDTH`와 `HEIGHT`가 있으면 organized layout을
+  보존한다. `DATA binary_compressed`는 지원하지 않는다.
+- `.xyz`, `.xyzi`, `.csv`, `.txt`: header가 없으면 열 순서를 `X Y Z [I [V]]`로
+  해석한다. Header가 있으면 `x/y/z`, `intensity`, `velocity` 또는 GUI export 이름인
+  `x_forward_m/y_left_m/z_up_m`, `intensity_db`, `velocity_mps`를 인식한다.
+
+외부 파일의 좌표를 회전하거나 축 교환하지 않는다. 모든 입력 XYZ는 meter 단위의
+`X forward, Y left, Z up`으로 해석한다. XYZ-only 입력의 intensity/velocity는 `NaN`으로
+유지하며 값을 만들지 않는다. 해당 color mode에 값이 없을 때 renderer만 distance color로
+fallback한다. PCD/text는 한 개의 static frame이고 `FMCWPCD1`만 multi-frame replay이다.
+입력 검증 한도는 frame당 20,000,000 points와 512 MiB payload이다.
+
+#### 9.1.1 Waymo segment conversion
+
+`tools/convert_waymo_zip.py`는 repository의 exported Waymo segment ZIP을 압축 해제 없이
+순차 읽어 하나의 `FMCWPCD1` multi-frame file로 변환한다. 각 source frame마다
+`TOP`, `FRONT`, `SIDE_LEFT`, `SIDE_RIGHT`, `REAR` LiDAR의 return 1/2를 모두 병합한다.
+입력 좌표는 이미 Waymo vehicle frame인 `X forward, Y left, Z up` meter이므로 추가 축
+교환이나 pose 변환을 하지 않는다.
+
+Waymo intensity는 보존하고, export에 없는 velocity는 `NaN`으로 기록한다. Elongation은
+현재 XYZIV contract에 저장하지 않는다. NLZ point는 삭제하지 않고 함께 저장하며 frame별
+개수를 `<output>.pointcloud.json` manifest에 기록한다. 변환기는 `.partial` file에 먼저
+기록하고 전체 frame 구조를 검증한 뒤 최종 파일명으로 교체한다.
+
+```powershell
+python tools/convert_waymo_zip.py data/samples/<segment>.zip
+```
+
+기본 출력은 같은 폴더의 `<segment>.merged.pointcloud.bin`이다. 각 Waymo source frame은
+unorganized `width = point_count`, `height = 1` point-cloud frame 하나가 된다.
+
 ## 10. Failure Policy
 
 - processing queue overflow: processing stop request

@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <initializer_list>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <string>
 
@@ -169,6 +170,24 @@ void testRejectsMalformedSnapshot() {
          "malformed input leaves the display state unchanged");
 }
 
+void testGeometryOnlyPointRemainsVisible() {
+  fmcw::PointCloudPostProcessor processor;
+  auto xyz = point(2.0F, -1.0F, 0.5F);
+  xyz.intensity = std::numeric_limits<float>::quiet_NaN();
+  xyz.velocity = std::numeric_limits<float>::quiet_NaN();
+  xyz.scan_x_command = std::numeric_limits<float>::quiet_NaN();
+  xyz.scan_y_command = std::numeric_limits<float>::quiet_NaN();
+
+  expect(processor.push(snapshot(1U, 1U, 1U, {xyz})),
+         "XYZ-only point enters display post-processing");
+  const auto& display = processor.displayFrame();
+  expect(display.source_valid_point_count == 1U && display.displayedPointCount() == 1U,
+         "missing optional point attributes do not hide finite XYZ geometry");
+  expect(std::isnan(display.points[0].point.intensity) &&
+             std::isnan(display.points[0].point.velocity),
+         "missing intensity and velocity remain explicitly unavailable");
+}
+
 }  // namespace
 
 int main() {
@@ -178,6 +197,7 @@ int main() {
   testVerticalInterpolationAndEdgeGate();
   testTwelveLinesExpandToFortyFive();
   testRejectsMalformedSnapshot();
+  testGeometryOnlyPointRemainsVisible();
   if (failures == 0) {
     std::cout << "All point-cloud post-processing tests passed.\n";
   }
