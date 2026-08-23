@@ -7,6 +7,22 @@ target_compile_features(fmcw_core_tests PRIVATE cxx_std_17)
 
 add_test(NAME fmcw_core_tests COMMAND fmcw_core_tests)
 
+add_executable(fmcw_detection_input_tests
+  detection_input_builder_test.cpp
+)
+
+target_link_libraries(fmcw_detection_input_tests PRIVATE fmcw_core)
+target_compile_features(fmcw_detection_input_tests PRIVATE cxx_std_17)
+
+add_test(NAME fmcw_detection_input_tests COMMAND fmcw_detection_input_tests)
+if(WIN32 AND FMCW_HAS_CENTERPOINT AND FMCW_CUDNN_RUNTIME_DLL)
+  get_filename_component(_fmcw_test_cudnn_runtime_dir
+      "${FMCW_CUDNN_RUNTIME_DLL}" DIRECTORY)
+  set_tests_properties(fmcw_detection_input_tests PROPERTIES
+    ENVIRONMENT_MODIFICATION
+      "PATH=path_list_prepend:${_fmcw_test_cudnn_runtime_dir}")
+endif()
+
 add_executable(fmcw_config_tests
   config_system_test.cpp
 )

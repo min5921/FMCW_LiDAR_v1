@@ -33,6 +33,11 @@ set(FMCW_CORE_SOURCES
   core/realtime_thread.cpp
   core/scan_trajectory.cpp
   core/system_state.cpp
+  detection/centerpoint_input_builder.cpp
+  detection/object_detection_policy.cpp
+  detection/object_detection_service.cpp
+  detection/object_detector.cpp
+  detection/point_cloud_file_loader.cpp
   drivers/alazar/alazar_digitizer.cpp
   drivers/alazar/alazar_sample_conversion.cpp
   drivers/edfa/edfa_protocol.cpp
@@ -67,12 +72,162 @@ else()
   list(APPEND FMCW_CORE_SOURCES processing/cuda/cuda_signal_pipeline_stub.cpp)
 endif()
 
+set(FMCW_HAS_CENTERPOINT OFF)
+set(FMCW_CUDNN_RUNTIME_DLLS "")
+if(FMCW_WITH_CENTERPOINT)
+  if(NOT FMCW_HAS_CUDA_FFT)
+    message(FATAL_ERROR
+      "CenterPoint requires CUDA, but the CUDA compiler or CUDAToolkit was not found.")
+  endif()
+  if(NOT FMCW_CENTERPOINT_SOURCE_DIR)
+    message(FATAL_ERROR
+      "FMCW_WITH_CENTERPOINT=ON requires FMCW_CENTERPOINT_SOURCE_DIR.")
+  endif()
+
+  set(_fmcw_centerpoint_root "${FMCW_CENTERPOINT_SOURCE_DIR}")
+  if(EXISTS
+      "${_fmcw_centerpoint_root}/20_active_count_nms_project/include/centerpoint/gpu_preprocess.hpp")
+    set(_fmcw_centerpoint_root
+        "${_fmcw_centerpoint_root}/20_active_count_nms_project")
+  endif()
+  if(NOT EXISTS
+      "${_fmcw_centerpoint_root}/include/centerpoint/gpu_preprocess.hpp")
+    message(FATAL_ERROR
+      "FMCW_CENTERPOINT_SOURCE_DIR does not contain the 20_active_count_nms_project runtime: "
+      "${FMCW_CENTERPOINT_SOURCE_DIR}")
+  endif()
+
+  find_path(FMCW_CUDNN_INCLUDE_DIR
+    NAMES cudnn.h
+    HINTS "${FMCW_CUDNN_ROOT}" "$ENV{CUDNN_ROOT}"
+    PATHS /usr/include /usr/local/include /usr/local/cuda/include
+    PATH_SUFFIXES include include/x64 aarch64-linux-gnu
+  )
+  find_library(FMCW_CUDNN_LIBRARY
+    NAMES cudnn cudnn9 cudnn8
+    HINTS "${FMCW_CUDNN_ROOT}" "$ENV{CUDNN_ROOT}"
+    PATHS /usr/lib /usr/local/lib /usr/local/cuda/lib64
+    PATH_SUFFIXES lib lib64 lib/x64 aarch64-linux-gnu
+  )
+  if(WIN32)
+    find_file(FMCW_CUDNN_RUNTIME_DLL
+      NAMES cudnn64_9.dll cudnn64_8.dll
+      HINTS "${FMCW_CUDNN_ROOT}" "$ENV{CUDNN_ROOT}"
+      PATH_SUFFIXES bin bin/x64
+    )
+    if(FMCW_CUDNN_INCLUDE_DIR AND FMCW_CUDNN_RUNTIME_DLL AND
+       NOT FMCW_CUDNN_LIBRARY)
+      set(_fmcw_cudnn_definition
+          "${_fmcw_centerpoint_root}/cmake/cudnn64_9.def")
+      if(NOT EXISTS "${_fmcw_cudnn_definition}")
+        message(FATAL_ERROR
+          "cuDNN import library is missing and the CenterPoint definition file was not found: "
+          "${_fmcw_cudnn_definition}")
+      endif()
+      set(FMCW_CUDNN_LIBRARY
+          "${CMAKE_CURRENT_BINARY_DIR}/cudnn64_9.lib")
+      set(_fmcw_cudnn_librarian "${CMAKE_AR}")
+      if(NOT _fmcw_cudnn_librarian OR
+         _fmcw_cudnn_librarian MATCHES "NOTFOUND")
+        get_filename_component(_fmcw_msvc_bin_dir
+            "${CMAKE_CXX_COMPILER}" DIRECTORY)
+        find_program(_fmcw_cudnn_librarian
+          NAMES lib.exe
+          HINTS "${_fmcw_msvc_bin_dir}"
+          NO_DEFAULT_PATH
+        )
+      endif()
+      if(NOT _fmcw_cudnn_librarian)
+        message(FATAL_ERROR "MSVC librarian was not found for the cuDNN import library.")
+      endif()
+      execute_process(
+        COMMAND "${_fmcw_cudnn_librarian}" /nologo
+          "/def:${_fmcw_cudnn_definition}"
+          "/out:${FMCW_CUDNN_LIBRARY}" /machine:x64
+        RESULT_VARIABLE _fmcw_cudnn_import_result
+        OUTPUT_VARIABLE _fmcw_cudnn_import_output
+        ERROR_VARIABLE _fmcw_cudnn_import_error
+      )
+      if(NOT _fmcw_cudnn_import_result EQUAL 0)
+        message(FATAL_ERROR
+          "Failed to generate the cuDNN import library.\n"
+          "${_fmcw_cudnn_import_output}\n${_fmcw_cudnn_import_error}")
+      endif()
+      message(STATUS
+        "Generated cuDNN import library from ${_fmcw_cudnn_definition}")
+    endif()
+  endif()
+  if(NOT FMCW_CUDNN_INCLUDE_DIR OR NOT FMCW_CUDNN_LIBRARY OR
+     (WIN32 AND NOT FMCW_CUDNN_RUNTIME_DLL))
+    message(FATAL_ERROR
+      "CenterPoint requires cuDNN headers and runtime. Install cuDNN for the selected CUDA "
+      "toolkit or set FMCW_CUDNN_ROOT.")
+  endif()
+  if(WIN32)
+    get_filename_component(_fmcw_cudnn_runtime_dir
+        "${FMCW_CUDNN_RUNTIME_DLL}" DIRECTORY)
+    file(GLOB_RECURSE FMCW_CUDNN_RUNTIME_DLLS CONFIGURE_DEPENDS
+      "${FMCW_CUDNN_ROOT}/bin/cudnn*.dll"
+      "${FMCW_CUDNN_ROOT}/bin/x64/cudnn*.dll"
+      "${FMCW_CUDNN_ROOT}/cudnn*.dll"
+      "${_fmcw_cudnn_runtime_dir}/cudnn*.dll"
+    )
+    set(FMCW_CUDNN_RUNTIME_DLLS "${FMCW_CUDNN_RUNTIME_DLLS}" CACHE INTERNAL
+        "cuDNN runtime DLLs copied beside the Windows application" FORCE)
+  endif()
+
+  set(_fmcw_centerpoint_cuda_sources
+    "${_fmcw_centerpoint_root}/cuda/gpu_preprocess.cu"
+    "${_fmcw_centerpoint_root}/cuda/gpu_rpn.cu"
+    "${_fmcw_centerpoint_root}/cuda/gpu_center_head.cu"
+    "${_fmcw_centerpoint_root}/cuda/gpu_postprocess.cu"
+  )
+  list(APPEND FMCW_CORE_SOURCES
+    detection/centerpoint_detector.cpp
+    "${_fmcw_centerpoint_root}/src/pfn_weights.cpp"
+    "${_fmcw_centerpoint_root}/src/rpn_weights.cpp"
+    "${_fmcw_centerpoint_root}/src/head_weights.cpp"
+    ${_fmcw_centerpoint_cuda_sources}
+  )
+  set(FMCW_HAS_CENTERPOINT ON)
+else()
+  list(APPEND FMCW_CORE_SOURCES detection/centerpoint_detector_stub.cpp)
+endif()
+
 add_library(fmcw_core STATIC ${FMCW_CORE_SOURCES})
 target_include_directories(fmcw_core
   PUBLIC
     ${PROJECT_SOURCE_DIR}/src
 )
 target_compile_features(fmcw_core PUBLIC cxx_std_17)
+
+if(FMCW_HAS_CENTERPOINT)
+  target_include_directories(fmcw_core PRIVATE
+    "${_fmcw_centerpoint_root}/include"
+    "${FMCW_CUDNN_INCLUDE_DIR}"
+  )
+  target_link_libraries(fmcw_core PRIVATE "${FMCW_CUDNN_LIBRARY}")
+  target_compile_definitions(fmcw_core PRIVATE
+    CENTERPOINT_RPN_ALLOW_TF32=1
+    CENTERPOINT_HEAD_USE_FP16=1
+    CENTERPOINT_ACTIVE_COUNT_NMS=1
+  )
+  set_source_files_properties(${_fmcw_centerpoint_cuda_sources}
+    PROPERTIES COMPILE_OPTIONS
+      "--fmad=false;--pre-include=${CMAKE_CURRENT_SOURCE_DIR}/detection/centerpoint_cuda_compat.h")
+  set_target_properties(fmcw_core PROPERTIES
+    CUDA_SEPARABLE_COMPILATION ON
+    CUDA_RESOLVE_DEVICE_SYMBOLS ON
+  )
+  target_compile_definitions(fmcw_core PUBLIC FMCW_HAS_CENTERPOINT=1)
+  message(STATUS
+    "CenterPoint detector: enabled (${_fmcw_centerpoint_root}, cuDNN ${FMCW_CUDNN_LIBRARY})")
+else()
+  target_compile_definitions(fmcw_core PUBLIC FMCW_HAS_CENTERPOINT=0)
+  message(STATUS "CenterPoint detector: disabled")
+endif()
+set(FMCW_HAS_CENTERPOINT "${FMCW_HAS_CENTERPOINT}" CACHE INTERNAL
+    "Whether the CenterPoint detector backend is available" FORCE)
 
 find_package(OpenMP QUIET COMPONENTS CXX)
 if(OpenMP_CXX_FOUND)
@@ -274,7 +429,10 @@ if(FMCW_BUILD_QT_APPS)
     add_executable(fmcw_lidar_windows WIN32 apps/windows/main.cpp)
     target_link_libraries(fmcw_lidar_windows PRIVATE fmcw_qt_common)
     target_compile_definitions(fmcw_lidar_windows PRIVATE FMCW_PLATFORM_NAME="Windows")
-    foreach(_runtime_dll IN ITEMS "${FMCW_FFTW_RUNTIME_DLL}" "${FMCW_CUFFT_RUNTIME_DLL}")
+    foreach(_runtime_dll IN ITEMS
+        "${FMCW_FFTW_RUNTIME_DLL}"
+        "${FMCW_CUFFT_RUNTIME_DLL}"
+        ${FMCW_CUDNN_RUNTIME_DLLS})
       if(EXISTS "${_runtime_dll}")
         add_custom_command(TARGET fmcw_lidar_windows POST_BUILD
           COMMAND ${CMAKE_COMMAND} -E copy_if_different

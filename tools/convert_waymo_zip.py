@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Convert an exported Waymo segment ZIP to the FMCWPCD1 replay format."""
+"""Convert an exported Waymo segment ZIP to the WaymoPCD2 replay format."""
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ except ImportError as exc:  # pragma: no cover - exercised by the command-line e
 
 
 FILE_MAGIC = b"FMCWPCD1"
-FORMAT_VERSION = 1
+FORMAT_VERSION = 2
 FRAME_MAGIC = 0x31444350
 FRAME_HEADER = struct.Struct("<IQQQIII")
 FILE_HEADER = struct.Struct("<8sI")
@@ -30,7 +30,7 @@ POINT_DTYPE = np.dtype(
         ("y", "<f4"),
         ("z", "<f4"),
         ("intensity", "<f4"),
-        ("velocity", "<f4"),
+        ("elongation", "<f4"),
         ("valid", "u1"),
     ],
     align=False,
@@ -100,10 +100,9 @@ def _frame_points(
               for lidar, return_index, info in entries}
     point_count = sum(counts.values())
     if point_count > 0xFFFFFFFF:
-        raise ValueError(f"Frame contains too many points for FMCWPCD1: {point_count}")
+        raise ValueError(f"Frame contains too many points for WaymoPCD2: {point_count}")
 
     merged = np.empty(point_count, dtype=POINT_DTYPE)
-    merged["velocity"].fill(np.nan)
     offset = 0
     nlz_points = 0
     for lidar, return_index, info in entries:
@@ -117,7 +116,8 @@ def _frame_points(
         target["x"] = values[:, 0]
         target["y"] = values[:, 1]
         target["z"] = values[:, 2]
-        target["intensity"] = values[:, 3]
+        target["intensity"] = np.tanh(values[:, 3])
+        target["elongation"] = values[:, 4]
         target["valid"] = np.isfinite(values[:, :3]).all(axis=1).astype(np.uint8)
         nlz_points += int(np.count_nonzero(values[:, 5] > 0.0))
         offset = end
@@ -236,16 +236,16 @@ def convert_waymo_archive(input_path: Path, output_path: Path, quiet: bool = Fal
         key=lambda name: (LIDAR_ORDER.get(name, 100), name),
     )
     manifest = {
-        "format": "FMCWPCD1",
+        "format": "WaymoPCD2",
         "format_version": FORMAT_VERSION,
         "source_archive": str(input_path),
         "output_file": str(output_path),
         "coordinate_frame": "Waymo vehicle frame: X forward, Y left, Z up, meters",
         "lidars_merged": sensor_names,
         "returns_merged": [1, 2],
-        "intensity": "Waymo intensity",
-        "velocity": "NaN (not present in the Waymo export)",
-        "elongation": "not stored by FMCWPCD1",
+        "intensity": "tanh(Waymo intensity)",
+        "velocity": "not stored (not present in the Waymo export)",
+        "elongation": "Waymo elongation",
         "nlz_policy": "included; count recorded per frame",
         "frame_count": len(frame_reports),
         "total_points": sum(expected_counts),
@@ -277,7 +277,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description=(
             "Merge all Waymo LiDARs and both returns in every frame into one "
-            "FMCWPCD1 replay file."
+            "WaymoPCD2 replay file."
         )
     )
     parser.add_argument("input", type=Path, help="Waymo exported segment ZIP")

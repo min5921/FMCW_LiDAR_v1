@@ -1,5 +1,6 @@
 #pragma once
 
+#include "detection/detection_types.h"
 #include "processing/point_cloud_postprocessor.h"
 
 #include <QOpenGLBuffer>
@@ -42,6 +43,7 @@ class PointCloudWidget final : public QOpenGLWidget, protected QOpenGLFunctions 
 
   void setSnapshot(std::shared_ptr<const PointCloudSnapshot> snapshot);
   void clearSnapshot();
+  void setDetections(DetectionSnapshotPtr detections);
   void setColorMode(PointCloudColorMode mode);
   void setPointSize(float pixels);
   void setAxesVisible(bool visible);
@@ -81,6 +83,7 @@ class PointCloudWidget final : public QOpenGLWidget, protected QOpenGLFunctions 
   std::shared_ptr<const PointCloudSnapshot> snapshot_;
   PointCloudPostProcessor post_processor_;
   std::vector<PointCloudDisplayPoint> current_points_;
+  DetectionSnapshotPtr detections_;
   std::vector<Vertex> vertices_;
   std::unique_ptr<QOpenGLShaderProgram> point_program_;
   QOpenGLBuffer vertex_buffer_{QOpenGLBuffer::VertexBuffer};

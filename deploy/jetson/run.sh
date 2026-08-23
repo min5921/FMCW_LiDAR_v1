@@ -4,6 +4,15 @@ set -Eeuo pipefail
 
 package_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 executable="${package_dir}/FMCW_LiDAR_Jetson"
+runtime_env="${package_dir}/jetson.env"
+
+if [[ -f "${runtime_env}" ]]; then
+  # shellcheck disable=SC1090
+  source "${runtime_env}"
+fi
+if [[ -n "${FMCW_JETSON_CENTERPOINT_WEIGHTS_ROOT:-}" ]]; then
+  export FMCW_CENTERPOINT_WEIGHTS_ROOT="${FMCW_JETSON_CENTERPOINT_WEIGHTS_ROOT}"
+fi
 
 if [[ ! -x "${executable}" ]]; then
   echo "ERROR: Jetson executable is missing: ${executable}" >&2

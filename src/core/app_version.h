@@ -6,7 +6,7 @@ namespace fmcw {
 
 struct AppVersion {
   int major = 0;
-  int minor = 1;
+  int minor = 2;
   int patch = 0;
 };
 

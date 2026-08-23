@@ -54,7 +54,8 @@ Get-ChildItem -LiteralPath $configSource -Force | ForEach-Object {
 }
 
 Get-ChildItem -LiteralPath $buildRoot -File | Where-Object {
-  $_.Name -eq "fftw3f.dll" -or $_.Name -like "cufft64_*.dll"
+  $_.Name -eq "fftw3f.dll" -or $_.Name -like "cufft64_*.dll" -or
+      $_.Name -like "cudnn*.dll"
 } | ForEach-Object {
   Copy-Item -LiteralPath $_.FullName -Destination $outputRoot -Force
 }
@@ -79,6 +80,9 @@ if ($LASTEXITCODE -ne 0) {
 $requiredFiles = @(
   $packagedExe,
   (Join-Path $outputRoot "Qt6Core.dll"),
+  (Join-Path $outputRoot "Qt6Gui.dll"),
+  (Join-Path $outputRoot "Qt6OpenGL.dll"),
+  (Join-Path $outputRoot "Qt6OpenGLWidgets.dll"),
   (Join-Path $outputRoot "Qt6Widgets.dll"),
   (Join-Path $outputRoot "platforms/qwindows.dll")
 )
@@ -97,6 +101,24 @@ try {
   Pop-Location
 }
 
-$hash = (Get-FileHash -LiteralPath $packagedExe -Algorithm SHA256).Hash
+$getFileHash = Get-Command Get-FileHash -ErrorAction SilentlyContinue
+if ($getFileHash) {
+  $hash = (Get-FileHash -LiteralPath $packagedExe -Algorithm SHA256).Hash
+} else {
+  # Windows PowerShell normally provides Get-FileHash, but some stripped-down
+  # deployment shells do not load Microsoft.PowerShell.Utility. Keep packaging
+  # deterministic by falling back to the .NET SHA-256 implementation.
+  $stream = [System.IO.File]::OpenRead($packagedExe)
+  try {
+    $sha256 = [System.Security.Cryptography.SHA256]::Create()
+    try {
+      $hash = [System.BitConverter]::ToString($sha256.ComputeHash($stream)).Replace("-", "")
+    } finally {
+      $sha256.Dispose()
+    }
+  } finally {
+    $stream.Dispose()
+  }
+}
 Write-Host "Windows package ready: $outputRoot"
 Write-Host "Executable SHA-256: $hash"

@@ -19,7 +19,8 @@ namespace fmcw {
 namespace {
 
 constexpr std::array<char, 8> kPointCloudMagic{{'F', 'M', 'C', 'W', 'P', 'C', 'D', '1'}};
-constexpr std::uint32_t kPointCloudFormatVersion = 1U;
+constexpr std::uint32_t kFmcwPointCloudFormatVersion = 1U;
+constexpr std::uint32_t kWaymoPointCloudFormatVersion = 2U;
 constexpr std::uint32_t kPointCloudFrameMagic = 0x31444350U;
 constexpr std::uint64_t kMaximumPointCount = 20U * 1000U * 1000U;
 constexpr std::uint64_t kMaximumPointBytes = 512U * 1024U * 1024U;
@@ -351,6 +352,7 @@ bool decodeBinaryValue(const std::uint8_t* data, const PcdField& field, double& 
 PointXYZI pointFromValues(double x, double y, double z,
                           std::optional<double> intensity,
                           std::optional<double> velocity,
+                          std::optional<double> elongation,
                           std::optional<double> valid,
                           std::optional<double> scan_x = std::nullopt,
                           std::optional<double> scan_y = std::nullopt) {
@@ -360,6 +362,7 @@ PointXYZI pointFromValues(double x, double y, double z,
   point.z = static_cast<float>(z);
   if (intensity.has_value()) point.intensity = static_cast<float>(*intensity);
   if (velocity.has_value()) point.velocity = static_cast<float>(*velocity);
+  if (elongation.has_value()) point.elongation = static_cast<float>(*elongation);
   if (scan_x.has_value()) point.scan_x_command = static_cast<float>(*scan_x);
   if (scan_y.has_value()) point.scan_y_command = static_cast<float>(*scan_y);
   point.valid = (!valid.has_value() || *valid != 0.0) &&
@@ -388,6 +391,7 @@ bool loadPcd(const std::filesystem::path& path, PointCloudSnapshot& frame,
   const auto z_index = *findField(header, {"z"});
   const auto intensity_index = findField(header, {"intensity", "intensity_db", "i"});
   const auto velocity_index = findField(header, {"velocity", "velocity_mps", "v"});
+  const auto elongation_index = findField(header, {"elongation"});
   const auto valid_index = findField(header, {"valid"});
 
   frame = {};
@@ -419,6 +423,7 @@ bool loadPcd(const std::filesystem::path& path, PointCloudSnapshot& frame,
           get(x_index), get(y_index), get(z_index),
           intensity_index ? std::optional<double>(get(*intensity_index)) : std::nullopt,
           velocity_index ? std::optional<double>(get(*velocity_index)) : std::nullopt,
+          elongation_index ? std::optional<double>(get(*elongation_index)) : std::nullopt,
           valid_index ? std::optional<double>(get(*valid_index)) : std::nullopt);
     }
   } else {
@@ -439,10 +444,12 @@ bool loadPcd(const std::filesystem::path& path, PointCloudSnapshot& frame,
       double z = 0.0;
       double intensity = 0.0;
       double velocity = 0.0;
+      double elongation = 0.0;
       double valid = 1.0;
       if (!get(x_index, x) || !get(y_index, y) || !get(z_index, z) ||
           (intensity_index && !get(*intensity_index, intensity)) ||
           (velocity_index && !get(*velocity_index, velocity)) ||
+          (elongation_index && !get(*elongation_index, elongation)) ||
           (valid_index && !get(*valid_index, valid))) {
         error = "PCD binary payload uses an unsupported field encoding";
         return false;
@@ -451,6 +458,7 @@ bool loadPcd(const std::filesystem::path& path, PointCloudSnapshot& frame,
           x, y, z,
           intensity_index ? std::optional<double>(intensity) : std::nullopt,
           velocity_index ? std::optional<double>(velocity) : std::nullopt,
+          elongation_index ? std::optional<double>(elongation) : std::nullopt,
           valid_index ? std::optional<double>(valid) : std::nullopt);
     }
   }
@@ -464,6 +472,10 @@ bool loadPcd(const std::filesystem::path& path, PointCloudSnapshot& frame,
   info.organized = header.height > 1U;
   info.has_intensity = intensity_index.has_value();
   info.has_velocity = velocity_index.has_value();
+  info.has_elongation = elongation_index.has_value();
+  if (info.has_elongation) {
+    frame.feature_encoding = PointCloudFeatureEncoding::CenterPointWaymo;
+  }
   info.multiple_frames = false;
   info.format_name = header.data == "ascii" ? "PCD ASCII" : "PCD binary";
   error.clear();
@@ -521,6 +533,7 @@ bool loadDelimited(const std::filesystem::path& path, PointCloudSnapshot& frame,
   std::optional<std::size_t> z_index;
   std::optional<std::size_t> intensity_index;
   std::optional<std::size_t> velocity_index;
+  std::optional<std::size_t> elongation_index;
   std::optional<std::size_t> valid_index;
   std::optional<std::size_t> scan_x_index;
   std::optional<std::size_t> scan_y_index;
@@ -541,6 +554,7 @@ bool loadDelimited(const std::filesystem::path& path, PointCloudSnapshot& frame,
     z_index = findDelimitedField(names, {"z", "z_up_m"});
     intensity_index = findDelimitedField(names, {"intensity", "intensity_db", "i"});
     velocity_index = findDelimitedField(names, {"velocity", "velocity_mps", "v"});
+    elongation_index = findDelimitedField(names, {"elongation"});
     valid_index = findDelimitedField(names, {"valid"});
     scan_x_index = findDelimitedField(names, {"scan_x_command", "scan_x"});
     scan_y_index = findDelimitedField(names, {"scan_y_command", "scan_y"});
@@ -557,7 +571,7 @@ bool loadDelimited(const std::filesystem::path& path, PointCloudSnapshot& frame,
                              std::size_t row_number, PointXYZI& point,
                              std::string& row_error) {
     std::size_t required_index = std::max({*x_index, *y_index, *z_index});
-    for (const auto index : {intensity_index, velocity_index, valid_index,
+    for (const auto index : {intensity_index, velocity_index, elongation_index, valid_index,
                              scan_x_index, scan_y_index}) {
       if (index) required_index = std::max(required_index, *index);
     }
@@ -573,12 +587,14 @@ bool loadDelimited(const std::filesystem::path& path, PointCloudSnapshot& frame,
     double z = 0.0;
     double intensity = 0.0;
     double velocity = 0.0;
+    double elongation = 0.0;
     double valid = 1.0;
     double scan_x = 0.0;
     double scan_y = 0.0;
     if (!value(*x_index, x) || !value(*y_index, y) || !value(*z_index, z) ||
         (intensity_index && !value(*intensity_index, intensity)) ||
         (velocity_index && !value(*velocity_index, velocity)) ||
+        (elongation_index && !value(*elongation_index, elongation)) ||
         (valid_index && !value(*valid_index, valid)) ||
         (scan_x_index && !value(*scan_x_index, scan_x)) ||
         (scan_y_index && !value(*scan_y_index, scan_y))) {
@@ -590,6 +606,7 @@ bool loadDelimited(const std::filesystem::path& path, PointCloudSnapshot& frame,
         x, y, z,
         intensity_index ? std::optional<double>(intensity) : std::nullopt,
         velocity_index ? std::optional<double>(velocity) : std::nullopt,
+        elongation_index ? std::optional<double>(elongation) : std::nullopt,
         valid_index ? std::optional<double>(valid) : std::nullopt,
         scan_x_index ? std::optional<double>(scan_x) : std::nullopt,
         scan_y_index ? std::optional<double>(scan_y) : std::nullopt);
@@ -634,6 +651,10 @@ bool loadDelimited(const std::filesystem::path& path, PointCloudSnapshot& frame,
   info.organized = false;
   info.has_intensity = intensity_index.has_value();
   info.has_velocity = velocity_index.has_value();
+  info.has_elongation = elongation_index.has_value();
+  if (info.has_elongation) {
+    frame.feature_encoding = PointCloudFeatureEncoding::CenterPointWaymo;
+  }
   info.multiple_frames = false;
   info.format_name = "XYZ text";
   if (info.has_velocity) info.format_name = "XYZIV text";
@@ -650,6 +671,7 @@ struct PointCloudReplayReader::Impl {
   std::ifstream stream;
   std::streamoff data_offset = 0;
   std::uint64_t file_size = 0U;
+  std::uint32_t format_version = 0U;
   PointCloudSnapshot single_frame;
   bool single_consumed = false;
   bool open = false;
@@ -682,7 +704,8 @@ bool PointCloudReplayReader::open(const std::filesystem::path& path, std::string
     std::uint32_t version = 0U;
     impl_->stream.read(magic.data(), static_cast<std::streamsize>(magic.size()));
     if (!impl_->stream || !readScalar(impl_->stream, version) ||
-        version != kPointCloudFormatVersion) {
+        (version != kFmcwPointCloudFormatVersion &&
+         version != kWaymoPointCloudFormatVersion)) {
       close();
       error = "FMCW point-cloud header is invalid or unsupported";
       return false;
@@ -695,11 +718,17 @@ bool PointCloudReplayReader::open(const std::filesystem::path& path, std::string
       error = "Unable to determine point-cloud file size";
       return false;
     }
-    impl_->info.format = PointCloudInputFormat::FmcwBinaryV1;
+    impl_->format_version = version;
+    impl_->info.format = version == kWaymoPointCloudFormatVersion
+        ? PointCloudInputFormat::WaymoBinaryV2
+        : PointCloudInputFormat::FmcwBinaryV1;
     impl_->info.has_intensity = true;
-    impl_->info.has_velocity = true;
+    impl_->info.has_velocity = version == kFmcwPointCloudFormatVersion;
+    impl_->info.has_elongation = version == kWaymoPointCloudFormatVersion;
     impl_->info.multiple_frames = true;
-    impl_->info.format_name = "FMCWPCD1";
+    impl_->info.format_name = version == kWaymoPointCloudFormatVersion
+        ? "WaymoPCD2"
+        : "FMCWPCD1";
     impl_->open = true;
     error.clear();
     return true;
@@ -730,7 +759,9 @@ PointCloudReadResult PointCloudReplayReader::readNext(PointCloudSnapshot& frame,
     error = "Point-cloud replay reader is not open";
     return PointCloudReadResult::Error;
   }
-  if (impl_->info.format != PointCloudInputFormat::FmcwBinaryV1) {
+  const bool binary_stream = impl_->info.format == PointCloudInputFormat::FmcwBinaryV1 ||
+      impl_->info.format == PointCloudInputFormat::WaymoBinaryV2;
+  if (!binary_stream) {
     if (impl_->single_consumed) {
       error.clear();
       return PointCloudReadResult::EndOfStream;
@@ -791,14 +822,23 @@ PointCloudReadResult PointCloudReplayReader::readNext(PointCloudSnapshot& frame,
   }
   for (auto& point : frame.points) {
     std::uint8_t valid = 0U;
+    float fifth = std::numeric_limits<float>::quiet_NaN();
     if (!readScalar(impl_->stream, point.x) || !readScalar(impl_->stream, point.y) ||
         !readScalar(impl_->stream, point.z) || !readScalar(impl_->stream, point.intensity) ||
-        !readScalar(impl_->stream, point.velocity) || !readScalar(impl_->stream, valid)) {
+        !readScalar(impl_->stream, fifth) || !readScalar(impl_->stream, valid)) {
       error = "FMCW point-cloud point payload is truncated";
       return PointCloudReadResult::Error;
     }
+    if (impl_->format_version == kWaymoPointCloudFormatVersion) {
+      point.elongation = fifth;
+    } else {
+      point.velocity = fifth;
+    }
     point.valid = valid != 0U;
   }
+  frame.feature_encoding = impl_->format_version == kWaymoPointCloudFormatVersion
+      ? PointCloudFeatureEncoding::CenterPointWaymo
+      : PointCloudFeatureEncoding::FmcwDbVelocity;
   finishSnapshot(frame);
   if (impl_->info.point_count == 0U) {
     impl_->info.width = width;
@@ -815,7 +855,8 @@ bool PointCloudReplayReader::rewind(std::string& error) {
     error = "Point-cloud replay reader is not open";
     return false;
   }
-  if (impl_->info.format == PointCloudInputFormat::FmcwBinaryV1) {
+  if (impl_->info.format == PointCloudInputFormat::FmcwBinaryV1 ||
+      impl_->info.format == PointCloudInputFormat::WaymoBinaryV2) {
     impl_->stream.clear();
     impl_->stream.seekg(impl_->data_offset);
     if (!impl_->stream) {
@@ -837,6 +878,7 @@ void PointCloudReplayReader::close() {
   impl_->path.clear();
   impl_->data_offset = 0;
   impl_->file_size = 0U;
+  impl_->format_version = 0U;
   impl_->single_frame = {};
   impl_->single_consumed = false;
   impl_->open = false;

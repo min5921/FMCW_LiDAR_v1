@@ -78,7 +78,10 @@ class WaymoConverterTest(unittest.TestCase):
                 )
                 self.assertEqual(first_points[0]["x"], 1.0)
                 self.assertEqual(first_points[2]["x"], 11.0)
-                self.assertTrue(np.isnan(first_points[0]["velocity"]))
+                self.assertAlmostEqual(
+                    float(first_points[0]["intensity"]), float(np.tanh(4.0)), places=6
+                )
+                self.assertEqual(first_points[0]["elongation"], 5.0)
                 self.assertEqual(first_points[1]["valid"], 1)
 
                 second_header = CONVERTER.FRAME_HEADER.unpack(

@@ -18,6 +18,7 @@ enum class PointCloudReadResult {
 enum class PointCloudInputFormat {
   Unknown,
   FmcwBinaryV1,
+  WaymoBinaryV2,
   PcdAscii,
   PcdBinary,
   DelimitedText,
@@ -31,6 +32,7 @@ struct PointCloudReplayInfo {
   bool organized = false;
   bool has_intensity = false;
   bool has_velocity = false;
+  bool has_elongation = false;
   bool multiple_frames = false;
   std::string format_name;
 };

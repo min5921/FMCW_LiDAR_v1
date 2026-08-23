@@ -95,6 +95,49 @@ void testFmcwMultiFrameReplay(const std::filesystem::path& directory) {
          "FMCWPCD1 replay rewinds to the first frame");
 }
 
+void testWaymoV2Replay(const std::filesystem::path& directory) {
+  const auto path = directory / "waymo_v2.pointcloud.bin";
+  {
+    std::ofstream stream(path, std::ios::binary);
+    const std::array<char, 8> magic{{'F', 'M', 'C', 'W', 'P', 'C', 'D', '1'}};
+    const std::uint32_t version = 2U;
+    const std::uint32_t frame_magic = 0x31444350U;
+    const std::uint64_t last_frame_id = 7U;
+    const std::uint64_t scan_frame_index = 3U;
+    const std::uint64_t revision = 0U;
+    const std::uint32_t one = 1U;
+    const std::array<float, 5> values{{10.0F, -2.0F, 0.5F, 0.75F, 1.25F}};
+    const std::uint8_t valid = 1U;
+    stream.write(magic.data(), static_cast<std::streamsize>(magic.size()));
+    stream.write(reinterpret_cast<const char*>(&version), sizeof(version));
+    stream.write(reinterpret_cast<const char*>(&frame_magic), sizeof(frame_magic));
+    stream.write(reinterpret_cast<const char*>(&last_frame_id), sizeof(last_frame_id));
+    stream.write(reinterpret_cast<const char*>(&scan_frame_index), sizeof(scan_frame_index));
+    stream.write(reinterpret_cast<const char*>(&revision), sizeof(revision));
+    stream.write(reinterpret_cast<const char*>(&one), sizeof(one));
+    stream.write(reinterpret_cast<const char*>(&one), sizeof(one));
+    stream.write(reinterpret_cast<const char*>(&one), sizeof(one));
+    stream.write(reinterpret_cast<const char*>(values.data()),
+                 static_cast<std::streamsize>(sizeof(values)));
+    stream.write(reinterpret_cast<const char*>(&valid), sizeof(valid));
+  }
+
+  fmcw::PointCloudReplayReader reader;
+  std::string error;
+  expect(reader.open(path, error) &&
+             reader.info().format == fmcw::PointCloudInputFormat::WaymoBinaryV2 &&
+             reader.info().has_intensity && reader.info().has_elongation &&
+             !reader.info().has_velocity,
+         "Waymo v2 replay reports model-ready intensity and elongation");
+  fmcw::PointCloudSnapshot replayed;
+  expect(reader.readNext(replayed, error) == fmcw::PointCloudReadResult::FrameReady &&
+             replayed.feature_encoding == fmcw::PointCloudFeatureEncoding::CenterPointWaymo &&
+             replayed.points.size() == 1U && replayed.points[0].intensity == 0.75F &&
+             replayed.points[0].elongation == 1.25F &&
+             std::isnan(replayed.points[0].velocity),
+         "Waymo v2 replay preserves the CenterPoint five-feature contract");
+}
+
 void testAsciiXyzPcd(const std::filesystem::path& directory) {
   const auto path = directory / "xyz_ascii.pcd";
   {
@@ -180,6 +223,7 @@ void testCsvXyzivAliases(const std::filesystem::path& directory) {
 int main() {
   const auto directory = testDirectory();
   testFmcwMultiFrameReplay(directory);
+  testWaymoV2Replay(directory);
   testAsciiXyzPcd(directory);
   testBinaryXyziPcd(directory);
   testCsvXyzivAliases(directory);

@@ -314,6 +314,9 @@ struct PointXYZI {
   float scan_x_command = std::numeric_limits<float>::quiet_NaN();
   float scan_y_command = std::numeric_limits<float>::quiet_NaN();
   bool valid = false;
+  // Kept after the legacy aggregate fields so existing XYZIV initialization
+  // and wire/storage contracts do not change.
+  float elongation = std::numeric_limits<float>::quiet_NaN();
 };
 
 enum class PeakTrackState : std::uint8_t {

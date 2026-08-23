@@ -179,8 +179,9 @@ GUI에서 raw part를 선택하면 같은 stem의 `.setup.yaml`을 우선 읽고
 
 지원 입력은 다음과 같다.
 
-- 프로젝트 전용 `<stem>.pointcloud.bin`: `FMCWPCD1` complete organized raster를 여러
-  frame 순서로 재생한다. Play/Pause, single-step, rewind, loop, 0.5-60 FPS를 지원한다.
+- 프로젝트 전용 `<stem>.pointcloud.bin`: 기존 FMCW `FMCWPCD1` 또는 Waymo 전용
+  `WaymoPCD2` frame을 순서로 재생한다. Play/Pause, single-step, rewind, loop,
+  0.5-60 FPS를 지원한다.
 - PCD v0.7 `DATA ascii` 또는 `DATA binary`: `x`, `y`, `z`가 필수이고 `intensity`,
   `velocity`, `valid`는 선택 사항이다. `WIDTH`와 `HEIGHT`가 있으면 organized layout을
   보존한다. `DATA binary_compressed`는 지원하지 않는다.
@@ -191,19 +192,20 @@ GUI에서 raw part를 선택하면 같은 stem의 `.setup.yaml`을 우선 읽고
 외부 파일의 좌표를 회전하거나 축 교환하지 않는다. 모든 입력 XYZ는 meter 단위의
 `X forward, Y left, Z up`으로 해석한다. XYZ-only 입력의 intensity/velocity는 `NaN`으로
 유지하며 값을 만들지 않는다. 해당 color mode에 값이 없을 때 renderer만 distance color로
-fallback한다. PCD/text는 한 개의 static frame이고 `FMCWPCD1`만 multi-frame replay이다.
+fallback한다. PCD/text는 한 개의 static frame이고 `FMCWPCD1`과 `WaymoPCD2`만
+multi-frame replay이다.
 입력 검증 한도는 frame당 20,000,000 points와 512 MiB payload이다.
 
 #### 9.1.1 Waymo segment conversion
 
 `tools/convert_waymo_zip.py`는 repository의 exported Waymo segment ZIP을 압축 해제 없이
-순차 읽어 하나의 `FMCWPCD1` multi-frame file로 변환한다. 각 source frame마다
+순차 읽어 하나의 `WaymoPCD2` multi-frame file로 변환한다. 각 source frame마다
 `TOP`, `FRONT`, `SIDE_LEFT`, `SIDE_RIGHT`, `REAR` LiDAR의 return 1/2를 모두 병합한다.
 입력 좌표는 이미 Waymo vehicle frame인 `X forward, Y left, Z up` meter이므로 추가 축
 교환이나 pose 변환을 하지 않는다.
 
-Waymo intensity는 보존하고, export에 없는 velocity는 `NaN`으로 기록한다. Elongation은
-현재 XYZIV contract에 저장하지 않는다. NLZ point는 삭제하지 않고 함께 저장하며 frame별
+Waymo intensity는 `tanh` 전처리하고 elongation과 함께 저장한다. Export에 없는 velocity는
+기록하지 않는다. NLZ point는 삭제하지 않고 함께 저장하며 frame별
 개수를 `<output>.pointcloud.json` manifest에 기록한다. 변환기는 `.partial` file에 먼저
 기록하고 전체 frame 구조를 검증한 뒤 최종 파일명으로 교체한다.
 
