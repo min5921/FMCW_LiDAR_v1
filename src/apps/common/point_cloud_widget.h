@@ -84,6 +84,7 @@ class PointCloudWidget final : public QOpenGLWidget, protected QOpenGLFunctions 
   PointCloudPostProcessor post_processor_;
   std::vector<PointCloudDisplayPoint> current_points_;
   DetectionSnapshotPtr detections_;
+  DetectionSnapshotPtr pending_detections_;
   std::vector<Vertex> vertices_;
   std::unique_ptr<QOpenGLShaderProgram> point_program_;
   QOpenGLBuffer vertex_buffer_{QOpenGLBuffer::VertexBuffer};

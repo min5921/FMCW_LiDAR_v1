@@ -157,6 +157,15 @@ void PointCloudWidget::setSnapshot(std::shared_ptr<const PointCloudSnapshot> sna
     return;
   }
   snapshot_ = std::move(snapshot);
+  if (pending_detections_ != nullptr &&
+      pending_detections_->last_frame_id <= snapshot_->last_frame_id) {
+    if (detections_ == nullptr ||
+        pending_detections_->last_frame_id >= detections_->last_frame_id) {
+      detections_ = std::move(pending_detections_);
+    } else {
+      pending_detections_.reset();
+    }
+  }
   rebuildDisplayCloud();
   if (!spatial_bounds_valid_) {
     fitSpatialBounds();
@@ -167,6 +176,7 @@ void PointCloudWidget::setSnapshot(std::shared_ptr<const PointCloudSnapshot> sna
 void PointCloudWidget::clearSnapshot() {
   snapshot_.reset();
   detections_.reset();
+  pending_detections_.reset();
   post_processor_.reset();
   current_points_.clear();
   vertices_.clear();
@@ -178,7 +188,30 @@ void PointCloudWidget::clearSnapshot() {
 }
 
 void PointCloudWidget::setDetections(DetectionSnapshotPtr detections) {
-  if (detections == detections_) {
+  if (detections == nullptr) {
+    if (detections_ == nullptr && pending_detections_ == nullptr) {
+      return;
+    }
+    detections_.reset();
+    pending_detections_.reset();
+    update();
+    return;
+  }
+
+  // Detection and point-cloud rendering run independently. Keep results for a
+  // frame that the throttled UI has not displayed yet out of the active
+  // overlay, otherwise the current box disappears until the display catches
+  // up. The newest such result is promoted by setSnapshot().
+  if (snapshot_ != nullptr && detections->last_frame_id > snapshot_->last_frame_id) {
+    if (pending_detections_ == nullptr ||
+        detections->last_frame_id >= pending_detections_->last_frame_id) {
+      pending_detections_ = std::move(detections);
+    }
+    return;
+  }
+  if (detections == detections_ ||
+      (detections_ != nullptr &&
+       detections->last_frame_id < detections_->last_frame_id)) {
     return;
   }
   detections_ = std::move(detections);
@@ -441,7 +474,19 @@ void PointCloudWidget::paintGL() {
   const bool detections_match_frame = snapshot_ != nullptr && detections_ != nullptr &&
       detections_->last_frame_id == snapshot_->last_frame_id &&
       detections_->scan_frame_index == snapshot_->scan_frame_index;
-  if (detections_match_frame) {
+  // Avoid a one-inference-period blank interval on every replay frame. A
+  // completed result may be held briefly while the next frame is being
+  // inferred. The scan-index check prevents holding boxes across a replay loop
+  // or a new acquisition session, and the frame bound prevents stale boxes
+  // from surviving a stalled detector.
+  static constexpr std::uint64_t kMaximumDetectionHoldFrames = 12U;
+  const bool detections_recent_for_frame = snapshot_ != nullptr && detections_ != nullptr &&
+      detections_->last_frame_id < snapshot_->last_frame_id &&
+      snapshot_->last_frame_id - detections_->last_frame_id <= kMaximumDetectionHoldFrames &&
+      detections_->scan_frame_index <= snapshot_->scan_frame_index &&
+      snapshot_->scan_frame_index - detections_->scan_frame_index <= kMaximumDetectionHoldFrames;
+  const bool detections_visible = detections_match_frame || detections_recent_for_frame;
+  if (detections_visible) {
     static constexpr std::array<std::array<int, 2>, 12> kEdges{{
         {{0, 1}}, {{1, 2}}, {{2, 3}}, {{3, 0}},
         {{4, 5}}, {{5, 6}}, {{6, 7}}, {{7, 4}},
@@ -520,10 +565,13 @@ void PointCloudWidget::paintGL() {
             .arg(stats.interpolated_points)
             .arg(stats.displayed_points)
       : QString("Waiting for complete raster frame");
-  if (detections_match_frame) {
+  if (detections_visible) {
     frame_text += QString(" | %1 objects | %2 ms")
         .arg(detections_->boxes.size())
         .arg(detections_->timing.total_ms, 0, 'f', 1);
+    if (!detections_match_frame) {
+      frame_text += QString(" | updating");
+    }
   }
   painter.drawText(QRect(14, 12, width() - 28, 24), Qt::AlignLeft | Qt::AlignVCenter, frame_text);
   if (axes_visible_) {
