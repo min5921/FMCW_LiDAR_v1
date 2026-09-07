@@ -43,6 +43,7 @@ class MainWindow final : public QMainWindow {
   void showPage(int index);
   void showLiveTab(int index);
   bool savePointCloudFramebuffer(const QString& path);
+  bool openPointCloudReplayFile(const QString& path);
 
  private:
   QWidget* buildOverviewPage();
@@ -169,10 +170,6 @@ class MainWindow final : public QMainWindow {
   AsyncPointCloudReplay point_cloud_replay_reader_;
   QTimer* point_cloud_load_timer_ = nullptr;
   std::uint64_t point_cloud_replay_frames_displayed_ = 0U;
-  QToolButton* point_cloud_open_button_ = nullptr;
-  QToolButton* object_detection_toggle_ = nullptr;
-  QToolButton* object_detection_weights_button_ = nullptr;
-  QString object_detection_weights_root_;
   QElapsedTimer point_cloud_update_timer_;
   SegmentationPlotWidget* segmentation_plot_ = nullptr;
   QLabel* segmentation_state_ = nullptr;

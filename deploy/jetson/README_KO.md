@@ -4,6 +4,10 @@
 core, Qt UI, CUDA/cuFFT, POSIX serial, UDP, storage 소스를 Jetson ARM64에서
 native Release로 빌드한다. Jetson 버전의 신호 처리는 CUDA/cuFFT 전용이다.
 
+이 PCD Replay worktree는 객체 인지, weight 로딩, 검출 박스 표시를 포함하지 않는다.
+`jetson.env`의 CenterPoint는 OFF이며 cuDNN/외부 모델 소스가 필요하지 않다.
+저장된 PCD 및 `.pointcloud.bin` 재생과 기존 LiDAR 기능은 유지한다.
+
 ## 1. 지원 범위
 
 - Qt 6.2 이상 기반 Jetson 로컬 UI

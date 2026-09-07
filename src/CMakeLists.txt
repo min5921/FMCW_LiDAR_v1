@@ -31,11 +31,6 @@ set(FMCW_CORE_SOURCES
   core/realtime_thread.cpp
   core/scan_trajectory.cpp
   core/system_state.cpp
-  detection/centerpoint_input_builder.cpp
-  detection/object_detection_policy.cpp
-  detection/object_detection_service.cpp
-  detection/object_detector.cpp
-  detection/point_cloud_file_loader.cpp
   drivers/alazar/alazar_digitizer.cpp
   drivers/alazar/alazar_sample_conversion.cpp
   drivers/edfa/edfa_protocol.cpp
@@ -190,8 +185,6 @@ if(FMCW_WITH_CENTERPOINT)
     ${_fmcw_centerpoint_cuda_sources}
   )
   set(FMCW_HAS_CENTERPOINT ON)
-else()
-  list(APPEND FMCW_CORE_SOURCES detection/centerpoint_detector_stub.cpp)
 endif()
 
 add_library(fmcw_core STATIC ${FMCW_CORE_SOURCES})

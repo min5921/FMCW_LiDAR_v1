@@ -19,6 +19,9 @@ option(FMCW_REQUIRE_FFTW "Fail configuration when the requested CPU backend is u
 option(FMCW_REQUIRE_ALAZAR "Fail configuration when ATS-SDK is unavailable" OFF)
 option(FMCW_WITH_ALAZAR "Enable AlazarTech ATS-SDK adapter when the SDK is available" ON)
 option(FMCW_WITH_CENTERPOINT "Enable the external CUDA/cuDNN CenterPoint detector" OFF)
+if(FMCW_WITH_CENTERPOINT)
+  message(FATAL_ERROR "This replay worktree excludes object detection. Use the separate CenterPoint worktree for inference.")
+endif()
 
 set(FMCW_TARGET_PLATFORM "AUTO" CACHE STRING "Target platform: AUTO, WINDOWS, or JETSON")
 set_property(CACHE FMCW_TARGET_PLATFORM PROPERTY STRINGS AUTO WINDOWS JETSON)

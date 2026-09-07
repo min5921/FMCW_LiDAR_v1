@@ -7,15 +7,6 @@ target_compile_features(fmcw_core_tests PRIVATE cxx_std_17)
 
 add_test(NAME fmcw_core_tests COMMAND fmcw_core_tests)
 
-add_executable(fmcw_detection_input_tests
-  detection_input_builder_test.cpp
-)
-
-target_link_libraries(fmcw_detection_input_tests PRIVATE fmcw_core)
-target_compile_features(fmcw_detection_input_tests PRIVATE cxx_std_17)
-
-add_test(NAME fmcw_detection_input_tests COMMAND fmcw_detection_input_tests)
-
 add_executable(fmcw_config_tests
   config_system_test.cpp
   # Historical policy prototypes, intentionally not linked into the application.
@@ -63,6 +54,17 @@ set_tests_properties(fmcw_async_replay_tests PROPERTIES TIMEOUT 15)
 
 if(FMCW_BUILD_QT_APPS)
   find_package(Qt6 6.2 REQUIRED COMPONENTS Core)
+  add_executable(fmcw_point_cloud_ui_tests point_cloud_ui_test.cpp)
+  target_link_libraries(fmcw_point_cloud_ui_tests PRIVATE fmcw_qt_common)
+  add_test(NAME fmcw_point_cloud_ui_tests COMMAND fmcw_point_cloud_ui_tests)
+  set_tests_properties(fmcw_point_cloud_ui_tests PROPERTIES TIMEOUT 30 SKIP_RETURN_CODE 77)
+  if(WIN32)
+    get_target_property(_fmcw_qt_core Qt6::Core IMPORTED_LOCATION_RELEASE)
+    get_filename_component(_fmcw_qt_bin "${_fmcw_qt_core}" DIRECTORY)
+    string(REPLACE ";" "\\;" _fmcw_ui_test_path "${_fmcw_qt_bin};$ENV{PATH}")
+    set_tests_properties(fmcw_point_cloud_ui_tests PROPERTIES
+      ENVIRONMENT "PATH=${_fmcw_ui_test_path};QT_PLUGIN_PATH=${_fmcw_qt_bin}/../plugins")
+  endif()
   add_executable(fmcw_runtime_tests runtime_orchestration_test.cpp)
   target_link_libraries(fmcw_runtime_tests PRIVATE fmcw_qt_common Qt6::Core)
   add_test(NAME fmcw_runtime_tests COMMAND fmcw_runtime_tests)

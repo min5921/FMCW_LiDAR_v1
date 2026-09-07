@@ -77,7 +77,8 @@ $documents = @(
     "processing_storage.md",
     "phase_status.md",
     "runtime_contract_v2.md",
-    "v2_review_completion.md"
+    "v2_review_completion.md",
+    "pcd_replay_worktree.md"
 )
 foreach ($document in $documents) {
     Copy-Item -LiteralPath (Join-Path $repositoryRoot "docs\$document") -Destination $documentationTarget

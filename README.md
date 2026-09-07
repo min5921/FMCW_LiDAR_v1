@@ -2,6 +2,13 @@
 
 FMCW LiDAR 시스템을 Windows와 Jetson에서 함께 운용하기 위한 프로젝트입니다. v2는 기존 측정/파일 규약을 유지하면서 종료·기록·재생 신뢰성과 실제 runtime 검증을 개선합니다.
 
+## Replay Worktree
+
+`codex/pcd-replay-only`: saved point-cloud replay and 3D viewing, without model
+weights, object inference, or detection boxes. Existing LiDAR functions remain.
+This worktree is intentionally separate from CenterPoint development.
+See [Replay Worktree](docs/pcd_replay_worktree.md) for scope and verification.
+
 ## Current Direction
 
 - UI: Qt 6.2 이상
