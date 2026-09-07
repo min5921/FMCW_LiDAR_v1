@@ -138,14 +138,16 @@ fmcw::WriterOpenOptions writerOptions(const fmcw::SystemConfig& config,
   return options;
 }
 
-bool processingParity(const fmcw::SystemConfig& config, const fmcw::RawFrameBatch& live,
+bool processingParity(fmcw::SystemConfig config, const fmcw::RawFrameBatch& live,
                       const fmcw::RawFrameBatch& replayed) {
-  fmcw::SignalProcessor live_processor(std::make_unique<fmcw::FftwBackend>());
-  fmcw::SignalProcessor replay_processor(std::make_unique<fmcw::FftwBackend>());
+  const auto backend = fmcw::FftwBackend::available() ? fmcw::FftBackendKind::Fftw : fmcw::FftBackendKind::Cuda;
+  config.processing.fft_backend = backend;
+  fmcw::SignalProcessor live_processor(fmcw::createFftBackend(backend));
+  fmcw::SignalProcessor replay_processor(fmcw::createFftBackend(backend));
   std::string error;
   if (!live_processor.configure(config, 1U, error) ||
       !replay_processor.configure(config, 1U, error)) {
-    std::cerr << "FFTW replay parity setup failed: " << error << '\n';
+    std::cerr << "Replay parity setup failed: " << error << '\n';
     return false;
   }
   std::vector<fmcw::ProcessedFrame> live_results;
@@ -153,7 +155,7 @@ bool processingParity(const fmcw::SystemConfig& config, const fmcw::RawFrameBatc
   if (!live_processor.processBatch(live, 997U, live_results, error) ||
       !replay_processor.processBatch(replayed, 997U, replay_results, error) ||
       live_results.size() != replay_results.size()) {
-    std::cerr << "FFTW replay parity processing failed: " << error << '\n';
+    std::cerr << "Replay parity processing failed: " << error << '\n';
     return false;
   }
   for (std::size_t index = 0; index < live_results.size(); ++index) {
@@ -240,7 +242,7 @@ void testDmaBlockStorageAndReplay() {
                  batch->records.front().metadata.scan_position.source,
          "v3 replay preserves samples, raster positions, and trajectory provenance");
   expect(processingParity(config, *batch, replayed),
-         "v3 replay produces the same FFTW peak, distance, velocity, and XYZIV results");
+         "v3 replay produces the same peak, distance, velocity, and XYZIV results");
   fmcw::RawFrameBatch second_replayed;
   expect(reader.readNextBatch(second_replayed, error) == fmcw::ReplayReadResult::FrameReady &&
              reader.readNextBatch(second_replayed, error) == fmcw::ReplayReadResult::EndOfStream,
@@ -565,7 +567,7 @@ void testIndependentRawAndProcessedWorkers() {
     state->raw_release = true;
     state->condition.notify_all();
   }
-  expect(storage.waitUntilStopped(error), "independent writer workers drain after STOP");
+  expect(!storage.waitUntilStopped(error) && !error.empty(), "independent writers drain but preserve overflow failure");
   std::error_code remove_error;
   std::filesystem::remove_all(options.session_directory, remove_error);
 }

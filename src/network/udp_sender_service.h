@@ -2,6 +2,7 @@
 
 #include "core/config_types.h"
 #include "core/frame_types.h"
+#include "processing/processing_snapshots.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -36,6 +37,7 @@ class UdpSenderService final {
   bool start(const UdpConfig& config, std::uint32_t frame_width, std::uint32_t frame_height,
              std::string& error);
   void enqueue(ProcessedFramePtr frame);
+  void enqueue(std::shared_ptr<const PointCloudSnapshot> frame);
   void stop();
   UdpSenderStatus status() const;
 

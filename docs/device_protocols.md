@@ -112,3 +112,15 @@ EDFA profile mode:
 - `controlled`: 연결 시 status/mode/target/activation을 읽고, 출력 활성화 시 APC mode, 안전 범위 내 setpoint, activation ACK를 순서대로 확인
 
 COM/tty 포트는 플랫폼에서 검색한 목록을 UI combo box로 제공한다. Digitizer source 선택과 optional serial adapter 선택은 독립적이므로 Simulator/Replay에서도 controlled EDFA를 실제 장비에 연결할 수 있다. Start는 controlled EDFA 출력 확인, digitizer arm, MCU scan 시작 순서다. Stop과 오류 처리뿐 아니라 일반 Disconnect도 serial port를 닫기 전에 EDFA output off를 시도한다.
+
+### EDFA Status Snapshot and Concurrency
+
+`EdfaSerialController`는 serial 명령/응답을 `io_mutex_`로 직렬화하고, 공개 상태는 별도 `status_mutex_`로 보호한다. `status()`는 마지막 확인된 상태만 복사하며 serial I/O를 수행하거나 진행 중인 응답 완료를 기다리지 않는다. 이 구분은 DMA 수집 경로의 상태 참조에도 동일하게 적용된다.
+
+status/mode/target/activation 전체 조회는 모든 응답을 확인한 뒤 하나의 상태로 공개한다. 부분 응답 또는 timeout이면 이전 정상 읽기 값과 갱신 시각을 보존하고 `telemetry_valid=false`, `device.ready=false`로 표시한다. 이후 정상 poll이 성공하면 복구된다. 출력 제어 ACK는 확인 즉시 공개하고, 뒤따르는 선택적 telemetry 조회가 실패해도 확인된 출력 명령 결과를 취소하지 않는다. 이 경우 telemetry만 유효하지 않은 것으로 표시한다.
+
+`EdfaStatus::telemetry_timestamp_ns`는 마지막 확인된 읽기 값의 host steady-clock 시각이며 0은 시각 정보가 없다는 뜻이다. UTC, raw timestamp 또는 UDP/point-cloud 포맷 필드가 아니다. 상태가 유효하지 않을 때 이전 수치를 현재 정상 측정치로 취급하면 안 된다.
+
+이 잠금 분리는 **상태 조회**를 UART 대기와 분리한다. v2에서는 GUI Stop/E-stop/Disconnect가 queued 실행 전에 취소 세대를 바꾼다. MCU upload는 point/명령 경계에서, EDFA warm-up은 최대 10 ms 단위 대기 사이에서 취소를 확인한다. 업로드 중 Start는 대기열에 쌓지 않고 거부한다.
+
+이미 진행 중인 serial transaction을 강제 선점하지는 않는다. 응답 timeout과 retry, 장치 STOP/OFF ACK 대기가 추가될 수 있으며 EDFA 조회에는 복수 transaction이 포함된다. 따라서 10 ms는 광출력 차단 보장 시간이 아니다. 실제 차단 시간·통신 단절·장치 미응답은 별도 실기 시험 대상이고, 소프트웨어 E-stop은 물리적 안전 인터록을 대체하지 않는다.

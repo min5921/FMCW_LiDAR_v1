@@ -1,6 +1,7 @@
 #pragma once
 
 #include "processing/processing_snapshots.h"
+#include "core/cancellation.h"
 
 #include <cstdint>
 #include <filesystem>
@@ -10,6 +11,7 @@
 namespace fmcw {
 
 enum class PointCloudReadResult {
+  Pending,
   FrameReady,
   EndOfStream,
   Error,
@@ -42,8 +44,8 @@ class PointCloudReplayReader {
   PointCloudReplayReader();
   ~PointCloudReplayReader();
 
-  bool open(const std::filesystem::path& path, std::string& error);
-  PointCloudReadResult readNext(PointCloudSnapshot& frame, std::string& error);
+  bool open(const std::filesystem::path& path, std::string& error, const CancellationCheck& cancelled = {});
+  PointCloudReadResult readNext(PointCloudSnapshot& frame, std::string& error, const CancellationCheck& cancelled = {});
   bool rewind(std::string& error);
   void close();
   bool isOpen() const;

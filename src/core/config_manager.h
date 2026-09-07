@@ -27,6 +27,7 @@ struct ConfigUpdateResult {
   std::string message;
 };
 
+// Retained for prototype contract tests; not part of the shipping runtime.
 class ConfigManager {
  public:
   explicit ConfigManager(SystemConfig initial_config = {});

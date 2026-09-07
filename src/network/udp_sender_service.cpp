@@ -12,6 +12,7 @@
 #include <thread>
 #include <utility>
 #include <vector>
+#include <variant>
 
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
@@ -41,6 +42,7 @@ void closeSocket(SocketHandle socket) { close(socket); }
 }  // namespace
 
 struct UdpSenderService::Impl {
+  using PendingFrame = std::variant<UdpPointFrame, std::shared_ptr<const PointCloudSnapshot>>;
   void resetAssembly(std::uint64_t raster_frame_id) {
     active_raster_frame_id = raster_frame_id;
     assembly_points.assign(expected_points, {});
@@ -51,7 +53,7 @@ struct UdpSenderService::Impl {
     has_active_frame = true;
   }
 
-  void queueCompletedFrame(UdpPointFrame frame) {
+  void queueCompletedFrame(PendingFrame frame) {
     ++sender_status.frames_completed;
     if (queue.size() >= sender_status.queue_capacity) {
       switch (config.backpressure_policy) {
@@ -80,15 +82,27 @@ struct UdpSenderService::Impl {
     const auto started_at = std::chrono::steady_clock::now();
     while (true) {
       UdpPointFrame frame;
+      PendingFrame pending;
       {
         std::unique_lock<std::mutex> lock(mutex);
         condition.wait(lock, [this] { return !queue.empty() || !accepting; });
         if (queue.empty() && !accepting) {
           break;
         }
-        frame = std::move(queue.front());
+        pending = std::move(queue.front());
         queue.pop_front();
         sender_status.queue_size = queue.size();
+      }
+
+      if (auto* cloud = std::get_if<std::shared_ptr<const PointCloudSnapshot>>(&pending)) {
+        frame.raster_frame_id = (*cloud)->scan_frame_index + 1U;
+        frame.timestamp_ns = (*cloud)->source_timestamp_ns;
+        frame.config_revision = (*cloud)->processing_config_revision;
+        frame.points.reserve((*cloud)->points.size());
+        std::copy_if((*cloud)->points.begin(), (*cloud)->points.end(),
+                     std::back_inserter(frame.points), [](const PointXYZI& point) { return point.valid; });
+      } else {
+        frame = std::move(std::get<UdpPointFrame>(pending));
       }
 
       std::string error;
@@ -128,7 +142,7 @@ struct UdpSenderService::Impl {
 
   mutable std::mutex mutex;
   std::condition_variable condition;
-  std::deque<UdpPointFrame> queue;
+  std::deque<PendingFrame> queue;
   std::thread worker;
   UdpConfig config;
   UdpSenderStatus sender_status;
@@ -247,6 +261,13 @@ void UdpSenderService::enqueue(ProcessedFramePtr frame) {
                std::back_inserter(completed.points), [](const PointXYZI& point) { return point.valid; });
   impl_->queueCompletedFrame(std::move(completed));
   impl_->has_active_frame = false;
+}
+
+void UdpSenderService::enqueue(std::shared_ptr<const PointCloudSnapshot> frame) {
+  if (!frame || !frame->complete) { return; }
+  std::lock_guard<std::mutex> lock(impl_->mutex);
+  if (!impl_->accepting || frame->width != impl_->width || frame->height != impl_->height) { return; }
+  impl_->queueCompletedFrame(std::move(frame));
 }
 
 void UdpSenderService::stop() {

@@ -47,6 +47,9 @@ bool ReplayDigitizer::configure(const SystemConfig& config, std::string& error) 
 
 bool ReplayDigitizer::openReader(std::string& error) {
   reader_.close();
+  processing_history_.clear();
+  if (config_.runtime.replay_processing_history &&
+      !readProcessingHistory(config_.runtime.replay_file, processing_history_, error)) { return false; }
   if (!reader_.open(std::filesystem::path(config_.runtime.replay_file), error)) {
     return false;
   }
@@ -233,6 +236,11 @@ FrameWaitResult ReplayDigitizer::waitForBatch(MutableRawFrameBatchPtr& batch,
 
   if (reader_.streamDescriptor().format_version == kLegacyRawFrameBatchFormatVersion ||
       reader_.streamDescriptor().format_version == kRawFrameBatchFormatVersion) {
+    const auto source_id = mutable_batch->records.empty() ? 0U : mutable_batch->records.front().metadata.frame_id;
+    for (const auto& event : processing_history_) {
+      if (event->first_source_frame_id > source_id) { break; }
+      mutable_batch->replay_processing = event;
+    }
     for (auto& frame : mutable_batch->records) {
       frame.metadata.frame_id = next_frame_id_;
       frame.metadata.trigger.sequence = next_frame_id_;

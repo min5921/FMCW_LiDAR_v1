@@ -71,6 +71,7 @@ enum class PointCloudFeatureEncoding : std::uint8_t {
 
 struct PointCloudSnapshot {
   std::uint64_t last_frame_id = 0;
+  std::uint64_t source_timestamp_ns = 0;
   std::uint64_t scan_frame_index = 0;
   std::uint64_t processing_config_revision = 0;
   std::uint32_t width = 0;

@@ -1,5 +1,6 @@
 param(
-    [string]$Destination = ""
+    [string]$Destination = "",
+    [switch]$ReplaceExisting
 )
 
 $ErrorActionPreference = "Stop"
@@ -20,6 +21,9 @@ if (-not $destinationPath.StartsWith($packagePrefix, [System.StringComparison]::
 }
 
 if (Test-Path -LiteralPath $destinationPath) {
+    if (-not $ReplaceExisting) {
+        throw "Destination exists. Choose a new source folder or explicitly use -ReplaceExisting."
+    }
     Remove-Item -LiteralPath $destinationPath -Recurse -Force
 }
 New-Item -ItemType Directory -Path $destinationPath | Out-Null
@@ -46,6 +50,7 @@ foreach ($directory in $directories) {
     New-Item -ItemType Directory -Path (Split-Path -Parent $target) -Force | Out-Null
     Copy-Item -LiteralPath $source -Destination $target -Recurse
 }
+Copy-Item -LiteralPath (Join-Path $repositoryRoot "deploy\build_manifest.cmake") -Destination (Join-Path $destinationPath "deploy")
 
 # Copy-Item does not honor .gitignore. Keep the CubeIDE project sources, but
 # remove local firmware build products and machine-specific indexer state.
@@ -70,7 +75,9 @@ $documents = @(
     "device_protocols.md",
     "hardware_acceptance.md",
     "processing_storage.md",
-    "phase_status.md"
+    "phase_status.md",
+    "runtime_contract_v2.md",
+    "v2_review_completion.md"
 )
 foreach ($document in $documents) {
     Copy-Item -LiteralPath (Join-Path $repositoryRoot "docs\$document") -Destination $documentationTarget
@@ -80,6 +87,7 @@ $revision = "uncommitted-source"
 try {
     $revision = (git -C $repositoryRoot rev-parse HEAD).Trim()
     $revisionPaths = @($files) + @($directories)
+    $revisionPaths += "deploy/build_manifest.cmake"
     $revisionPaths += $documents | ForEach-Object { "docs/$_" }
     $statusArguments = @(
         "-C", $repositoryRoot,

@@ -6,6 +6,9 @@
 
 namespace fmcw {
 
+// Historical Phase 2 policy index. RuntimeWorker is the shipping transition policy;
+// this table must not be used as evidence of GUI command behavior.
+
 enum class FieldPresentation {
   Primary,
   Detailed,

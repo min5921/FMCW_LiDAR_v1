@@ -161,7 +161,8 @@ std::optional<std::size_t> findField(const PcdHeader& header,
   return std::nullopt;
 }
 
-bool parsePcdHeader(std::istream& stream, PcdHeader& header, std::string& error) {
+bool parsePcdHeader(std::istream& stream, PcdHeader& header, std::string& error,
+                    const CancellationCheck& cancelled) {
   std::vector<std::string> names;
   std::vector<std::uint32_t> sizes;
   std::vector<char> types;
@@ -169,6 +170,7 @@ bool parsePcdHeader(std::istream& stream, PcdHeader& header, std::string& error)
   bool found_data = false;
   std::string line;
   while (std::getline(stream, line)) {
+    if (cancelled && cancelled()) { error = "Point cloud read cancelled"; return false; }
     if (line.size() > 1024U * 1024U) {
       error = "PCD header line exceeds 1 MiB";
       return false;
@@ -371,14 +373,14 @@ PointXYZI pointFromValues(double x, double y, double z,
 }
 
 bool loadPcd(const std::filesystem::path& path, PointCloudSnapshot& frame,
-             PointCloudReplayInfo& info, std::string& error) {
+             PointCloudReplayInfo& info, std::string& error, const CancellationCheck& cancelled) {
   std::ifstream stream(path, std::ios::binary);
   if (!stream) {
     error = "Unable to open PCD file";
     return false;
   }
   PcdHeader header;
-  if (!parsePcdHeader(stream, header, error)) {
+  if (!parsePcdHeader(stream, header, error, cancelled)) {
     return false;
   }
   if (header.data == "binary" && !littleEndianHost()) {
@@ -410,6 +412,7 @@ bool loadPcd(const std::filesystem::path& path, PointCloudSnapshot& frame,
     std::vector<double> values(header.components_per_point);
     std::string token;
     for (std::uint64_t point_index = 0U; point_index < header.points; ++point_index) {
+      if (isCancelled(cancelled)) { error = "Point-cloud read cancelled"; return false; }
       for (std::size_t component = 0U; component < values.size(); ++component) {
         if (!(stream >> token) || !parseDouble(token, values[component])) {
           error = "PCD ASCII payload ended early or contains a non-numeric value";
@@ -429,6 +432,7 @@ bool loadPcd(const std::filesystem::path& path, PointCloudSnapshot& frame,
   } else {
     std::vector<std::uint8_t> point_bytes(header.bytes_per_point);
     for (std::uint64_t point_index = 0U; point_index < header.points; ++point_index) {
+      if (isCancelled(cancelled)) { error = "Point-cloud read cancelled"; return false; }
       stream.read(reinterpret_cast<char*>(point_bytes.data()),
                   static_cast<std::streamsize>(point_bytes.size()));
       if (!stream) {
@@ -496,7 +500,7 @@ std::optional<std::size_t> findDelimitedField(
 }
 
 bool loadDelimited(const std::filesystem::path& path, PointCloudSnapshot& frame,
-                   PointCloudReplayInfo& info, std::string& error) {
+                   PointCloudReplayInfo& info, std::string& error, const CancellationCheck& cancelled) {
   std::ifstream stream(path);
   if (!stream) {
     error = "Unable to open point-cloud text file";
@@ -507,6 +511,7 @@ bool loadDelimited(const std::filesystem::path& path, PointCloudSnapshot& frame,
   std::string line;
   std::size_t line_number = 0U;
   while (std::getline(stream, line)) {
+    if (isCancelled(cancelled)) { error = "Point-cloud read cancelled"; return false; }
     ++line_number;
     line = trim(line);
     if (!line.empty() && line.front() != '#') {
@@ -621,6 +626,7 @@ bool loadDelimited(const std::filesystem::path& path, PointCloudSnapshot& frame,
     frame.points.push_back(point);
   }
   while (std::getline(stream, line)) {
+    if (isCancelled(cancelled)) { error = "Point-cloud read cancelled"; return false; }
     ++line_number;
     line = trim(line);
     if (line.empty() || line.front() == '#') {
@@ -680,7 +686,7 @@ struct PointCloudReplayReader::Impl {
 PointCloudReplayReader::PointCloudReplayReader() : impl_(std::make_unique<Impl>()) {}
 PointCloudReplayReader::~PointCloudReplayReader() = default;
 
-bool PointCloudReplayReader::open(const std::filesystem::path& path, std::string& error) {
+bool PointCloudReplayReader::open(const std::filesystem::path& path, std::string& error, const CancellationCheck& cancelled) {
   close();
   std::error_code filesystem_error;
   if (!std::filesystem::is_regular_file(path, filesystem_error) || filesystem_error) {
@@ -738,8 +744,8 @@ bool PointCloudReplayReader::open(const std::filesystem::path& path, std::string
   PointCloudSnapshot frame;
   const auto extension = lower(path.extension().string());
   const bool loaded = extension == ".pcd"
-      ? loadPcd(path, frame, info, error)
-      : loadDelimited(path, frame, info, error);
+      ? loadPcd(path, frame, info, error, cancelled)
+      : loadDelimited(path, frame, info, error, cancelled);
   if (!loaded) {
     close();
     return false;
@@ -754,7 +760,7 @@ bool PointCloudReplayReader::open(const std::filesystem::path& path, std::string
 }
 
 PointCloudReadResult PointCloudReplayReader::readNext(PointCloudSnapshot& frame,
-                                                      std::string& error) {
+                                                      std::string& error, const CancellationCheck& cancelled) {
   if (!impl_->open) {
     error = "Point-cloud replay reader is not open";
     return PointCloudReadResult::Error;
@@ -821,6 +827,7 @@ PointCloudReadResult PointCloudReplayReader::readNext(PointCloudSnapshot& frame,
     return PointCloudReadResult::Error;
   }
   for (auto& point : frame.points) {
+    if (isCancelled(cancelled)) { error = "Point-cloud read cancelled"; return PointCloudReadResult::Error; }
     std::uint8_t valid = 0U;
     float fifth = std::numeric_limits<float>::quiet_NaN();
     if (!readScalar(impl_->stream, point.x) || !readScalar(impl_->stream, point.y) ||

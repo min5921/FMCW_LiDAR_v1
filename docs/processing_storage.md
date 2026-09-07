@@ -223,4 +223,14 @@ unorganized `width = point_count`, `height = 1` point-cloud frame 하나가 된�
 - raw/processed write failure: writer failure stop request
 - FFT backend failure: processing stop request
 
-상위 session controller는 이 상태를 `OperationController`의 queue overflow, writer failure, device error stop cause로 변환하고 global STOP sequence를 수행해야 한다.
+실제 Qt 앱의 `RuntimeWorker`가 오류를 받아 global STOP을 수행한다. `StopResult`는 hardware/acquisition/processing/UDP/storage 단계 오류를 모으고, `ApplicationController`의 실패 신호와 로그로 전달한다. `OperationController`는 초기 prototype 테스트용이며 실제 앱 제어 경로가 아니다.
+
+Raw/point-cloud worker를 모두 join한 후 같은 세션 결과로 최종화한다. Overflow, writer 오류/예외, 외부 실패 정지는 `completed=false`다. 나중 writer의 finalize 실패도 먼저 닫힌 peer의 metadata를 실패로 낮춘다. 디스크 자체가 metadata 쓰기를 거부하면 실패 표시는 보장할 수 없으므로 runtime 오류와 부분 파일을 함께 확인해야 한다.
+
+일반 Stop은 대기 processing batch를 버리고 현재 진행 작업을 종료한다. 자연스러운 raw replay EOF는 처리 큐를 비운 뒤 저장을 닫아 마지막 결과를 보존한다. 둘 다 불완전 raster는 완성 point cloud로 내보내지 않는다.
+
+### v2 읽기 및 설정 이력
+
+`AsyncPointCloudReplay`의 전용 worker가 파일 해석과 한 프레임 사전 읽기를 담당한다. GUI에는 `Pending` 또는 준비된 frame을 반환하며, 파일 교체/rewind/close의 세대 번호로 이전 결과를 차단한다. PCD 해석기는 검출 입력에서도 공유하고, 검출 전용 I/elongation 기본값 변환만 adapter에 둔다. 이 변환이 저장/화면의 missing-value 규약을 바꾸지는 않는다.
+
+Raw 처리 설정 이력의 파일 구조·적용 경계·덮어쓰기 규칙은 `data_contract.md`와 `runtime_contract_v2.md`를 따른다. 초기 setup만 복원하는 기능과 실행 중 처리 revision을 재현하는 기능은 별개다.

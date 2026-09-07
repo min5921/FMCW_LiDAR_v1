@@ -13,16 +13,26 @@ if [[ ! -x "${source_executable}" ]]; then
   exit 2
 fi
 
-rm -rf -- "${package_dir}"
+if [[ -e "${package_dir}" ]]; then
+  backup_dir="${package_dir}.previous-$(date -u +%Y%m%dT%H%M%SZ)-$$"
+  mv -- "${package_dir}" "${backup_dir}"
+  printf 'Previous runtime, settings and data preserved: %s\n' "${backup_dir}"
+fi
 mkdir -p -- "${package_dir}/config"
 
 install -m 0755 "${source_executable}" "${package_dir}/FMCW_LiDAR_Jetson"
+install -m 0644 "${build_dir}/BUILD_FEATURES.txt" "${package_dir}/BUILD_FEATURES.txt"
+install -m 0644 "${build_dir}/BUILD_SOURCES.sha256" "${package_dir}/BUILD_SOURCES.sha256"
 install -m 0755 "${script_dir}/run.sh" "${package_dir}/run.sh"
 install -m 0644 "${script_dir}/jetson.env" "${package_dir}/jetson.env"
 cp -a "${root_dir}/config/." "${package_dir}/config/"
 
 revision="source-bundle"
-if command -v git >/dev/null 2>&1 && git -C "${root_dir}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+if [[ -f "${build_dir}/BUILD_FEATURES.txt" ]]; then
+  while IFS='=' read -r key value; do
+    if [[ "${key}" == "Source" ]]; then revision="${value}"; break; fi
+  done <"${build_dir}/BUILD_FEATURES.txt"
+elif command -v git >/dev/null 2>&1 && git -C "${root_dir}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   revision="$(git -C "${root_dir}" rev-parse HEAD)"
 elif [[ -f "${root_dir}/SOURCE_REVISION.txt" ]]; then
   revision="$(head -n 1 "${root_dir}/SOURCE_REVISION.txt")"
@@ -52,7 +62,11 @@ fi
 } >"${package_dir}/BUILD_INFO.txt"
 
 if command -v ldd >/dev/null 2>&1; then
-  ldd "${package_dir}/FMCW_LiDAR_Jetson" >"${package_dir}/runtime_dependencies.txt" || true
+  ldd "${package_dir}/FMCW_LiDAR_Jetson" >"${package_dir}/runtime_dependencies.txt"
+  if grep 'not found' "${package_dir}/runtime_dependencies.txt" >/dev/null; then
+    echo 'ERROR: Packaged executable has unresolved runtime dependencies' >&2
+    exit 2
+  fi
 fi
 
 (

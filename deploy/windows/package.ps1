@@ -45,6 +45,8 @@ if (-not $qtDeploy) {
 
 New-Item -ItemType Directory -Path $outputRoot -Force | Out-Null
 Copy-Item -LiteralPath $sourceExe -Destination $packagedExe -Force
+Copy-Item -LiteralPath (Join-Path (Split-Path -Parent $buildRoot) "BUILD_FEATURES.txt") -Destination $outputRoot -Force
+Copy-Item -LiteralPath (Join-Path (Split-Path -Parent $buildRoot) "BUILD_SOURCES.sha256") -Destination $outputRoot -Force
 
 $configSource = Join-Path $repoRoot "config"
 $configDestination = Join-Path $outputRoot "config"
@@ -69,7 +71,7 @@ $atsRuntime = $atsCandidates | Where-Object { Test-Path -LiteralPath $_ } |
 if ($atsRuntime) {
   Copy-Item -LiteralPath $atsRuntime -Destination $outputRoot -Force
 } else {
-  Write-Warning "ATSApi.dll was not found. Simulator works, but Alazar mode requires the runtime DLL."
+  Write-Warning "ATSApi.dll was not found. An ATS-enabled executable may fail to load; package smoke test must pass."
 }
 
 & $qtDeploy --release --no-translations --compiler-runtime --dir $outputRoot $packagedExe
@@ -77,8 +79,41 @@ if ($LASTEXITCODE -ne 0) {
   throw "windeployqt failed with exit code $LASTEXITCODE"
 }
 
+$redistRoots = @()
+if ($env:VCToolsRedistDir) { $redistRoots += $env:VCToolsRedistDir }
+$vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio/Installer/vswhere.exe"
+if (Test-Path -LiteralPath $vswhere) {
+  $installation = & $vswhere -latest -products '*' -property installationPath
+  if ($installation) {
+    $redistParent = Join-Path $installation "VC/Redist/MSVC"
+    if (Test-Path -LiteralPath $redistParent) {
+      $redistRoots += Get-ChildItem -LiteralPath $redistParent -Directory |
+          Where-Object { $_.Name -match '^\d+\.\d+' } |
+          Sort-Object { [version]$_.Name } -Descending |
+          Select-Object -ExpandProperty FullName
+    }
+  }
+}
+foreach ($redistRoot in $redistRoots) {
+  $crt = Join-Path $redistRoot "x64/Microsoft.VC143.CRT"
+  if (-not (Test-Path -LiteralPath $crt)) { continue }
+  foreach ($component in @("Microsoft.VC143.CRT", "Microsoft.VC143.OpenMP")) {
+    $componentPath = Join-Path $redistRoot "x64/$component"
+    if (Test-Path -LiteralPath $componentPath) {
+      Get-ChildItem -LiteralPath $componentPath -Filter '*.dll' -File | ForEach-Object {
+        Copy-Item -LiteralPath $_.FullName -Destination $outputRoot -Force
+      }
+    }
+  }
+  break
+}
+
 $requiredFiles = @(
   $packagedExe,
+  (Join-Path $outputRoot "msvcp140.dll"),
+  (Join-Path $outputRoot "vcruntime140.dll"),
+  (Join-Path $outputRoot "vcruntime140_1.dll"),
+  (Join-Path $outputRoot "vcomp140.dll"),
   (Join-Path $outputRoot "Qt6Core.dll"),
   (Join-Path $outputRoot "Qt6Gui.dll"),
   (Join-Path $outputRoot "Qt6OpenGL.dll"),
@@ -92,12 +127,20 @@ if ($missingFiles) {
 }
 
 Push-Location $outputRoot
+$originalPath = $env:PATH
 try {
-  & $packagedExe --smoke-test
-  if ($LASTEXITCODE -ne 0) {
-    throw "Packaged executable smoke test failed with exit code $LASTEXITCODE"
+  $env:PATH = "$outputRoot;$env:WINDIR\System32;$env:WINDIR"
+  $smoke = Start-Process -FilePath $packagedExe -ArgumentList "--smoke-test" `
+      -WorkingDirectory $outputRoot -WindowStyle Hidden -PassThru
+  if (-not $smoke.WaitForExit(30000)) {
+    $smoke.Kill()
+    throw "Packaged executable smoke test timed out"
+  }
+  if ($smoke.ExitCode -ne 0) {
+    throw "Packaged executable smoke test failed with exit code $($smoke.ExitCode)"
   }
 } finally {
+  $env:PATH = $originalPath
   Pop-Location
 }
 

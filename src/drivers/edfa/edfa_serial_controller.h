@@ -27,12 +27,16 @@ class EdfaSerialController final : public IEdfaController {
   bool emergencyOff(std::string& error) override;
 
  private:
+  void publishStatus(EdfaStatus next);
+  // Callers hold io_mutex_; status_mutex_ is never held during serial I/O.
+  bool setOutputEnabledLocked(bool enabled, std::string& error);
   bool transact(const std::vector<std::uint8_t>& command, EdfaPacket& response, std::string& error);
-  bool refreshReading(std::string& error);
-  bool refreshDeviceState(std::string& error);
+  bool refreshReading(EdfaStatus& next, std::string& error);
+  bool refreshDeviceState(EdfaStatus& next, std::string& error);
 
   std::shared_ptr<ISerialTransport> transport_;
-  mutable std::mutex mutex_;
+  std::mutex io_mutex_;
+  mutable std::mutex status_mutex_;
   EdfaConfig config_;
   EdfaStatus status_;
   bool configured_ = false;

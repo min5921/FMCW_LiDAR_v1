@@ -3,7 +3,9 @@
 #include "core/acquisition_session.h"
 #include "core/app_version.h"
 #include "core/config_profile.h"
+#include "core/config_validation.h"
 #include "core/continuous_acquisition_worker.h"
+#include "core/stop_result.h"
 #include "detection/object_detection_policy.h"
 #include "detection/object_detection_service.h"
 #include "detection/object_detector.h"
@@ -53,7 +55,10 @@ class RuntimeWorker final : public QObject {
  Q_OBJECT
 
  public:
-  explicit RuntimeWorker(QString platform_name) : platform_name_(std::move(platform_name)) {}
+  RuntimeWorker(QString platform_name, RuntimeDependencies dependencies,
+                std::shared_ptr<std::atomic_uint64_t> cancellation_epoch)
+      : platform_name_(std::move(platform_name)), dependencies_(std::move(dependencies)),
+        cancellation_epoch_(std::move(cancellation_epoch)) {}
   ~RuntimeWorker() override { stopEdfaMonitor(); }
 
  public slots:
@@ -117,7 +122,9 @@ class RuntimeWorker final : public QObject {
     emit commandCompleted("Disconnect", "Runtime devices disconnected");
   }
 
-  void startRuntime() {
+  void startRuntime(std::uint64_t epoch) {
+    const auto cancelled = cancellationCheck(epoch);
+    if (cancelled()) { reject("Start", "Start request cancelled"); return; }
     if (running_) {
       reject("Start", "Acquisition is already running");
       return;
@@ -150,7 +157,7 @@ class RuntimeWorker final : public QObject {
     storage_.reset();
     udp_.reset();
     if (config_.storage.raw_enabled || config_.storage.processed_enabled) {
-      storage_ = std::make_unique<AsyncStorageService>();
+      storage_ = dependencies_.storage ? dependencies_.storage() : std::make_unique<AsyncStorageService>();
       WriterOpenOptions options;
       const auto session_id = QDateTime::currentDateTimeUtc().toString("yyyyMMdd_HHmmss_zzz");
       options.session_directory = std::filesystem::path(config_.storage.output_directory) /
@@ -235,19 +242,24 @@ class RuntimeWorker final : public QObject {
       std::string udp_error;
       if (!udp_->start(config_.udp, config_.scan.x_pixel_count, config_.scan.y_line_count, udp_error)) {
         udp_.reset();
-        stopStorage("UDP sender failed to start");
-        fail("Start", qString(udp_error));
+        const auto cleanup = stopRuntime(false, qString(udp_error), true);
+        fail("Start", qString(udp_error + "; " + cleanup.errorSummary()));
         return;
       }
     }
 
-    processing_->setProcessedFrameCallback([this](ProcessedFramePtr frame) {
-      if (udp_ != nullptr) {
-        udp_->enqueue(frame);
+    processing_->setProcessedFrameCallback({});
+    processing_->setProcessingConfigCallback([this](ProcessingConfigEvent event) {
+      if (storage_ != nullptr && config_.storage.raw_enabled) {
+        std::string error;
+        if (storage_->enqueueProcessingEvent(std::move(event), error) != EnqueueResult::Accepted) {
+          storage_failure_pending_ = true;
+        }
       }
     });
     processing_->setPointCloudFrameCallback(
         [this](std::shared_ptr<const PointCloudSnapshot> frame) {
+      if (udp_ != nullptr) { udp_->enqueue(frame); }
       if (storage_ != nullptr && config_.storage.processed_enabled) {
         std::string error_message;
         const auto result = storage_->enqueuePointCloud(std::move(frame), error_message);
@@ -259,21 +271,17 @@ class RuntimeWorker final : public QObject {
 
     std::string core_error;
     if (!processing_->start(core_error)) {
-      stopStorage("Processing failed to start");
-      stopUdp();
-      fail("Start", qString(core_error));
+      const auto cleanup = stopRuntime(false, qString(core_error), true);
+      fail("Start", qString(core_error + "; " + cleanup.errorSummary()));
       return;
     }
 
     state_ = OperationState::Preview;
     publishStatus("Arming EDFA and digitizer before enabling the MCU trigger...");
-    if (session_ == nullptr || !session_->arm(core_error)) {
+    if (session_ == nullptr || !session_->arm(core_error, cancelled)) {
       const auto start_error = core_error;
-      processing_->requestStop("Device start failed");
-      processing_->waitUntilStopped(core_error);
-      stopStorage("Device start failed");
-      stopUdp();
-      fail("Start", qString(start_error));
+      const auto cleanup = stopRuntime(false, qString(start_error), true);
+      fail("Start", qString(start_error + "; " + cleanup.errorSummary()));
       return;
     }
 
@@ -288,36 +296,23 @@ class RuntimeWorker final : public QObject {
                QMetaObject::invokeMethod(this,
                    [this, failed, reason = std::move(reason)] {
                      if (running_ || (session_ != nullptr && session_->armed())) {
-                       stopRuntime(false, qString(reason), failed);
+                       stopRuntime(false, qString(reason), failed,
+                           failed ? ProcessingStopMode::DiscardPending : ProcessingStopMode::DrainPending);
                      }
                   },
                   Qt::QueuedConnection);
             },
             core_error)) {
       const auto worker_error = core_error;
-      acquisition_accepting_.store(false);
-      running_ = false;
-      std::string stop_error;
-      session_->stop(stop_error);
-      stopProcessing("Acquisition worker failed to start");
-      stopUdp();
-      stopStorage("Acquisition worker failed to start");
-      acquisition_worker_.reset();
-      fail("Start", qString(worker_error));
+      const auto cleanup = stopRuntime(false, qString(worker_error), true);
+      fail("Start", qString(worker_error + "; " + cleanup.errorSummary()));
       return;
     }
     publishStatus("DMA worker ready; enabling the MCU trigger source...");
-    if (!session_->enableTrigger(core_error)) {
+    if (!session_->enableTrigger(core_error, cancelled)) {
       const auto trigger_error = core_error;
-      acquisition_accepting_.store(false);
-      acquisition_worker_->requestStop();
-      std::string stop_error;
-      session_->stop(stop_error);
-      waitForAcquisitionWorker();
-      stopProcessing("Trigger source failed to start");
-      stopUdp();
-      stopStorage("Trigger source failed to start");
-      fail("Start", qString(trigger_error));
+      const auto cleanup = stopRuntime(false, qString(trigger_error), true);
+      fail("Start", qString(trigger_error + "; " + cleanup.errorSummary()));
       return;
     }
 
@@ -340,40 +335,36 @@ class RuntimeWorker final : public QObject {
   }
 
   void stopRuntimeCommand() {
-    if (!running_) {
+    if (!running_ && (session_ == nullptr || !session_->armed())) {
       publishStatus("Already stopped");
       emit commandCompleted("Stop", "Acquisition is not running");
       return;
     }
-    stopRuntime(false, "Stopped by operator");
-    emit commandCompleted("Stop", "Acquisition stopped cleanly");
+    const auto result = stopRuntime(false, "Stopped by operator");
+    if (result.succeeded()) {
+      emit commandCompleted("Stop", "Acquisition stopped cleanly");
+    } else {
+      emit commandFailed("Stop", qString(result.errorSummary()));
+    }
   }
 
   void emergencyStopRuntime() {
-    if (ui_timer_ != nullptr) {
-      ui_timer_->stop();
+    const auto result = stopRuntime(true, "Emergency stop", true);
+    if (result.succeeded()) {
+      emitLog("CRITICAL", "Safety", "Emergency stop sequence completed with device acknowledgements");
+      emit commandCompleted("Emergency stop", "Emergency stop sequence completed");
+    } else {
+      emitLog("CRITICAL", "Safety", "Emergency stop/session errors: " + qString(result.errorSummary()));
+      emit commandFailed("Emergency stop", qString(result.errorSummary()));
     }
-    acquisition_accepting_.store(false);
-    if (acquisition_worker_ != nullptr) {
-      acquisition_worker_->requestStop();
-    }
-    std::string error;
-    if (session_ != nullptr) {
-      session_->emergencyStop(error);
-    }
-    waitForAcquisitionWorker();
-    stopProcessing("Emergency stop");
-    stopUdp();
-    stopStorage("Emergency stop");
-    running_ = false;
-    recording_ = false;
-    state_ = OperationState::Error;
-    emitLog("CRITICAL", "Safety", "Emergency stop asserted; MCU trigger, digitizer, and EDFA output are off");
-    publishStatus(error.empty() ? "Emergency stop asserted" : qString(error));
-    emit commandCompleted("Emergency stop", "All runtime outputs stopped");
   }
 
   void updateProcessingRuntime(ProcessingConfig config) {
+    if (running_ && config_.runtime.acquisition_source == AcquisitionSource::Replay &&
+        config_.runtime.replay_processing_history) {
+      reject("Processing update", "Stop replay and disable Recorded processing to override recorded settings");
+      return;
+    }
     if (!configured_ || processing_ == nullptr) {
       reject("Processing update", "Apply Setup before updating processing settings");
       return;
@@ -602,7 +593,9 @@ class RuntimeWorker final : public QObject {
     emit commandCompleted("EDFA output", enabled ? "Output enabled" : "Output disabled");
   }
 
-  void uploadMcuWaveformRuntime() {
+  void uploadMcuWaveformRuntime(std::uint64_t epoch) {
+    const auto cancelled = cancellationCheck(epoch);
+    if (cancelled()) { reject("MCU waveform", "Upload request cancelled"); return; }
     const auto report = [this](McuUploadStage stage, std::uint32_t completed,
                                std::uint32_t total, const QString& detail) {
       emit mcuUploadProgress(McuUploadProgress{
@@ -679,7 +672,7 @@ class RuntimeWorker final : public QObject {
       failure_reported = failure_reported || update.stage == McuUploadStage::Failed;
       emit mcuUploadProgress(update);
     };
-    if (!adapters_.mcu->uploadWaveform(frames, error, progress)) {
+    if (!adapters_.mcu->uploadWaveform(frames, error, progress, cancelled)) {
       if (!failure_reported) {
         report(McuUploadStage::Failed, 0, waveform_info.output_point_count, qString(error));
       }
@@ -772,6 +765,9 @@ class RuntimeWorker final : public QObject {
   void commandCompleted(QString command, QString message);
 
  private:
+  CancellationCheck cancellationCheck(std::uint64_t epoch) const {
+    return [state = cancellation_epoch_, epoch] { return state->load() != epoch; };
+  }
   bool selectRuntimeAdapters(AcquisitionSource source, QString& error) {
     if (session_ != nullptr && active_source_ == source) {
       return true;
@@ -781,7 +777,7 @@ class RuntimeWorker final : public QObject {
       return false;
     }
     session_.reset();
-    adapters_ = createRuntimeAdapters(source);
+    adapters_ = dependencies_.adapters ? dependencies_.adapters(source) : createRuntimeAdapters(source);
     if (!adapters_) {
       error = "Runtime adapter factory could not create the selected source";
       return false;
@@ -796,6 +792,19 @@ class RuntimeWorker final : public QObject {
   bool configureRuntime(const SystemConfig& config, QString& error) {
     if (running_) {
       error = "Stop acquisition before applying hardware or FFT backend changes";
+      return false;
+    }
+
+    // Validate a candidate before tearing down the working session.
+    if (ConfigValidator::validate(config).hasErrors()) {
+      error = "Configuration validation failed; existing setup is unchanged";
+      return false;
+    }
+    auto candidate = std::make_unique<ProcessingService>(createFftBackend(config.processing.fft_backend));
+    std::string core_error;
+    const auto next_revision = config_revision_ + 1U;
+    if (!candidate->configure(config, next_revision, core_error)) {
+      error = qString(core_error);
       return false;
     }
 
@@ -819,15 +828,7 @@ class RuntimeWorker final : public QObject {
     processing_.reset();
     storage_.reset();
 
-    auto backend = createFftBackend(config.processing.fft_backend);
-    processing_ = std::make_unique<ProcessingService>(std::move(backend));
-    std::string core_error;
-    const auto next_revision = config_revision_ + 1U;
-    if (!processing_->configure(config, next_revision, core_error)) {
-      processing_.reset();
-      error = qString(core_error);
-      return false;
-    }
+    processing_ = std::move(candidate);
     selected_record_index_ = std::min(selected_record_index_, config.digitizer.records_per_buffer - 1U);
     processing_->setSelectedRecordIndex(selected_record_index_);
     if (session_ == nullptr || !session_->configure(config, next_revision, core_error)) {
@@ -1075,7 +1076,9 @@ class RuntimeWorker final : public QObject {
     }
   }
 
-  void stopRuntime(bool emergency, const QString& reason, bool error_state = false) {
+  StopResult stopRuntime(bool emergency, const QString& reason, bool error_state = false,
+                        ProcessingStopMode processing_mode = ProcessingStopMode::DiscardPending) {
+    StopResult result;
     QElapsedTimer total_stop_timer;
     total_stop_timer.start();
     if (ui_timer_ != nullptr) {
@@ -1092,42 +1095,55 @@ class RuntimeWorker final : public QObject {
     QElapsedTimer stage_timer;
     stage_timer.start();
     if (session_ != nullptr) {
+      bool stopped = false;
       if (emergency) {
-        session_->emergencyStop(error);
+        stopped = session_->emergencyStop(error);
       } else {
-        session_->stop(error);
+        stopped = session_->stop(error);
       }
+      if (!stopped && error.empty()) { error = "Device stop was not confirmed"; }
     }
+    result.add("Hardware", error);
     emitLog(error.empty() ? "INFO" : "ERROR", "Stop",
-            QString("Hardware stop completed in %1 ms").arg(stage_timer.elapsed()));
+            QString("Hardware stop %1 in %2 ms")
+                .arg(error.empty() ? "acknowledged" : "unconfirmed").arg(stage_timer.elapsed()));
     active_operation_ = "ACQUISITION WORKER";
-    publishStatus("Hardware stopped; releasing acquisition worker...");
+    publishStatus(error.empty() ? "Hardware stop acknowledged; releasing acquisition worker..."
+                                : "Hardware stop unconfirmed; releasing remaining workers...");
 
     stage_timer.restart();
-    waitForAcquisitionWorker();
-    emitLog("INFO", "Stop",
+    auto stage_error = waitForAcquisitionWorker();
+    result.add("Acquisition", stage_error);
+    emitLog(stage_error.empty() ? "INFO" : "ERROR", "Stop",
             QString("Acquisition worker stopped in %1 ms").arg(stage_timer.elapsed()));
     active_operation_ = "PROCESSING";
-    publishStatus("Discarding pending signal-processing batches...");
+    publishStatus(processing_mode == ProcessingStopMode::DiscardPending
+        ? "Discarding pending signal-processing batches..." : "Draining final signal-processing batches...");
 
     stage_timer.restart();
-    stopProcessing(reason, ProcessingStopMode::DiscardPending);
-    emitLog("INFO", "Stop",
+    stage_error = stopProcessing(reason, processing_mode);
+    result.add("Processing", stage_error);
+    emitLog(stage_error.empty() ? "INFO" : "ERROR", "Stop",
             QString("Processing stopped in %1 ms").arg(stage_timer.elapsed()));
     active_operation_ = "UDP";
     publishStatus("Stopping UDP sender...");
 
     stage_timer.restart();
-    stopUdp();
-    emitLog("INFO", "Stop",
+    stage_error = stopUdp();
+    result.add("UDP", stage_error);
+    emitLog(stage_error.empty() ? "INFO" : "ERROR", "Stop",
             QString("UDP sender stopped in %1 ms").arg(stage_timer.elapsed()));
     active_operation_ = "STORAGE";
     publishStatus("Finalizing queued storage data...");
 
     stage_timer.restart();
-    stopStorage(reason);
-    emitLog("INFO", "Stop",
-            QString("Storage finalized in %1 ms").arg(stage_timer.elapsed()));
+    stage_error = stopStorage(result.succeeded() ? reason : qString(result.errorSummary()),
+                              error_state || emergency || !result.succeeded());
+    result.add("Storage", stage_error);
+    emitLog(stage_error.empty() ? "INFO" : "ERROR", "Stop",
+            QString("Storage finalization %1 in %2 ms")
+                .arg(stage_error.empty() ? "completed" : "failed").arg(stage_timer.elapsed()));
+    error = result.errorSummary();
     running_ = false;
     recording_ = false;
     state_ = error_state || !error.empty()
@@ -1141,30 +1157,36 @@ class RuntimeWorker final : public QObject {
                                 .arg(qString(error)));
     publishSnapshots();
     publishStatus(error.empty() ? reason : qString(error));
+    return result;
   }
 
-  void waitForAcquisitionWorker() {
+  std::string waitForAcquisitionWorker() {
     if (acquisition_worker_ == nullptr) {
-      return;
+      return {};
     }
     std::string worker_error;
-    acquisition_worker_->waitUntilStopped(worker_error);
+    if (!acquisition_worker_->waitUntilStopped(worker_error) && worker_error.empty()) {
+      worker_error = "Acquisition worker failed to stop";
+    }
     acquisition_status_ = acquisition_worker_->status();
     if (!worker_error.empty()) {
       emitLog("ERROR", "Acquisition worker", qString(worker_error));
     }
     acquisition_worker_.reset();
+    return worker_error;
   }
 
-  void stopProcessing(const QString& reason,
+  std::string stopProcessing(const QString& reason,
                       ProcessingStopMode mode = ProcessingStopMode::DrainPending) {
     if (processing_ == nullptr) {
-      return;
+      return {};
     }
     const auto queued_before_stop = processing_->status().queue_size;
     processing_->requestStop(reason.toStdString(), mode);
     std::string error;
-    processing_->waitUntilStopped(error);
+    if (!processing_->waitUntilStopped(error) && error.empty()) {
+      error = "Processing worker failed to stop";
+    }
     if (mode == ProcessingStopMode::DiscardPending) {
       const auto discarded = processing_->status().batches_discarded_on_stop;
       emitLog("INFO", "Stop",
@@ -1172,11 +1194,12 @@ class RuntimeWorker final : public QObject {
                   .arg(discarded)
                   .arg(queued_before_stop));
     }
+    return error;
   }
 
-  void stopUdp() {
+  std::string stopUdp() {
     if (udp_ == nullptr) {
-      return;
+      return {};
     }
     udp_->stop();
     const auto status = udp_->status();
@@ -1186,15 +1209,19 @@ class RuntimeWorker final : public QObject {
                 .arg(status.packets_sent)
                 .arg(status.dropped_frames));
     udp_.reset();
+    return status.send_errors == 0U ? std::string{} : "UDP send errors occurred during the session";
   }
 
-  void stopStorage(const QString& reason) {
+  std::string stopStorage(const QString& reason, bool failed = false) {
     if (storage_ == nullptr) {
-      return;
+      return {};
     }
-    storage_->requestStop(reason.toStdString());
+    storage_->requestStop(reason.toStdString(), failed);
     std::string error;
-    storage_->waitUntilStopped(error);
+    if (!storage_->waitUntilStopped(error) && error.empty()) {
+      error = "Storage finalization failed";
+    }
+    return error;
   }
 
   void stopObjectDetection(const QString& reason) {
@@ -1380,13 +1407,15 @@ class RuntimeWorker final : public QObject {
   }
 
   QString platform_name_;
+  RuntimeDependencies dependencies_;
+  std::shared_ptr<std::atomic_uint64_t> cancellation_epoch_;
   QTimer* ui_timer_ = nullptr;
   QElapsedTimer status_publish_timer_;
   RuntimeAdapters adapters_;
   std::unique_ptr<AcquisitionSession> session_;
   std::unique_ptr<ContinuousAcquisitionWorker> acquisition_worker_;
   std::unique_ptr<ProcessingService> processing_;
-  std::unique_ptr<AsyncStorageService> storage_;
+  std::unique_ptr<IStorageService> storage_;
   std::unique_ptr<UdpSenderService> udp_;
   std::unique_ptr<ObjectDetectionService> detection_;
   SystemConfig config_;
@@ -1425,7 +1454,11 @@ class RuntimeWorker final : public QObject {
   std::thread edfa_monitor_thread_;
 };
 
-ApplicationController::ApplicationController(QString platform_name, QObject* parent) : QObject(parent) {
+ApplicationController::ApplicationController(QString platform_name, QObject* parent)
+    : ApplicationController(std::move(platform_name), RuntimeDependencies{}, parent) {}
+
+ApplicationController::ApplicationController(QString platform_name, RuntimeDependencies dependencies,
+                                             QObject* parent) : QObject(parent) {
   qRegisterMetaType<RuntimeStatus>();
   qRegisterMetaType<McuUploadProgress>();
   qRegisterMetaType<WaveformSnapshotPtr>();
@@ -1435,7 +1468,7 @@ ApplicationController::ApplicationController(QString platform_name, QObject* par
   qRegisterMetaType<PointCloudSnapshotPtr>();
   qRegisterMetaType<DetectionSnapshotPtr>();
 
-  worker_ = new RuntimeWorker(std::move(platform_name));
+  worker_ = new RuntimeWorker(std::move(platform_name), std::move(dependencies), cancellation_epoch_);
   worker_->moveToThread(&runtime_thread_);
   connect(&runtime_thread_, &QThread::started, worker_, &RuntimeWorker::initialize);
   connect(&runtime_thread_, &QThread::finished, worker_, &QObject::deleteLater);
@@ -1585,6 +1618,7 @@ UiDispatchMetrics ApplicationController::takeUiDispatchMetrics() {
 }
 
 ApplicationController::~ApplicationController() {
+  ++*cancellation_epoch_;
   if (worker_ != nullptr && runtime_thread_.isRunning()) {
     QMetaObject::invokeMethod(worker_, &RuntimeWorker::shutdown, Qt::BlockingQueuedConnection);
   }
@@ -1602,18 +1636,26 @@ void ApplicationController::connectSystem(const SystemConfig& config) {
 }
 
 void ApplicationController::disconnectSystem() {
+  ++*cancellation_epoch_;
   QMetaObject::invokeMethod(worker_, &RuntimeWorker::disconnectRuntime, Qt::QueuedConnection);
 }
 
 void ApplicationController::startSystem() {
-  QMetaObject::invokeMethod(worker_, &RuntimeWorker::startRuntime, Qt::QueuedConnection);
+  if (upload_active_->load()) {
+    emit commandFailed("Start", "Wait for waveform upload to finish or cancel it with Stop");
+    return;
+  }
+  const auto epoch = cancellation_epoch_->load();
+  QMetaObject::invokeMethod(worker_, [worker = worker_, epoch] { worker->startRuntime(epoch); }, Qt::QueuedConnection);
 }
 
 void ApplicationController::stopSystem() {
+  ++*cancellation_epoch_;
   QMetaObject::invokeMethod(worker_, &RuntimeWorker::stopRuntimeCommand, Qt::QueuedConnection);
 }
 
 void ApplicationController::emergencyStop() {
+  ++*cancellation_epoch_;
   QMetaObject::invokeMethod(worker_, &RuntimeWorker::emergencyStopRuntime, Qt::QueuedConnection);
 }
 
@@ -1664,7 +1706,15 @@ void ApplicationController::setEdfaOutput(bool enabled) {
 }
 
 void ApplicationController::uploadMcuWaveform() {
-  QMetaObject::invokeMethod(worker_, &RuntimeWorker::uploadMcuWaveformRuntime, Qt::QueuedConnection);
+  if (upload_active_->exchange(true)) {
+    emit commandFailed("MCU waveform", "Waveform upload is already active");
+    return;
+  }
+  const auto epoch = cancellation_epoch_->load();
+  QMetaObject::invokeMethod(worker_, [worker = worker_, epoch, active = upload_active_] {
+    struct Reset { std::shared_ptr<std::atomic_bool> active; ~Reset() { active->store(false); } } reset{active};
+    worker->uploadMcuWaveformRuntime(epoch);
+  }, Qt::QueuedConnection);
 }
 
 void ApplicationController::captureSegmentationSnapshot() {

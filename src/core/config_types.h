@@ -118,6 +118,7 @@ struct RuntimeConfig {
   AcquisitionSource acquisition_source = AcquisitionSource::Simulator;
   std::string replay_file;
   bool replay_loop = false;
+  bool replay_processing_history = true;
   bool simulator_realtime_dma = false;
 };
 
@@ -223,6 +224,7 @@ struct StorageConfig {
 struct UiConfig {
   double plot_update_hz = 60.0;
   double point_cloud_update_hz = 10.0;
+  // Legacy profile keys retained for compatibility; current widgets own these display options.
   bool segment_overlay = true;
   std::string color_map = "viridis";
   std::string last_profile = "config/profiles/lab_simulator.yaml";

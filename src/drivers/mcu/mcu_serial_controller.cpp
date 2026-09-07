@@ -87,7 +87,8 @@ void McuSerialController::disconnect() {
 }
 
 bool McuSerialController::uploadWaveform(const std::vector<McuWaveformFrame>& frames, std::string& error,
-                                         const McuUploadProgressCallback& progress) {
+                                         const McuUploadProgressCallback& progress,
+                                         const CancellationCheck& cancelled) {
   std::lock_guard<std::mutex> lock(mutex_);
   const auto total_points = static_cast<std::uint32_t>(frames.size());
   const auto report = [&progress, total_points](McuUploadStage stage, std::uint32_t completed,
@@ -122,7 +123,7 @@ bool McuSerialController::uploadWaveform(const std::vector<McuWaveformFrame>& fr
   status_.last_ack.clear();
   status_.device.detail = "Clearing MCU waveform memory";
   report(McuUploadStage::Clearing, 0, status_.device.detail);
-  if (!sendAndExpect(McuProtocol::clearCommand(), "CLR", std::chrono::milliseconds(config_.timeout_ms), error)) {
+  if (!sendAndExpect(McuProtocol::clearCommand(), "CLR", std::chrono::milliseconds(config_.timeout_ms), error, cancelled)) {
     fail_upload(0, error);
     return false;
   }
@@ -130,6 +131,11 @@ bool McuSerialController::uploadWaveform(const std::vector<McuWaveformFrame>& fr
   report(McuUploadStage::Sending, 0, status_.device.detail);
   const auto report_stride = std::max<std::size_t>(1U, frames.size() / 100U);
   for (std::size_t index = 0; index < frames.size(); ++index) {
+    if (isCancelled(cancelled)) {
+      error = "MCU waveform upload cancelled; partial waveform is not ready";
+      fail_upload(static_cast<std::uint32_t>(index), error);
+      return false;
+    }
     if (!transport_->write(bytesFromString(McuProtocol::dataCommand(frames[index])), error)) {
       fail_upload(static_cast<std::uint32_t>(index), error);
       return false;
@@ -142,7 +148,7 @@ bool McuSerialController::uploadWaveform(const std::vector<McuWaveformFrame>& fr
   status_.device.detail = "Waiting for MCU LOAD_DONE verification";
   report(McuUploadStage::Verifying, total_points, status_.device.detail);
   if (!sendAndExpect(McuProtocol::loadDoneCommand(), "LOAD_DONE",
-                     std::chrono::milliseconds(config_.timeout_ms), error)) {
+                     std::chrono::milliseconds(config_.timeout_ms), error, cancelled)) {
     fail_upload(total_points, error);
     return false;
   }
@@ -235,9 +241,11 @@ bool McuSerialController::emergencyStop(std::string& error) {
 }
 
 bool McuSerialController::sendAndExpect(const std::string& command, std::string_view expected_code,
-                                        std::chrono::milliseconds timeout, std::string& error) {
+                                        std::chrono::milliseconds timeout, std::string& error,
+                                        const CancellationCheck& cancelled) {
   const auto attempts = config_.retry_count + 1U;
   for (std::uint32_t attempt = 0; attempt < attempts; ++attempt) {
+    if (isCancelled(cancelled)) { error = "MCU command cancelled"; return false; }
     if (!transport_->write(bytesFromString(command), error)) {
       continue;
     }
@@ -248,6 +256,7 @@ bool McuSerialController::sendAndExpect(const std::string& command, std::string_
     if (!transport_->readLine(line, timeout, error)) {
       continue;
     }
+    if (isCancelled(cancelled)) { error = "MCU command cancelled"; return false; }
     const auto response = McuProtocol::parseResponse(line);
     status_.last_ack = line;
     if (response.acknowledged && response.code == expected_code) {

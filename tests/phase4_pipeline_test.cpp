@@ -1380,7 +1380,8 @@ void testStorageOverflow(fmcw::RawFramePtr raw) {
     state->release = true;
     state->condition.notify_all();
   }
-  expect(storage.waitUntilStopped(error), "overflowed storage drains accepted work and stops");
+  expect(!storage.waitUntilStopped(error) && !error.empty(),
+         "overflowed storage drains accepted work but reports recording failure");
   std::error_code remove_error;
   std::filesystem::remove_all(options.session_directory, remove_error);
 }

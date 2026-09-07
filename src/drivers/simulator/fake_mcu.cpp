@@ -71,7 +71,9 @@ void FakeMcuController::disconnect() {
 }
 
 bool FakeMcuController::uploadWaveform(const std::vector<McuWaveformFrame>& frames, std::string& error,
-                                       const McuUploadProgressCallback& progress) {
+                                       const McuUploadProgressCallback& progress,
+                                       const CancellationCheck& cancelled) {
+  if (isCancelled(cancelled)) { error = "MCU waveform upload cancelled"; return false; }
   std::lock_guard<std::mutex> lock(mutex_);
   const auto total_points = static_cast<std::uint32_t>(frames.size());
   if (!config_.enabled || !status_.device.connected || status_.scan_enabled || frames.empty() || frames.size() > 15000U) {

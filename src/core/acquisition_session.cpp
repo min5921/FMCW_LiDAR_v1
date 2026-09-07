@@ -121,7 +121,16 @@ void AcquisitionSession::disconnect() {
   running_.store(false);
 }
 
-bool AcquisitionSession::arm(std::string& error) {
+bool AcquisitionSession::arm(std::string& error, const CancellationCheck& cancelled) {
+  const auto cancel_start = [&] {
+    if (!isCancelled(cancelled)) { return false; }
+    std::string cleanup_error;
+    stopDevices(true, cleanup_error);
+    error = "Acquisition start cancelled";
+    appendError(error, "cleanup", cleanup_error);
+    return true;
+  };
+  if (cancel_start()) { return false; }
   if (!configured_.load() || !connected_.load() || armed_.load() || running_.load()) {
     error = "Acquisition session is not configured and connected, or is already armed";
     return false;
@@ -140,18 +149,24 @@ bool AcquisitionSession::arm(std::string& error) {
   }
 
   if (config_.edfa.mode == EdfaMode::Controlled) {
-    if (!edfa_.setControlMode(config_.edfa.control_mode, error) ||
-        !edfa_.setOutputSetpoint(config_.edfa.output_setpoint, error) ||
+    if (!edfa_.setControlMode(config_.edfa.control_mode, error) || cancel_start() ||
+        !edfa_.setOutputSetpoint(config_.edfa.output_setpoint, error) || cancel_start() ||
         !edfa_.setOutputEnabled(true, error)) {
       std::string ignored;
       edfa_.emergencyOff(ignored);
       return false;
     }
     if (config_.edfa.warmup_delay_ms > 0U) {
-      std::this_thread::sleep_for(std::chrono::milliseconds(config_.edfa.warmup_delay_ms));
+      const auto deadline = std::chrono::steady_clock::now() +
+          std::chrono::milliseconds(config_.edfa.warmup_delay_ms);
+      while (std::chrono::steady_clock::now() < deadline) {
+        if (cancel_start()) { return false; }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      }
     }
   }
   // Arm the receiver before the MCU enables the trigger-producing scan waveform.
+  if (cancel_start()) { return false; }
   if (!digitizer_.start(error)) {
     std::string ignored;
     edfa_.emergencyOff(ignored);
@@ -159,11 +174,19 @@ bool AcquisitionSession::arm(std::string& error) {
   }
 
   armed_.store(true);
+  if (cancel_start()) { return false; }
   error.clear();
   return true;
 }
 
-bool AcquisitionSession::enableTrigger(std::string& error) {
+bool AcquisitionSession::enableTrigger(std::string& error, const CancellationCheck& cancelled) {
+  if (isCancelled(cancelled)) {
+    std::string cleanup;
+    stopDevices(true, cleanup);
+    error = "Trigger start cancelled";
+    appendError(error, "cleanup", cleanup);
+    return false;
+  }
   if (!armed_.load() || running_.load()) {
     error = "Acquisition session must be armed before enabling its trigger source";
     return false;

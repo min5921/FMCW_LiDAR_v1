@@ -20,7 +20,6 @@ set(FMCW_CORE_SOURCES
   core/acquisition_session.cpp
   core/app_version.cpp
   core/config_document.cpp
-  core/config_manager.cpp
   core/config_policy.cpp
   core/config_profile.cpp
   core/config_types.cpp
@@ -28,7 +27,6 @@ set(FMCW_CORE_SOURCES
   core/continuous_acquisition_worker.cpp
   core/digitizer_capabilities.cpp
   core/logging.cpp
-  core/operation_controller.cpp
   core/raw_frame_batch_pool.cpp
   core/realtime_thread.cpp
   core/scan_trajectory.cpp
@@ -59,8 +57,10 @@ set(FMCW_CORE_SOURCES
   processing/processing_snapshots.cpp
   processing/signal_processor.cpp
   storage/async_storage_service.cpp
+  storage/processing_history.cpp
   storage/binary_storage.cpp
   storage/point_cloud_replay.cpp
+  storage/async_point_cloud_replay.cpp
 )
 
 if(FMCW_HAS_CUDA_FFT)
@@ -115,7 +115,7 @@ if(FMCW_WITH_CENTERPOINT)
       HINTS "${FMCW_CUDNN_ROOT}" "$ENV{CUDNN_ROOT}"
       PATH_SUFFIXES bin bin/x64
     )
-    if(FMCW_CUDNN_INCLUDE_DIR AND FMCW_CUDNN_RUNTIME_DLL AND
+    if(EXISTS "${FMCW_CUDNN_INCLUDE_DIR}/cudnn.h" AND EXISTS "${FMCW_CUDNN_RUNTIME_DLL}" AND
        NOT FMCW_CUDNN_LIBRARY)
       set(_fmcw_cudnn_definition
           "${_fmcw_centerpoint_root}/cmake/cudnn64_9.def")
@@ -157,8 +157,8 @@ if(FMCW_WITH_CENTERPOINT)
         "Generated cuDNN import library from ${_fmcw_cudnn_definition}")
     endif()
   endif()
-  if(NOT FMCW_CUDNN_INCLUDE_DIR OR NOT FMCW_CUDNN_LIBRARY OR
-     (WIN32 AND NOT FMCW_CUDNN_RUNTIME_DLL))
+  if(NOT EXISTS "${FMCW_CUDNN_INCLUDE_DIR}/cudnn.h" OR NOT EXISTS "${FMCW_CUDNN_LIBRARY}" OR
+     (WIN32 AND NOT EXISTS "${FMCW_CUDNN_RUNTIME_DLL}"))
     message(FATAL_ERROR
       "CenterPoint requires cuDNN headers and runtime. Install cuDNN for the selected CUDA "
       "toolkit or set FMCW_CUDNN_ROOT.")
@@ -284,7 +284,7 @@ if(FMCW_WITH_ALAZAR)
       PATH_SUFFIXES lib lib64
     )
   endif()
-  if(ALAZAR_SDK_INCLUDE_DIR AND ALAZAR_SDK_LIBRARY)
+  if(EXISTS "${ALAZAR_SDK_INCLUDE_DIR}/AlazarApi.h" AND EXISTS "${ALAZAR_SDK_LIBRARY}")
     set(FMCW_HAS_ALAZAR_SDK ON)
     target_include_directories(fmcw_core PRIVATE "${ALAZAR_SDK_INCLUDE_DIR}")
     target_link_libraries(fmcw_core PRIVATE "${ALAZAR_SDK_LIBRARY}")
@@ -297,6 +297,10 @@ if(FMCW_HAS_ALAZAR_SDK)
 else()
   target_compile_definitions(fmcw_core PRIVATE FMCW_HAS_ALAZAR_SDK=0)
   message(STATUS "AlazarTech ATS-SDK adapter: disabled (set ALAZAR_SDK_ROOT to enable)")
+endif()
+
+if(FMCW_REQUIRE_ALAZAR AND NOT FMCW_HAS_ALAZAR_SDK)
+  message(FATAL_ERROR "This deployment requires ATS-SDK; set ALAZAR_SDK_ROOT to a valid installation.")
 endif()
 
 set(FMCW_HAS_FFTW OFF)
@@ -315,7 +319,7 @@ if(FMCW_WITH_FFTW)
   else()
     find_path(FFTW_INCLUDE_DIR NAMES fftw3.h HINTS "${FFTW_ROOT}" PATH_SUFFIXES include)
     find_library(FFTW_FLOAT_LIBRARY NAMES fftw3f libfftw3f-3 HINTS "${FFTW_ROOT}" PATH_SUFFIXES lib lib64)
-    if(FFTW_INCLUDE_DIR AND FFTW_FLOAT_LIBRARY)
+    if(EXISTS "${FFTW_INCLUDE_DIR}/fftw3.h" AND EXISTS "${FFTW_FLOAT_LIBRARY}")
       set(FMCW_HAS_FFTW ON)
       target_include_directories(fmcw_core PRIVATE "${FFTW_INCLUDE_DIR}")
       target_link_libraries(fmcw_core PRIVATE "${FFTW_FLOAT_LIBRARY}")
@@ -343,6 +347,10 @@ else()
 endif()
 set(FMCW_HAS_FFTW "${FMCW_HAS_FFTW}" CACHE INTERNAL
     "Whether the FFTW backend is available" FORCE)
+
+if(FMCW_REQUIRE_FFTW AND NOT FMCW_HAS_FFTW)
+  message(FATAL_ERROR "This deployment requires FFTW; set FFTW_ROOT to a valid installation.")
+endif()
 
 if(FMCW_HAS_CUDA_FFT)
   target_link_libraries(fmcw_core PRIVATE CUDA::cudart CUDA::cufft)
@@ -449,3 +457,5 @@ if(FMCW_BUILD_QT_APPS)
     install(TARGETS fmcw_lidar_jetson RUNTIME DESTINATION bin)
   endif()
 endif()
+
+include("${PROJECT_SOURCE_DIR}/deploy/build_manifest.cmake")

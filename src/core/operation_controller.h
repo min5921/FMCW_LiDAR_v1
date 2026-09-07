@@ -36,6 +36,7 @@ struct StartRequestResult {
   std::string message;
 };
 
+// Historical state prototype. The Qt runtime uses RuntimeWorker and StopResult.
 class OperationController {
  public:
   OperationState state() const;

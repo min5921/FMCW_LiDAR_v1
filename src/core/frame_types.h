@@ -11,6 +11,7 @@
 #include <vector>
 
 namespace fmcw {
+struct ProcessingConfigEvent;
 
 inline constexpr std::uint32_t kRawFrameFormatVersion = 1;
 inline constexpr std::uint32_t kLegacyRawFrameBatchFormatVersion = 2;
@@ -279,6 +280,8 @@ struct DmaBufferMetadata {
 };
 
 struct RawFrameBatch {
+  // Host-only replay provenance; never serialized into the ADC binary payload.
+  std::shared_ptr<const ProcessingConfigEvent> replay_processing;
   DmaBufferMetadata metadata;
   SampleBuffer contiguous_samples;
   std::vector<RawFrame> records;

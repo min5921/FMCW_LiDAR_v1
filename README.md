@@ -1,6 +1,6 @@
-﻿# FMCW LiDAR v1
+﻿# FMCW LiDAR v2
 
-FMCW LiDAR 시스템을 Windows와 Jetson에서 함께 운용하기 위한 v1 재구성 프로젝트입니다.
+FMCW LiDAR 시스템을 Windows와 Jetson에서 함께 운용하기 위한 프로젝트입니다. v2는 기존 측정/파일 규약을 유지하면서 종료·기록·재생 신뢰성과 실제 runtime 검증을 개선합니다.
 
 ## Current Direction
 
@@ -17,6 +17,9 @@ FMCW LiDAR 시스템을 Windows와 Jetson에서 함께 운용하기 위한 v1 �
 - ROS1 viewer: C++ ROS Noetic catkin workspace under `Ros_project`
 
 ## Key Documents
+
+- `docs/runtime_contract_v2.md`: 현재 코드 읽는 순서, 스레드/설정/단위의 기준
+- `docs/v2_review_completion.md`: R1~R10 구현·검증·미검증 범위
 
 - `docs/requirements.md`: 시스템 요구사항과 Phase 계획
 - `docs/gui_runtime_requirements.md`: 승인된 GUI의 page ownership, global command, snapshot/thread 계약
@@ -50,17 +53,17 @@ Phase별로 구현 단위를 나누고, 각 Phase가 끝날 때 commit/push한�
 
 Run the packaged application by double-clicking:
 
-`build/package/FMCW_LiDAR/FMCW_LiDAR.exe`
+`build/package/FMCW_LiDAR_v2/FMCW_LiDAR.exe`
 
-Keep the complete `FMCW_LiDAR` package folder together. Phase 6 adds the Live View `3D Point Cloud` tab and activates the Storage / UDP sender settings under the same global START/STOP session.
+Keep the entire package folder together. Check `BUILD_FEATURES.txt` for included backends and source identity. Old package folders are preserved; their executables are not updated by a source-only build.
 
 Create the self-contained Jetson source folder and ZIP on Windows with:
 
 ```powershell
-.\deploy\jetson\export_source.ps1
+.\deploy\jetson\export_source.ps1 -Destination build/package/FMCW_LiDAR_v2_Jetson_Source
 ```
 
-After copying `build/package/FMCW_LiDAR_Jetson_Source` to the Jetson, edit
+After copying `build/package/FMCW_LiDAR_v2_Jetson_Source` to the Jetson, edit
 `deploy/jetson/jetson.env` and run:
 
 ```bash

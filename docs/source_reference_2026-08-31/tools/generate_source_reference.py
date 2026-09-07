@@ -1291,7 +1291,7 @@ def return_description(function: FunctionInfo) -> str:
     if return_type in {"void", "None"}:
         return "직접 반환값은 없다. 상태 변경·출력 parameter·I/O 또는 downstream publish가 결과다."
     if "bool" in return_type:
-        return "성공이면 true, 검증·장치·I/O·상태 전이 실패이면 false를 반환한다. 세부 원인은 error/message 또는 상태 객체에 기록된다."
+        return "bool을 반환한다. 성공/실패 또는 조건 판정인지와 true의 정확한 의미는 함수 본문 및 호출자를 확인해야 한다."
     if "FrameWaitResult" in return_type:
         return "FrameReady, Timeout, Stopped, Error 중 하나를 반환해 수집 loop의 다음 행동을 결정한다."
     if "optional" in return_type.lower() or "Ptr" in return_type or "shared_ptr" in return_type:
@@ -1335,7 +1335,7 @@ def processing_description(function: FunctionInfo) -> str:
     detail = f" 주요 하위 호출은 {call_text}이다."
     if function.assignments:
         detail += " 갱신 대상은 " + ", ".join(f"`{value}`" for value in function.assignments[:5]) + " 등이다."
-    return lead + detail
+    return "[함수명 기반 추정, 구현 검증 아님] " + lead + detail
 
 
 def parameter_description(parameter: ParameterInfo) -> str:

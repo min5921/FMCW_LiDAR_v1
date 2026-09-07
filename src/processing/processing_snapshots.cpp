@@ -199,6 +199,7 @@ void ProcessingSnapshotStore::publishUnlocked(const RawFrame& raw,
   bscan_work_.completed_lines = std::min(height_, previous_completed_lines + 1U);
   bscan_work_.complete = bscan_work_.completed_lines == height_;
   point_cloud_work_.last_frame_id = processed.frame_id;
+  point_cloud_work_.source_timestamp_ns = processed.source_timestamp_ns;
   point_cloud_work_.processing_config_revision = processed.processing_config_revision;
   point_cloud_work_.completed_lines = bscan_work_.completed_lines;
   point_cloud_work_.complete = bscan_work_.complete;

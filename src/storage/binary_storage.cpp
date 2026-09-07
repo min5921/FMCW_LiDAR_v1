@@ -745,7 +745,7 @@ bool BinaryRawFrameWriter::flush(std::string& error) {
 
 bool BinaryRawFrameWriter::finalize(const WriterFinalizeOptions& options, std::string& error) {
   std::lock_guard<std::mutex> lock(impl_->mutex);
-  if (impl_->finalized) {
+  if (impl_->finalized && options.completed) {
     error.clear();
     return true;
   }
@@ -883,7 +883,7 @@ bool BinaryPointCloudFrameWriter::flush(std::string& error) {
 
 bool BinaryPointCloudFrameWriter::finalize(const WriterFinalizeOptions& options, std::string& error) {
   std::lock_guard<std::mutex> lock(impl_->mutex);
-  if (impl_->finalized) {
+  if (impl_->finalized && options.completed) {
     error.clear();
     return true;
   }

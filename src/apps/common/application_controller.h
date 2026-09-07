@@ -5,12 +5,15 @@
 #include "core/system_state.h"
 #include "detection/detection_types.h"
 #include "processing/processing_snapshots.h"
+#include "drivers/runtime_adapter_factory.h"
+#include "storage/writer_interfaces.h"
 
 #include <QObject>
 #include <QString>
 #include <QThread>
 
 #include <cstddef>
+#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <mutex>
@@ -124,11 +127,17 @@ struct RuntimeStatus {
 
 class RuntimeWorker;
 
+struct RuntimeDependencies {
+  std::function<RuntimeAdapters(AcquisitionSource)> adapters;
+  std::function<std::unique_ptr<IStorageService>()> storage;
+};
+
 class ApplicationController final : public QObject {
   Q_OBJECT
 
  public:
   explicit ApplicationController(QString platform_name, QObject* parent = nullptr);
+  ApplicationController(QString platform_name, RuntimeDependencies dependencies, QObject* parent = nullptr);
   ~ApplicationController() override;
 
   ApplicationController(const ApplicationController&) = delete;
@@ -177,6 +186,9 @@ class ApplicationController final : public QObject {
   void drainPendingUiUpdates();
 
   QThread runtime_thread_;
+  std::shared_ptr<std::atomic_uint64_t> cancellation_epoch_ =
+      std::make_shared<std::atomic_uint64_t>(0U);
+  std::shared_ptr<std::atomic_bool> upload_active_ = std::make_shared<std::atomic_bool>(false);
   RuntimeWorker* worker_ = nullptr;
   std::mutex pending_ui_mutex_;
   std::optional<RuntimeStatus> pending_status_;

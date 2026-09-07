@@ -1,4 +1,5 @@
 #pragma once
+#include "core/cancellation.h"
 
 #include "core/config_types.h"
 #include "core/frame_types.h"
@@ -73,6 +74,9 @@ struct EdfaStatus {
   bool interlock_closed = false;
   bool alarm_active = false;
   std::string alarm_code;
+  // Host steady-clock time of the last confirmed reading; 0 if unavailable.
+  // This is runtime telemetry, not a UTC or serialized measurement timestamp.
+  std::uint64_t telemetry_timestamp_ns = 0;
 };
 
 class IEdfaController {
@@ -159,7 +163,8 @@ class IMcuController {
   virtual void disconnect() = 0;
   virtual bool configure(const SystemConfig& config, std::string& error) = 0;
   virtual bool uploadWaveform(const std::vector<McuWaveformFrame>& frames, std::string& error,
-                              const McuUploadProgressCallback& progress = {}) = 0;
+                              const McuUploadProgressCallback& progress = {},
+                              const CancellationCheck& cancelled = {}) = 0;
   virtual McuWaveformSnapshotPtr loadedWaveform() const = 0;
   virtual bool startScan(std::string& error) = 0;
   virtual bool stopScan(std::string& error) = 0;

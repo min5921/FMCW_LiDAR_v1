@@ -1,4 +1,5 @@
 #pragma once
+#include "storage/processing_history.h"
 
 #include "core/config_types.h"
 #include "core/frame_types.h"
@@ -126,10 +127,11 @@ class IStorageService {
   virtual ~IStorageService() = default;
   virtual bool start(const WriterOpenOptions& options, std::string& error) = 0;
   virtual EnqueueResult enqueueRawBatch(RawFrameBatchPtr batch, std::string& error) = 0;
+  virtual EnqueueResult enqueueProcessingEvent(ProcessingConfigEvent event, std::string& error) = 0;
   virtual EnqueueResult enqueueRaw(RawFramePtr frame, std::string& error) = 0;
   virtual EnqueueResult enqueuePointCloud(std::shared_ptr<const PointCloudSnapshot> frame,
                                           std::string& error) = 0;
-  virtual void requestStop(std::string reason) = 0;
+  virtual void requestStop(std::string reason, bool failed = false) = 0;
   virtual bool waitUntilStopped(std::string& error) = 0;
   virtual StorageStatus status() const = 0;
 };

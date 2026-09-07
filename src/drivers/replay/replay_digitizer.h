@@ -3,6 +3,7 @@
 #include "core/device_interfaces.h"
 #include "core/raw_frame_batch_pool.h"
 #include "storage/binary_storage.h"
+#include "storage/processing_history.h"
 
 #include <chrono>
 #include <condition_variable>
@@ -34,6 +35,7 @@ class ReplayDigitizer final : public IDigitizer {
   std::condition_variable condition_;
   RawFrameBatchPool batch_pool_;
   RawReplayReader reader_;
+  std::vector<std::shared_ptr<const ProcessingConfigEvent>> processing_history_;
   SystemConfig config_;
   DigitizerTelemetry telemetry_;
   MutableRawFrameBatchPtr compatibility_batch_;

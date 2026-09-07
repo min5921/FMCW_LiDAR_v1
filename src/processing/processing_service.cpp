@@ -124,6 +124,31 @@ struct ProcessingService::Impl {
     BatchTiming timing;
   };
 
+  bool replayUpdateNeeded(const RawFrameBatchPtr& batch) const {
+    return batch && batch->replay_processing && batch->replay_processing != active_replay_event;
+  }
+
+  void selectReplayUpdate(const RawFrameBatchPtr& batch) {
+    if (!replayUpdateNeeded(batch)) { return; }
+    active_replay_event = batch->replay_processing;
+    auto settings = active_replay_event->setup.processing;
+    settings.fft_backend = config.processing.fft_backend;
+    pending_runtime_config = PendingRuntimeConfig{settings, active_replay_event->revision};
+  }
+
+  void announceConfig(const RawFrameBatchPtr& batch) {
+    if (!batch || batch->records.empty() || announced_revision == applied_revision) { return; }
+    std::function<void(ProcessingConfigEvent)> notify;
+    ProcessingConfigEvent event;
+    {
+      std::lock_guard<std::mutex> lock(mutex);
+      notify = config_callback;
+      if (notify) { event = {batch->records.front().metadata.frame_id, applied_revision, config}; }
+      announced_revision = applied_revision;
+    }
+    if (notify) { notify(std::move(event)); }
+  }
+
   ProcessingLatencyBreakdown latencyBreakdown(
       const RawFrameBatch& batch, const BatchTiming& timing,
       std::uint64_t line_completed_timestamp_ns) const {
@@ -277,7 +302,9 @@ struct ProcessingService::Impl {
         }
         queued_batch = std::move(queue.front());
         queue.pop_front();
-        if (pending_runtime_config.has_value() && beginsRasterFrame(queued_batch.batch)) {
+        selectReplayUpdate(queued_batch.batch);
+        if (pending_runtime_config.has_value() &&
+            (queued_batch.batch->replay_processing || beginsRasterFrame(queued_batch.batch))) {
           runtime_update = std::move(pending_runtime_config);
           pending_runtime_config.reset();
         }
@@ -298,7 +325,9 @@ struct ProcessingService::Impl {
       if (runtime_update.has_value()) {
         std::lock_guard<std::mutex> lock(mutex);
         config.processing = runtime_update->config;
+        applied_revision = runtime_update->revision;
       }
+      announceConfig(queued_batch.batch);
       bool batch_complete = true;
       std::uint64_t line_completed_timestamp_ns = 0U;
       queued_batch.timing.processing_start_timestamp_ns = nowNs();
@@ -389,8 +418,11 @@ struct ProcessingService::Impl {
       std::optional<PendingRuntimeConfig> runtime_update;
       {
         std::lock_guard<std::mutex> lock(mutex);
+        if (!queue.empty() && processor.inFlightBatchCount() == 0U) {
+          selectReplayUpdate(queue.front().batch);
+        }
         if (pending_runtime_config.has_value() && processor.inFlightBatchCount() == 0U &&
-            !queue.empty() && beginsRasterFrame(queue.front().batch)) {
+            !queue.empty() && (queue.front().batch->replay_processing || beginsRasterFrame(queue.front().batch))) {
           runtime_update = std::move(pending_runtime_config);
           pending_runtime_config.reset();
         }
@@ -405,6 +437,7 @@ struct ProcessingService::Impl {
         }
         std::lock_guard<std::mutex> lock(mutex);
         config.processing = runtime_update->config;
+        applied_revision = runtime_update->revision;
       }
 
       while (processor.inFlightBatchCount() < processor.asyncBatchCapacity()) {
@@ -412,6 +445,7 @@ struct ProcessingService::Impl {
         {
           std::lock_guard<std::mutex> lock(mutex);
           if (queue.empty() ||
+              replayUpdateNeeded(queue.front().batch) ||
               (pending_runtime_config.has_value() && beginsRasterFrame(queue.front().batch))) {
             break;
           }
@@ -419,6 +453,7 @@ struct ProcessingService::Impl {
           queue.pop_front();
         }
         queued_batch.timing.processing_start_timestamp_ns = nowNs();
+        announceConfig(queued_batch.batch);
         std::string error;
         if (!processor.submitBatch(std::move(queued_batch.batch),
                                    snapshots.selectedRecordIndex(), error)) {
@@ -511,6 +546,10 @@ struct ProcessingService::Impl {
   std::optional<PendingRuntimeConfig> pending_runtime_config;
   ProcessedFrameCallback callback;
   PointCloudFrameCallback point_cloud_callback;
+  std::function<void(ProcessingConfigEvent)> config_callback;
+  std::shared_ptr<const ProcessingConfigEvent> active_replay_event;
+  std::uint64_t applied_revision = 0;
+  std::optional<std::uint64_t> announced_revision;
   std::size_t queue_capacity = 0;
   std::size_t queue_high_water_mark = 0;
   std::uint64_t batches_discarded_on_stop = 0;
@@ -545,6 +584,11 @@ ProcessingService::~ProcessingService() {
   waitUntilStopped(ignored);
 }
 
+void ProcessingService::setProcessingConfigCallback(std::function<void(ProcessingConfigEvent)> callback) {
+  std::lock_guard<std::mutex> lock(impl_->mutex);
+  impl_->config_callback = std::move(callback);
+}
+
 bool ProcessingService::configure(const SystemConfig& config, std::uint64_t processing_config_revision,
                                   std::string& error) {
   std::lock_guard<std::mutex> lock(impl_->mutex);
@@ -558,6 +602,7 @@ bool ProcessingService::configure(const SystemConfig& config, std::uint64_t proc
   impl_->config = config;
   impl_->queue_capacity = config.processing.queue_capacity;
   impl_->processing_config_revision = processing_config_revision;
+  impl_->applied_revision = processing_config_revision;
   impl_->snapshots.configure(config.scan.x_pixel_count, config.scan.y_line_count);
   impl_->processed_batch_workspace.clear();
   impl_->processed_batch_workspace.resize(config.digitizer.records_per_buffer);
@@ -573,6 +618,8 @@ bool ProcessingService::start(std::string& error) {
     return false;
   }
   impl_->queue.clear();
+  impl_->active_replay_event.reset();
+  impl_->announced_revision.reset();
   impl_->queue_high_water_mark = 0;
   impl_->batches_discarded_on_stop = 0;
   impl_->batches_processed = 0;

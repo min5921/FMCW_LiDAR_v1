@@ -50,7 +50,9 @@ Session-level strings and full configuration snapshots are written once in the s
 - `optical_state.revision`: laser and EDFA state revision applied to this frame.
 - `trigger.sequence`: hardware trigger sequence when available.
 
-Configuration and optical-state history map each revision to the first and last affected frame IDs in the JSON metadata sidecar.
+Raw recording preserves the initial full setup in `<stem>.setup.yaml`. Processing changes are recorded in `<stem>.processing/<first_source_frame_id>_<revision>.yaml` when the processing worker actually applies them. The next event defines the preceding event's end boundary; there is no separate last-frame field. These files do not change the raw binary version. Partial `.pending` history files are rejected on replay rather than silently ignored. Optical state remains per-record metadata; a complete optical command/revision event history is not implemented.
+
+`runtime.replay_processing_history=true` restores this processing history by default. Turning off **Recorded processing** explicitly uses the operator's processing settings. Older recordings without a history directory continue with the initial/imported setup. Replay retains the selected execution backend; recorded settings do not force FFTW on a CUDA-only Jetson. The current runtime forbids processing edits while recorded-history replay is running.
 
 ## Processed Frame Unit
 
@@ -73,7 +75,7 @@ Scan-line and B-scan arrays are derived immutable snapshots. They are not embedd
 
 - Raw storage always preserves the complete pre-segmentation record.
 - Binary files declare format version, sample format, byte order, channel, sample rate, and record length. New DMA-block recordings use raw v3, whose coordinate contract is intrinsically ROS/RViz `X forward, Y left, Z up` and whose record table preserves trajectory sample, source commands, fast axis/direction, coordinate source, and calibration state.
-- JSON metadata stores the session descriptor, coordinate frame, complete configuration snapshot, revision history, device versions, calibration identifiers, and stop reason.
+- JSON metadata stores the session descriptor, coordinate frame, initial configuration snapshot, revision references, and stop reason. Processing revision contents live in the adjacent `.processing` directory, not a JSON history array.
 - Raw recording creates `<stem>.setup.yaml` when the stream opens. The sidecar references this file, and an active legacy X/Y/M waveform is copied into the session so replay does not depend on a later-edited external file.
 - Queue overflow or raw-writer failure requests an acquisition stop and records the responsible queue and last accepted frame ID.
 - Raw files use numbered parts named `<stem>.raw.0000.bin`, `<stem>.raw.0001.bin`, and so on.

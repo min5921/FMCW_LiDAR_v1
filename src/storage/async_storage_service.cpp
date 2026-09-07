@@ -22,7 +22,7 @@ std::uint64_t utcNowNs() {
 }  // namespace
 
 struct AsyncStorageService::Impl {
-  using RawQueueItem = std::variant<RawFramePtr, RawFrameBatchPtr>;
+  using RawQueueItem = std::variant<RawFramePtr, RawFrameBatchPtr, ProcessingConfigEvent>;
 
   Impl(std::unique_ptr<IRawFrameWriter> raw,
        std::unique_ptr<IPointCloudFrameWriter> point_cloud)
@@ -30,7 +30,8 @@ struct AsyncStorageService::Impl {
 
   WriterFinalizeOptions finalizeOptions() const {
     std::lock_guard<std::mutex> lock(mutex);
-    return {utcNowNs(), stop_reason, worker_error.empty()};
+    return {utcNowNs(), worker_error.empty() ? stop_reason : worker_error,
+            !failed && worker_error.empty()};
   }
 
   void failWriter(std::string error, std::string reason) {
@@ -75,7 +76,9 @@ struct AsyncStorageService::Impl {
 
       std::string error;
       bool written = false;
-      if (std::holds_alternative<RawFrameBatchPtr>(item)) {
+      if (const auto* event = std::get_if<ProcessingConfigEvent>(&item)) {
+        written = writeProcessingEvent(options.session_directory, options.file_stem, *event, error);
+      } else if (std::holds_alternative<RawFrameBatchPtr>(item)) {
         const auto& batch = std::get<RawFrameBatchPtr>(item);
         written = batch != nullptr && raw_writer->writeBatch(*batch, error);
       } else {
@@ -88,11 +91,6 @@ struct AsyncStorageService::Impl {
       }
     }
 
-    auto finalize = finalizeOptions();
-    std::string error;
-    if (!raw_writer->finalize(finalize, error)) {
-      failWriter(std::move(error), "Raw writer finalization failed");
-    }
     finishWorker(true);
   }
 
@@ -116,11 +114,6 @@ struct AsyncStorageService::Impl {
       }
     }
 
-    auto finalize = finalizeOptions();
-    std::string error;
-    if (!point_cloud_writer->finalize(finalize, error)) {
-      failWriter(std::move(error), "Point cloud writer finalization failed");
-    }
     finishWorker(false);
   }
 
@@ -145,10 +138,13 @@ struct AsyncStorageService::Impl {
       error = stop_reason;
       return EnqueueResult::Overflow;
     }
+    const bool is_data = !std::holds_alternative<ProcessingConfigEvent>(item);
     raw_queue.push_back(std::move(item));
     raw_queue_high_water_mark = std::max(raw_queue_high_water_mark, raw_queue.size());
-    last_accepted_frame_id = frame_id;
-    last_accepted_raw_block = block_sequence;
+    if (is_data) {
+      last_accepted_frame_id = frame_id;
+      last_accepted_raw_block = block_sequence;
+    }
     raw_condition.notify_one();
     error.clear();
     return EnqueueResult::Accepted;
@@ -204,6 +200,7 @@ struct AsyncStorageService::Impl {
   bool accepting = false;
   bool stop_requested = false;
   bool failed = false;
+  bool needs_finalization = false;
   std::string stop_reason;
   std::string worker_error;
 };
@@ -222,8 +219,13 @@ AsyncStorageService::~AsyncStorageService() {
   waitUntilStopped(ignored);
 }
 
+EnqueueResult AsyncStorageService::enqueueProcessingEvent(ProcessingConfigEvent event, std::string& error) {
+  const auto frame_id = event.first_source_frame_id;
+  return impl_->enqueueRawItem(std::move(event), frame_id, 0U, error);
+}
+
 bool AsyncStorageService::start(const WriterOpenOptions& options, std::string& error) {
-  std::lock_guard<std::mutex> lock(impl_->mutex);
+  std::unique_lock<std::mutex> lock(impl_->mutex);
   if (impl_->raw_writer == nullptr || impl_->point_cloud_writer == nullptr || impl_->running ||
       impl_->raw_worker.joinable() || impl_->processed_worker.joinable() ||
       (!options.raw_enabled && !options.processed_enabled) || options.queue_capacity == 0U) {
@@ -257,11 +259,28 @@ bool AsyncStorageService::start(const WriterOpenOptions& options, std::string& e
   impl_->raw_running = options.raw_enabled;
   impl_->processed_running = options.processed_enabled;
   impl_->running = true;
-  if (options.raw_enabled) {
-    impl_->raw_worker = std::thread([this] { impl_->rawWorkerLoop(); });
-  }
-  if (options.processed_enabled) {
-    impl_->processed_worker = std::thread([this] { impl_->pointCloudWorkerLoop(); });
+  impl_->needs_finalization = true;
+  try {
+    if (options.raw_enabled) {
+      impl_->raw_worker = std::thread([this] {
+        try { impl_->rawWorkerLoop(); }
+        catch (const std::exception& e) { impl_->failWriter(e.what(), "Raw writer exception"); impl_->finishWorker(true); }
+        catch (...) { impl_->failWriter("Unknown raw writer exception", "Raw writer exception"); impl_->finishWorker(true); }
+      });
+    }
+    if (options.processed_enabled) {
+      impl_->processed_worker = std::thread([this] {
+        try { impl_->pointCloudWorkerLoop(); }
+        catch (const std::exception& e) { impl_->failWriter(e.what(), "Point-cloud writer exception"); impl_->finishWorker(false); }
+        catch (...) { impl_->failWriter("Unknown point-cloud writer exception", "Point-cloud writer exception"); impl_->finishWorker(false); }
+      });
+    }
+  } catch (const std::exception& e) {
+    const std::string failure = std::string("Cannot start storage worker: ") + e.what();
+    lock.unlock();
+    impl_->failWriter(failure, failure);
+    waitUntilStopped(error);
+    return false;
   }
   error.clear();
   return true;
@@ -296,13 +315,17 @@ EnqueueResult AsyncStorageService::enqueuePointCloud(
   return impl_->enqueuePointCloudItem(std::move(frame), error);
 }
 
-void AsyncStorageService::requestStop(std::string reason) {
+void AsyncStorageService::requestStop(std::string reason, bool failed) {
   std::lock_guard<std::mutex> lock(impl_->mutex);
   if (!impl_->running && !impl_->raw_worker.joinable() && !impl_->processed_worker.joinable()) {
     return;
   }
   impl_->accepting = false;
   impl_->stop_requested = true;
+  impl_->failed = impl_->failed || failed;
+  if (failed && impl_->worker_error.empty()) {
+    impl_->worker_error = reason;
+  }
   if (impl_->stop_reason.empty()) {
     impl_->stop_reason = std::move(reason);
   }
@@ -317,9 +340,37 @@ bool AsyncStorageService::waitUntilStopped(std::string& error) {
   if (impl_->processed_worker.joinable()) {
     impl_->processed_worker.join();
   }
+  if (impl_->needs_finalization) {
+    // Both writers must finish consuming before either stream is marked complete.
+    const auto finalize = [this](auto& writer, bool enabled, const char* reason) {
+      if (enabled) {
+        std::string writer_error;
+        try {
+          if (!writer->finalize(impl_->finalizeOptions(), writer_error)) {
+            impl_->failWriter(std::move(writer_error), reason);
+          }
+        } catch (const std::exception& e) {
+          impl_->failWriter(e.what(), reason);
+        } catch (...) {
+          impl_->failWriter("Unknown storage finalization exception", reason);
+        }
+      }
+    };
+    finalize(impl_->raw_writer, impl_->options.raw_enabled, "Raw writer finalization failed");
+    finalize(impl_->point_cloud_writer, impl_->options.processed_enabled,
+             "Point cloud writer finalization failed");
+    if (!impl_->finalizeOptions().completed) {
+      // A later finalizer failure also invalidates an already closed peer stream.
+      finalize(impl_->raw_writer, impl_->options.raw_enabled, "Raw metadata finalization failed");
+      finalize(impl_->point_cloud_writer, impl_->options.processed_enabled,
+               "Point cloud metadata finalization failed");
+    }
+    impl_->needs_finalization = false;
+  }
   std::lock_guard<std::mutex> lock(impl_->mutex);
-  if (!impl_->worker_error.empty()) {
-    error = impl_->worker_error;
+  impl_->raw_running = impl_->processed_running = impl_->running = false;
+  if (impl_->failed || !impl_->worker_error.empty()) {
+    error = impl_->worker_error.empty() ? impl_->stop_reason : impl_->worker_error;
     return false;
   }
   error.clear();

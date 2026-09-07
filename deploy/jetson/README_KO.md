@@ -216,5 +216,13 @@ NVIDIA 공식 절차는 [Jetson Orin Platform Power and Performance](https://doc
 5. MCU/EDFA를 하나씩 활성화
 6. NVMe raw 저장과 장시간 성능 검증
 
-Jetson에서 생성된 `BUILD_INFO.txt`, `runtime_dependencies.txt`, `SHA256SUMS`, CTest
+Jetson에서 생성된 `BUILD_INFO.txt`, `BUILD_FEATURES.txt`, `BUILD_SOURCES.sha256`, `runtime_dependencies.txt`, `SHA256SUMS`, CTest
 출력을 Windows 프로젝트로 다시 가져오면 다음 하드웨어 검증에 사용할 수 있다.
+
+## 10. v2 검토 반영
+
+공통 소스에 R1~R10 수정이 포함된다. 현재 규약은 `docs/runtime_contract_v2.md`, 검증 범위는 `docs/v2_review_completion.md`를 참조한다. `BUILD_FEATURES.txt`에서 ATS/CUDA 실제 활성 여부와 source revision/dirty 상태를 확인한다. CUDA 전용에서도 realtime probe, processing history, storage parity, 실제 Qt runtime 테스트가 등록된다. FFTW 전용 시험 두 개는 의도적으로 제외된다.
+
+`package.sh`는 기존 runtime 폴더가 있으면 `.previous-<UTC>-<pid>`로 보존한다. 기존 profile/raw 데이터는 이 백업에 남으며 새 package의 설정으로 자동 병합하지 않는다. 실행 확인 후 필요한 profile을 GUI에서 불러온다. Runtime 의존성이 누락된 경우 packaging은 실패하며 성공으로 표시하지 않는다.
+
+Raw 기록을 이동할 때 `.raw.*.bin`뿐 아니라 `.setup.yaml`, `.raw.json`, waveform, `.processing` 폴더도 함께 이동한다. **Recorded processing**은 실제 처리 revision 경계를 복원하고, 끄면 운용자 설정으로 재처리한다.

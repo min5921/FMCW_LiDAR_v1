@@ -19,7 +19,8 @@ class McuSerialController final : public IMcuController {
   void disconnect() override;
   bool configure(const SystemConfig& config, std::string& error) override;
   bool uploadWaveform(const std::vector<McuWaveformFrame>& frames, std::string& error,
-                      const McuUploadProgressCallback& progress = {}) override;
+                      const McuUploadProgressCallback& progress = {},
+                      const CancellationCheck& cancelled = {}) override;
   McuWaveformSnapshotPtr loadedWaveform() const override;
   bool startScan(std::string& error) override;
   bool stopScan(std::string& error) override;
@@ -27,7 +28,8 @@ class McuSerialController final : public IMcuController {
 
  private:
   bool sendAndExpect(const std::string& command, std::string_view expected_code,
-                     std::chrono::milliseconds timeout, std::string& error);
+                     std::chrono::milliseconds timeout, std::string& error,
+                     const CancellationCheck& cancelled = {});
 
   std::shared_ptr<ISerialTransport> transport_;
   mutable std::mutex mutex_;

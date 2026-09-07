@@ -45,6 +45,7 @@
 #include <QStyleFactory>
 #include <QTabWidget>
 #include <QTextCursor>
+#include <QScrollBar>
 #include <QTimer>
 #include <QToolButton>
 #include <QVBoxLayout>
@@ -635,6 +636,9 @@ MainWindow::MainWindow(QString platform_name, QWidget* parent)
   connect(stop_stage_timer_, &QTimer::timeout, this, &MainWindow::updateStopStageDisplay);
 
   controller_ = new ApplicationController(platform_name_, this);
+  point_cloud_load_timer_ = new QTimer(this);
+  point_cloud_load_timer_->setInterval(16);
+  connect(point_cloud_load_timer_, &QTimer::timeout, this, &MainWindow::showNextPointCloudReplayFrame);
   loadConfigToControls(config_);
   connectUi();
   live_display_timer_ = new QTimer(this);
@@ -684,25 +688,11 @@ void MainWindow::openPointCloudReplay() {
     return;
   }
 
-  const auto& info = point_cloud_replay_reader_.info();
-  if (!info.has_intensity) {
-    point_cloud_color_mode_->setCurrentIndex(2);
-  } else {
-    point_cloud_color_mode_->setCurrentIndex(0);
-  }
-  appendLog("INFO", "Point cloud replay",
-            QString("Opened %1 | %2 x %3 | %4 points | XYZ%5%6%7")
-                .arg(QString::fromStdString(info.format_name))
-                .arg(info.width)
-                .arg(info.height)
-                .arg(info.point_count)
-                .arg(info.has_intensity ? "I" : "")
-                .arg(info.has_velocity ? "V" : "")
-                .arg(info.has_elongation ? "E" : ""));
   updatePointCloudReplayControls();
 }
 
 bool MainWindow::showNextPointCloudReplayFrame() {
+  point_cloud_load_timer_->stop();
   if (!point_cloud_replay_reader_.isOpen()) {
     return false;
   }
@@ -725,6 +715,10 @@ bool MainWindow::showNextPointCloudReplayFrame() {
     setStyledProperty(point_cloud_status_, "statusKind", "neutral");
     return false;
   }
+  if (result == PointCloudReadResult::Pending) {
+    point_cloud_load_timer_->start();
+    return true;
+  }
   if (result == PointCloudReadResult::Error) {
     setPointCloudReplayRunning(false);
     const auto message = QString::fromStdString(error);
@@ -735,12 +729,20 @@ bool MainWindow::showNextPointCloudReplayFrame() {
     return false;
   }
 
+  if (point_cloud_replay_frames_displayed_ == 0U) {
+    const auto info = point_cloud_replay_reader_.info();
+    point_cloud_color_mode_->setCurrentIndex(info.has_intensity ? 0 : 2);
+    appendLog("INFO", "Point cloud replay", QString("Opened %1 | %2 points")
+        .arg(QString::fromStdString(info.format_name)).arg(info.point_count));
+    updatePointCloudReplayControls();
+  }
   ++point_cloud_replay_frames_displayed_;
   controller_->submitPointCloudFrame(std::move(frame));
   return true;
 }
 
 void MainWindow::setPointCloudReplayRunning(bool running) {
+  if (!running && point_cloud_load_timer_) { point_cloud_load_timer_->stop(); }
   const bool can_run = running && !runtime_status_.running &&
       point_cloud_replay_reader_.isOpen() &&
       point_cloud_replay_reader_.info().multiple_frames;
@@ -1235,6 +1237,7 @@ QWidget* MainWindow::buildDigitizerPage() {
   replay_path_layout->addWidget(replay_file_, 1);
   replay_path_layout->addWidget(replay_browse_);
   replay_loop_ = new QCheckBox("Loop at end", board);
+  replay_processing_history_ = new QCheckBox("Recorded processing", board);
   board_model_ = new QLabel("Detecting board", board);
   board_model_->setWordWrap(true);
   board_model_->setProperty("statusKind", "neutral");
@@ -1263,6 +1266,7 @@ QWidget* MainWindow::buildDigitizerPage() {
   board_form->addRow("Runtime source", acquisition_source_);
   board_form->addRow("Replay file", replay_path);
   board_form->addRow("Replay mode", replay_loop_);
+  board_form->addRow("Replay setup", replay_processing_history_);
   board_form->addRow("Board model", board_model_);
   board_form->addRow("Board address", board_address_);
   board_form->addRow("Input channel", digitizer_channel_);
@@ -1317,6 +1321,7 @@ QWidget* MainWindow::buildDigitizerPage() {
   layout->setColumnStretch(1, 1);
   layout->setRowStretch(1, 1);
   restart_required_controls_.append(QList<QWidget*>{acquisition_source_, replay_file_, replay_browse_, replay_loop_,
+      replay_processing_history_,
       digitizer_channel_, sample_rate_, sample_point_, input_range_, impedance_, coupling_,
       records_per_buffer_, dma_buffer_count_, trigger_slope_,
       trigger_delay_, pre_trigger_});
@@ -1589,13 +1594,13 @@ QWidget* MainWindow::buildProcessingPage() {
   batch_latency_->setWordWrap(true);
   batch_percentiles_ = new QLabel("p50 -- | p95 -- | p99 -- | max --", realtime);
   batch_percentiles_->setWordWrap(true);
-  batch_deadline_ = new QLabel("5.000 ms deadline", realtime);
+  batch_deadline_ = new QLabel("200 Hz reference: 5.000 ms", realtime);
   batch_deadline_->setWordWrap(true);
   batch_deadline_->setProperty("statusKind", "neutral");
   realtime_form->addRow("Workload", batch_workload_);
   realtime_form->addRow("Last", batch_latency_);
   realtime_form->addRow("Latency", batch_percentiles_);
-  realtime_form->addRow("Deadline", batch_deadline_);
+  realtime_form->addRow("200 Hz reference", batch_deadline_);
 
   auto* segmentation = groupBox("Chirp Segmentation Snapshot", content);
   auto* segmentation_layout = new QVBoxLayout(segmentation);
@@ -1753,6 +1758,7 @@ QWidget* MainWindow::buildLogPage() {
   toolbar->addWidget(clear);
   log_view_ = new QPlainTextEdit(content);
   log_view_->setReadOnly(true);
+  log_view_->setMaximumBlockCount(2000);
   layout->addLayout(toolbar);
   layout->addWidget(log_view_, 1);
   connect(log_filter_, &QComboBox::currentIndexChanged, this, [this] { rebuildLog(); });
@@ -2022,6 +2028,7 @@ void MainWindow::connectUi() {
 
   const QList<QObject*> config_controls = {
       acquisition_source_, replay_file_, replay_loop_, digitizer_channel_, sample_rate_,
+      replay_processing_history_,
       sample_point_, records_per_buffer_, dma_buffer_count_,
       input_range_, impedance_, coupling_, trigger_slope_, trigger_delay_, pre_trigger_,
       sweep_bandwidth_, sweep_rate_, edfa_mode_, edfa_port_,
@@ -2231,6 +2238,7 @@ SystemConfig MainWindow::configFromControls() const {
       static_cast<AcquisitionSource>(acquisition_source_->currentData().toInt());
   config.runtime.replay_file = replay_file_->text().trimmed().toStdString();
   config.runtime.replay_loop = replay_loop_->isChecked();
+  config.runtime.replay_processing_history = replay_processing_history_->isChecked();
   config.digitizer.board_profile = board_profile_id_.toStdString();
   if (const auto* capabilities =
           findDigitizerBoardCapabilities(config.digitizer.board_profile)) {
@@ -2604,6 +2612,7 @@ void MainWindow::loadConfigToControls(const SystemConfig& config, bool mark_pend
       ? normalizedReplayPath(replay_file_->text())
       : QString{};
   replay_loop_->setChecked(loaded.runtime.replay_loop);
+  replay_processing_history_->setChecked(loaded.runtime.replay_processing_history);
   board_profile_id_ = QString::fromStdString(loaded.digitizer.board_profile);
   if (findDigitizerBoardCapabilities(board_profile_id_.toStdString()) == nullptr &&
       !digitizerBoardCapabilities().empty()) {
@@ -2780,6 +2789,7 @@ void MainWindow::updateRuntimeSourceControls() {
   replay_file_->setEnabled(replay && editable);
   replay_browse_->setEnabled(replay && editable);
   replay_loop_->setEnabled(replay && editable);
+  replay_processing_history_->setEnabled(replay && editable);
   updateDigitizerBoardDisplay();
   updateMcuWaveformControls();
 }
@@ -3095,11 +3105,13 @@ void MainWindow::updateProcessingTelemetryLabels() {
                                   .arg(runtime_status_.processing_batch_max_ms, 0, 'f', 3));
   const auto deadline_margin_ms = runtime_status_.processing_deadline_ms -
       runtime_status_.processing_batch_latency_ms;
-  batch_deadline_->setText(QString("%1 ms margin | %2 misses")
+  batch_deadline_->setText(QString("%1 ms reference margin | %2 over 5 ms\nMeasured DMA interval: %3 ms")
                                .arg(deadline_margin_ms, 0, 'f', 3)
-                               .arg(runtime_status_.processing_deadline_misses));
+                               .arg(runtime_status_.processing_deadline_misses)
+                               .arg(runtime_status_.dma_bscan_period_ms > 0.0
+                                  ? QString::number(runtime_status_.dma_bscan_period_ms, 'f', 3) : "--"));
   setStyledProperty(batch_deadline_, "statusKind",
-                    runtime_status_.processing_deadline_misses == 0U ? "ready" : "error");
+                    runtime_status_.processing_deadline_misses == 0U ? "ready" : "warn");
 }
 
 void MainWindow::applyProfile() {
@@ -3378,7 +3390,7 @@ void MainWindow::updateStatus(RuntimeStatus status) {
       ? (runtime_status_.raw_storage_queue_size > 0U ||
          runtime_status_.processed_storage_queue_size > 0U ? "warning" : "ready")
       : "error");
-  overview_latency_->setText(QString("%1 ms last\n%2 misses")
+  overview_latency_->setText(QString("%1 ms last\n%2 over 5 ms (ref)")
                                  .arg(runtime_status_.processing_batch_latency_ms, 0, 'f', 3)
                                  .arg(runtime_status_.processing_deadline_misses));
   if (navigation_ != nullptr && navigation_->currentRow() == kProcessingPageIndex) {
@@ -3462,7 +3474,14 @@ void MainWindow::appendLog(QString level, QString source, QString message) {
   while (log_entries_.size() > 2000) {
     log_entries_.removeFirst();
   }
-  rebuildLog();
+  const auto filter = log_filter_->currentText();
+  if (filter == "All levels" || line.contains(QString("[%1]").arg(filter))) {
+    auto* scroll = log_view_->verticalScrollBar();
+    const bool following = scroll->value() >= scroll->maximum() - 1;
+    const auto previous = scroll->value();
+    log_view_->appendPlainText(line);
+    scroll->setValue(following ? scroll->maximum() : previous);
+  }
 }
 
 void MainWindow::rebuildLog() {

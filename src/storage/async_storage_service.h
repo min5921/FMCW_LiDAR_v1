@@ -18,10 +18,11 @@ class AsyncStorageService final : public IStorageService {
 
   bool start(const WriterOpenOptions& options, std::string& error) override;
   EnqueueResult enqueueRawBatch(RawFrameBatchPtr batch, std::string& error) override;
+  EnqueueResult enqueueProcessingEvent(ProcessingConfigEvent event, std::string& error) override;
   EnqueueResult enqueueRaw(RawFramePtr frame, std::string& error) override;
   EnqueueResult enqueuePointCloud(std::shared_ptr<const PointCloudSnapshot> frame,
                                   std::string& error) override;
-  void requestStop(std::string reason) override;
+  void requestStop(std::string reason, bool failed = false) override;
   bool waitUntilStopped(std::string& error) override;
   StorageStatus status() const override;
 

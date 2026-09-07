@@ -19,8 +19,8 @@ class AcquisitionSession {
   bool configure(const SystemConfig& config, std::uint64_t config_revision, std::string& error);
   bool connect(std::string& error);
   void disconnect();
-  bool arm(std::string& error);
-  bool enableTrigger(std::string& error);
+  bool arm(std::string& error, const CancellationCheck& cancelled = {});
+  bool enableTrigger(std::string& error, const CancellationCheck& cancelled = {});
   bool start(std::string& error);
   FrameWaitResult waitForBatch(RawFrameBatchPtr& batch, std::chrono::milliseconds timeout,
                                std::string& error);

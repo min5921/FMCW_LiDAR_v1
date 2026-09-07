@@ -21,6 +21,7 @@ FMCW_LiDAR/
   outputs/
   src/
     apps/
+      common/
       windows/
       jetson/
     core/
@@ -29,7 +30,8 @@ FMCW_LiDAR/
       edfa/
     processing/
     storage/
-    visualization/
+    detection/
+    network/
     firmware/
       mcu/
   tests/
@@ -117,10 +119,11 @@ legacy/EDFA-Amplifier-V20240219/
 
 새로 정리할 실제 개발 코드를 둔다.
 
-- `apps/windows/`: Windows 실행 앱과 상업용 UI
+- `apps/common/`: 공통 Qt UI, 실제 RuntimeWorker, plots/point-cloud renderer
+- `apps/windows/`: Windows 실행 진입점
 - `apps/jetson/`: Jetson/Linux Qt UI 실행 앱
-- `core/`: 공통 state machine, config, frame bus, session, telemetry
-- `drivers/`: Alazar, MTI, serial, UDP, OS별 adapter
+- `core/`: config/data 계약, acquisition session, telemetry. ConfigManager/OperationController는 초기 prototype 테스트용
+- `drivers/`: Alazar, MCU, EDFA, serial, simulator/replay adapter
 - `drivers/alazar/`: Windows/Jetson 공통 AlazarTech adapter와 OS별 SDK wrapper
 - `drivers/edfa/`: EDFA optional driver, output on/off, optical output setting, simulator
 - `drivers/mcu/`: STM32 waveform command/ACK protocol과 controller
@@ -130,8 +133,9 @@ legacy/EDFA-Amplifier-V20240219/
 - `processing/`: GPU FFT, CPU FFT, peak detection, distance/velocity
 - `processing/cpu/`: active FFTW implementation
 - `processing/cuda/`: active CUDA/cuFFT implementation compiled from `.cu`
-- `storage/`: raw writer, processed writer
-- `visualization/`: 2D plot, heatmap, 3D point cloud 공통 로직
+- `storage/`: raw/point writer, processing history, 비동기 point-cloud file reader
+- `detection/`: CenterPoint 입력 변환과 비동기 검출. PCD parsing은 storage reader 공유
+- `drivers/replay/`: 저장된 raw를 digitizer interface로 재생
 - `firmware/mcu/FMCW_LiDAR_MCU/`: 활성 CubeMX/CubeIDE firmware, UART command, MEMS 제어 protocol
 
 ### `tests/`

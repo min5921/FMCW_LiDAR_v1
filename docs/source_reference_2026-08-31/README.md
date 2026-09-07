@@ -1,6 +1,8 @@
 # FMCW LiDAR Source Reference (2026-08-31)
 
-현행 worktree 기준 함수·데이터 흐름 참조서입니다.
+2026-08-31 당시 소스를 대상으로 생성한 **과거 함수 색인**입니다. 현재 v2 구현의 검증된 규약은 `../runtime_contract_v2.md`를 먼저 확인하세요.
+
+함수명/반환형 기반 자동 설명은 의미 추정이며, 오류 정리·검증·성공 반환을 보장하는 감사 결과가 아닙니다. 이번 v2 작업에서는 기존 DOCX를 재생성하거나 모든 함수 설명을 수동 검증하지 않았습니다.
 
 - 상세 대상: 181 files / 2,083 function definitions and declarations
 - 제외: legacy, STM32 HAL/CMSIS vendor source, build/package outputs

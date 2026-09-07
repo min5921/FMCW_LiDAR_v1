@@ -252,7 +252,11 @@ int main(int argc, char* argv[]) {
   }
 
   QualificationResult fftw;
-  const bool run_fftw = options.backend != BackendSelection::Cuda;
+  if (options.backend == BackendSelection::Fftw && !fmcw::FftwBackend::available()) {
+    std::cerr << "Requested FFTW backend is unavailable\n";
+    return 2;
+  }
+  const bool run_fftw = options.backend != BackendSelection::Cuda && fmcw::FftwBackend::available();
   if (run_fftw) {
     fftw = runQualification(fmcw::FftBackendKind::Fftw);
   }

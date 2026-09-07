@@ -1,4 +1,5 @@
 #pragma once
+#include "storage/async_point_cloud_replay.h"
 
 #include "apps/common/application_controller.h"
 #include "apps/common/plot_widgets.h"
@@ -165,7 +166,8 @@ class MainWindow final : public QMainWindow {
   QCheckBox* point_cloud_replay_loop_ = nullptr;
   QDoubleSpinBox* point_cloud_replay_fps_ = nullptr;
   QTimer* point_cloud_replay_timer_ = nullptr;
-  PointCloudReplayReader point_cloud_replay_reader_;
+  AsyncPointCloudReplay point_cloud_replay_reader_;
+  QTimer* point_cloud_load_timer_ = nullptr;
   std::uint64_t point_cloud_replay_frames_displayed_ = 0U;
   QToolButton* point_cloud_open_button_ = nullptr;
   QToolButton* object_detection_toggle_ = nullptr;
@@ -180,6 +182,7 @@ class MainWindow final : public QMainWindow {
   QLineEdit* replay_file_ = nullptr;
   QToolButton* replay_browse_ = nullptr;
   QCheckBox* replay_loop_ = nullptr;
+  QCheckBox* replay_processing_history_ = nullptr;
   QString loaded_replay_setup_path_;
   QLabel* board_model_ = nullptr;
   QString board_profile_id_;

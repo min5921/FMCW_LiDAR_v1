@@ -1,4 +1,5 @@
 #pragma once
+#include "storage/processing_history.h"
 
 #include "core/config_types.h"
 #include "core/frame_types.h"
@@ -93,6 +94,7 @@ class ProcessingService {
                            std::string& error);
   void setProcessedFrameCallback(ProcessedFrameCallback callback);
   void setPointCloudFrameCallback(PointCloudFrameCallback callback);
+  void setProcessingConfigCallback(std::function<void(ProcessingConfigEvent)> callback);
   void requestStop(std::string reason,
                    ProcessingStopMode mode = ProcessingStopMode::DrainPending);
   bool waitUntilStopped(std::string& error);

@@ -1,5 +1,6 @@
 #include "drivers/edfa/edfa_serial_controller.h"
 
+#include <chrono>
 #include <cmath>
 #include <utility>
 
@@ -21,126 +22,147 @@ EdfaSerialController::EdfaSerialController(std::shared_ptr<ISerialTransport> tra
 std::string EdfaSerialController::name() const { return "CivilLaser EDFA serial controller"; }
 
 EdfaStatus EdfaSerialController::status() const {
-  std::lock_guard<std::mutex> lock(mutex_);
+  std::lock_guard<std::mutex> lock(status_mutex_);
   return status_;
 }
 
+void EdfaSerialController::publishStatus(EdfaStatus next) {
+  std::lock_guard<std::mutex> lock(status_mutex_);
+  status_ = std::move(next);
+}
+
 bool EdfaSerialController::configure(const SystemConfig& config, std::string& error) {
-  std::lock_guard<std::mutex> lock(mutex_);
-  if (status_.output_enabled) {
+  std::lock_guard<std::mutex> lock(io_mutex_);
+  if (status().output_enabled) {
     error = "Disable EDFA output before reconfiguration";
     return false;
   }
   config_ = config.edfa;
-  status_ = {};
-  status_.mode = config_.mode;
-  status_.bypassed = config_.mode == EdfaMode::None;
-  status_.required_before_start = config_.required_before_start;
-  status_.control_mode = config_.control_mode;
-  status_.setpoint = config_.output_setpoint;
-  status_.device.ready = config_.mode != EdfaMode::Controlled;
-  status_.device.detail = config_.mode == EdfaMode::None ? "EDFA bypass active" :
+  EdfaStatus next;
+  next.mode = config_.mode;
+  next.bypassed = config_.mode == EdfaMode::None;
+  next.required_before_start = config_.required_before_start;
+  next.control_mode = config_.control_mode;
+  next.setpoint = config_.output_setpoint;
+  next.device.ready = config_.mode != EdfaMode::Controlled;
+  next.device.detail = config_.mode == EdfaMode::None ? "EDFA bypass active" :
                           config_.mode == EdfaMode::Manual ? "EDFA manual mode" : "EDFA serial configured";
+  publishStatus(std::move(next));
   configured_ = true;
   error.clear();
   return true;
 }
 
 bool EdfaSerialController::connect(std::string& error) {
-  std::lock_guard<std::mutex> lock(mutex_);
+  std::lock_guard<std::mutex> lock(io_mutex_);
   if (!configured_) {
     error = "Configure the EDFA before connecting";
     return false;
   }
+  auto next = status();
   if (config_.mode != EdfaMode::Controlled) {
-    status_.device.connected = false;
-    status_.device.ready = true;
-    status_.device.detail = config_.mode == EdfaMode::None ? "EDFA bypass active" : "EDFA manual operator control";
+    next.device.connected = false;
+    next.device.ready = true;
+    next.device.detail = config_.mode == EdfaMode::None ? "EDFA bypass active" : "EDFA manual operator control";
+    publishStatus(std::move(next));
     error.clear();
     return true;
   }
   const SerialSettings settings{config_.port, config_.baud_rate, config_.parity, config_.stop_bits};
   if (!transport_->open(settings, error) || !transport_->purge(error)) {
     transport_->close();
+    next.device.connected = false;
+    next.device.ready = false;
+    next.telemetry_valid = false;
+    next.device.detail = "EDFA connection failed: " + error;
+    publishStatus(std::move(next));
     return false;
   }
-  status_.device.connected = true;
-  status_.device.ready = false;
-  if (!refreshDeviceState(error)) {
+  if (!refreshDeviceState(next, error)) {
     transport_->close();
-    status_.device.connected = false;
+    next.device.connected = false;
+    next.device.ready = false;
+    next.telemetry_valid = false;
+    next.device.detail = "EDFA connection failed: " + error;
+    publishStatus(std::move(next));
     return false;
   }
-  status_.device.ready = true;
-  status_.device.detail = status_.output_enabled
+  next.device.connected = true;
+  next.device.ready = true;
+  next.device.detail = next.output_enabled
       ? "EDFA connected | output enabled"
       : "EDFA connected | output disabled";
+  publishStatus(std::move(next));
   return true;
 }
 
 void EdfaSerialController::disconnect() {
-  bool disable_output = false;
-  {
-    std::lock_guard<std::mutex> lock(mutex_);
-    disable_output = config_.mode == EdfaMode::Controlled &&
-        status_.output_enabled && transport_->isOpen();
-  }
-  if (disable_output) {
+  std::lock_guard<std::mutex> lock(io_mutex_);
+  if (config_.mode == EdfaMode::Controlled && status().output_enabled && transport_->isOpen()) {
     std::string ignored;
-    setOutputEnabled(false, ignored);
+    setOutputEnabledLocked(false, ignored);
   }
 
-  std::lock_guard<std::mutex> lock(mutex_);
   transport_->close();
-  status_.device.connected = false;
-  status_.device.running = false;
-  status_.output_enabled = false;
-  status_.telemetry_valid = false;
-  status_.device.ready = config_.mode != EdfaMode::Controlled;
-  status_.device.detail = config_.mode == EdfaMode::None ? "EDFA bypass active" : "EDFA disconnected";
+  auto next = status();
+  next.device.connected = false;
+  next.device.running = false;
+  next.output_enabled = false;
+  next.telemetry_valid = false;
+  next.device.ready = config_.mode != EdfaMode::Controlled;
+  next.device.detail = config_.mode == EdfaMode::None ? "EDFA bypass active" : "EDFA disconnected";
+  publishStatus(std::move(next));
 }
 
 bool EdfaSerialController::pollStatus(std::string& error) {
-  std::lock_guard<std::mutex> lock(mutex_);
+  std::lock_guard<std::mutex> lock(io_mutex_);
   if (config_.mode != EdfaMode::Controlled) {
     error.clear();
     return true;
   }
+  auto next = status();
   if (!transport_->isOpen()) {
-    status_.device.connected = false;
-    status_.device.ready = false;
-    status_.telemetry_valid = false;
-    status_.device.detail = "EDFA status poll failed: serial port is closed";
+    next.device.connected = false;
+    next.device.ready = false;
+    next.telemetry_valid = false;
+    next.device.detail = "EDFA status poll failed: serial port is closed";
+    publishStatus(std::move(next));
     error = "EDFA serial port is closed";
     return false;
   }
-  if (!refreshDeviceState(error)) {
-    status_.device.ready = false;
-    status_.telemetry_valid = false;
-    status_.device.detail = "EDFA status poll failed: " + error;
+  if (!refreshDeviceState(next, error)) {
+    next.device.ready = false;
+    next.telemetry_valid = false;
+    next.device.detail = "EDFA status poll failed: " + error;
+    publishStatus(std::move(next));
     return false;
   }
-  status_.device.connected = true;
-  status_.device.ready = true;
-  status_.device.detail = status_.output_enabled
+  next.device.connected = true;
+  next.device.ready = true;
+  next.device.detail = next.output_enabled
       ? "EDFA connected | output enabled"
       : "EDFA connected | output disabled";
+  publishStatus(std::move(next));
   error.clear();
   return true;
 }
 
 bool EdfaSerialController::setControlMode(EdfaControlMode mode, std::string& error) {
-  std::lock_guard<std::mutex> lock(mutex_);
+  std::lock_guard<std::mutex> lock(io_mutex_);
   if (config_.mode != EdfaMode::Controlled || !transport_->isOpen()) {
     error = "EDFA mode command requires a controlled serial connection";
     return false;
   }
   EdfaPacket response;
+  EdfaControlMode confirmed = EdfaControlMode::Apc;
   if (!transact(EdfaProtocol::setMode(mode), response, error) ||
-      !EdfaProtocol::decodeMode(response, status_.control_mode, error)) {
+      !EdfaProtocol::decodeMode(response, confirmed, error)) {
     return false;
   }
-  if (status_.control_mode != mode) {
+  auto next = status();
+  next.control_mode = confirmed;
+  publishStatus(std::move(next));
+  if (confirmed != mode) {
     error = "EDFA confirmed a different control mode";
     return false;
   }
@@ -149,9 +171,10 @@ bool EdfaSerialController::setControlMode(EdfaControlMode mode, std::string& err
 }
 
 bool EdfaSerialController::setOutputSetpoint(const OpticalPowerSetpoint& setpoint, std::string& error) {
-  std::lock_guard<std::mutex> lock(mutex_);
+  std::lock_guard<std::mutex> lock(io_mutex_);
+  auto next = status();
   const double dbm = toDbm(setpoint);
-  if (config_.mode != EdfaMode::Controlled || !transport_->isOpen() || status_.control_mode != EdfaControlMode::Apc) {
+  if (config_.mode != EdfaMode::Controlled || !transport_->isOpen() || next.control_mode != EdfaControlMode::Apc) {
     error = "The current EDFA schema supports serial output setpoint only in APC mode";
     return false;
   }
@@ -173,13 +196,18 @@ bool EdfaSerialController::setOutputSetpoint(const OpticalPowerSetpoint& setpoin
     error = "EDFA confirmed a different output setpoint";
     return false;
   }
-  status_.setpoint = {confirmed_dbm, OpticalPowerUnit::Dbm};
+  next.setpoint = {confirmed_dbm, OpticalPowerUnit::Dbm};
+  publishStatus(std::move(next));
   error.clear();
   return true;
 }
 
 bool EdfaSerialController::setOutputEnabled(bool enabled, std::string& error) {
-  std::lock_guard<std::mutex> lock(mutex_);
+  std::lock_guard<std::mutex> lock(io_mutex_);
+  return setOutputEnabledLocked(enabled, error);
+}
+
+bool EdfaSerialController::setOutputEnabledLocked(bool enabled, std::string& error) {
   if (config_.mode != EdfaMode::Controlled || !transport_->isOpen()) {
     error = "EDFA activation command requires a controlled serial connection";
     return false;
@@ -196,43 +224,52 @@ bool EdfaSerialController::setOutputEnabled(bool enabled, std::string& error) {
         : "EDFA shutdown state was not confirmed";
     return false;
   }
-  status_.output_enabled = enabled;
-  status_.device.running = enabled;
+  auto next = status();
+  next.output_enabled = enabled;
+  next.device.running = enabled;
+  next.device.detail = enabled ? "EDFA output enabled" : "EDFA output disabled";
+  // Publish the confirmed activation before waiting for optional telemetry.
+  publishStatus(next);
   std::string telemetry_error;
-  const bool telemetry_refreshed = refreshReading(telemetry_error);
-  status_.device.detail = enabled ? "EDFA output enabled" : "EDFA output disabled";
+  const bool telemetry_refreshed = refreshReading(next, telemetry_error);
   if (!telemetry_refreshed) {
-    status_.device.detail += " | telemetry refresh failed: " + telemetry_error;
+    next.telemetry_valid = false;
+    next.device.detail += " | telemetry refresh failed: " + telemetry_error;
   }
+  publishStatus(std::move(next));
   error.clear();
   return true;
 }
 
 bool EdfaSerialController::resetAlarm(std::string& error) {
-  std::lock_guard<std::mutex> lock(mutex_);
+  std::lock_guard<std::mutex> lock(io_mutex_);
   if (config_.mode != EdfaMode::Controlled || !transport_->isOpen()) {
     error = "EDFA alarm refresh requires a controlled serial connection";
     return false;
   }
-  if (!refreshReading(error)) {
+  auto next = status();
+  if (!refreshReading(next, error)) {
+    next.telemetry_valid = false;
+    publishStatus(std::move(next));
     return false;
   }
-  status_.alarm_active = false;
-  status_.alarm_code.clear();
+  next.alarm_active = false;
+  next.alarm_code.clear();
+  publishStatus(std::move(next));
   return true;
 }
 
 bool EdfaSerialController::emergencyOff(std::string& error) {
-  {
-    std::lock_guard<std::mutex> lock(mutex_);
-    if (config_.mode != EdfaMode::Controlled) {
-      status_.output_enabled = false;
-      status_.device.running = false;
-      error.clear();
-      return true;
-    }
+  std::lock_guard<std::mutex> lock(io_mutex_);
+  if (config_.mode != EdfaMode::Controlled) {
+    auto next = status();
+    next.output_enabled = false;
+    next.device.running = false;
+    publishStatus(std::move(next));
+    error.clear();
+    return true;
   }
-  return setOutputEnabled(false, error);
+  return setOutputEnabledLocked(false, error);
 }
 
 bool EdfaSerialController::transact(const std::vector<std::uint8_t>& command, EdfaPacket& response,
@@ -256,29 +293,33 @@ bool EdfaSerialController::transact(const std::vector<std::uint8_t>& command, Ed
   return EdfaProtocol::parseResponse(prefix, response, error);
 }
 
-bool EdfaSerialController::refreshReading(std::string& error) {
+bool EdfaSerialController::refreshReading(EdfaStatus& next, std::string& error) {
   EdfaPacket response;
   EdfaDeviceReading reading;
   if (!transact(EdfaProtocol::queryStatus(), response, error) ||
       !EdfaProtocol::decodeStatus(response, reading, error)) {
     return false;
   }
-  status_.measured_output_dbm = reading.output_power_dbm;
-  status_.measured_input_dbm = reading.input_power_dbm;
-  status_.measured_current_ma = reading.current_ma;
-  status_.telemetry_valid = true;
+  next.measured_output_dbm = reading.output_power_dbm;
+  next.measured_input_dbm = reading.input_power_dbm;
+  next.measured_current_ma = reading.current_ma;
+  next.telemetry_valid = true;
+  next.telemetry_timestamp_ns = static_cast<std::uint64_t>(
+      std::chrono::duration_cast<std::chrono::nanoseconds>(
+          std::chrono::steady_clock::now().time_since_epoch()).count());
   error.clear();
   return true;
 }
 
-bool EdfaSerialController::refreshDeviceState(std::string& error) {
-  if (!refreshReading(error)) {
+bool EdfaSerialController::refreshDeviceState(EdfaStatus& next, std::string& error) {
+  auto confirmed = next;
+  if (!refreshReading(confirmed, error)) {
     return false;
   }
 
   EdfaPacket response;
   if (!transact(EdfaProtocol::queryMode(), response, error) ||
-      !EdfaProtocol::decodeMode(response, status_.control_mode, error)) {
+      !EdfaProtocol::decodeMode(response, confirmed.control_mode, error)) {
     return false;
   }
 
@@ -287,15 +328,16 @@ bool EdfaSerialController::refreshDeviceState(std::string& error) {
       !EdfaProtocol::decodePowerDbm(response, target_dbm, error)) {
     return false;
   }
-  status_.setpoint = {target_dbm, OpticalPowerUnit::Dbm};
+  confirmed.setpoint = {target_dbm, OpticalPowerUnit::Dbm};
 
   bool output_enabled = false;
   if (!transact(EdfaProtocol::queryActivation(), response, error) ||
       !EdfaProtocol::decodeActivation(response, output_enabled, error)) {
     return false;
   }
-  status_.output_enabled = output_enabled;
-  status_.device.running = output_enabled;
+  confirmed.output_enabled = output_enabled;
+  confirmed.device.running = output_enabled;
+  next = std::move(confirmed);
   error.clear();
   return true;
 }

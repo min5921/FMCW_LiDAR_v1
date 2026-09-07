@@ -88,6 +88,16 @@ void testAsyncSender() {
   expect(status.frames_completed == 1U && status.frames_sent == 1U && status.packets_sent == 2U,
          "complete raster frame is packetized and sent on the UDP worker thread");
   sender.stop();
+  expect(sender.start(config,2,2,error), "Shared snapshot sender restarts");
+  auto cloud=std::make_shared<fmcw::PointCloudSnapshot>();
+  cloud->width=2; cloud->height=2; cloud->complete=false; cloud->points.resize(4);
+  sender.enqueue(std::shared_ptr<const fmcw::PointCloudSnapshot>(cloud));
+  expect(sender.status().frames_completed==0, "Incomplete snapshot not sent");
+  cloud->complete=true; cloud->processing_config_revision=12; cloud->source_timestamp_ns=123;
+  for(auto& point:cloud->points) { point.x=1; point.y=2; point.z=3; point.intensity=-20; point.velocity=0.5F; point.valid=true; }
+  sender.enqueue(std::shared_ptr<const fmcw::PointCloudSnapshot>(cloud));
+  sender.stop();
+  expect(sender.status().frames_sent==1 && sender.status().packets_sent==2, "Shared complete frame drains through UDP worker");
 }
 
 }  // namespace

@@ -15,16 +15,12 @@ target_link_libraries(fmcw_detection_input_tests PRIVATE fmcw_core)
 target_compile_features(fmcw_detection_input_tests PRIVATE cxx_std_17)
 
 add_test(NAME fmcw_detection_input_tests COMMAND fmcw_detection_input_tests)
-if(WIN32 AND FMCW_HAS_CENTERPOINT AND FMCW_CUDNN_RUNTIME_DLL)
-  get_filename_component(_fmcw_test_cudnn_runtime_dir
-      "${FMCW_CUDNN_RUNTIME_DLL}" DIRECTORY)
-  set_tests_properties(fmcw_detection_input_tests PROPERTIES
-    ENVIRONMENT_MODIFICATION
-      "PATH=path_list_prepend:${_fmcw_test_cudnn_runtime_dir}")
-endif()
 
 add_executable(fmcw_config_tests
   config_system_test.cpp
+  # Historical policy prototypes, intentionally not linked into the application.
+  ../src/core/config_manager.cpp
+  ../src/core/operation_controller.cpp
 )
 
 target_link_libraries(fmcw_config_tests PRIVATE fmcw_core)
@@ -43,8 +39,34 @@ target_compile_definitions(fmcw_acquisition_tests PRIVATE FMCW_TEST_SOURCE_DIR="
 
 add_test(NAME fmcw_acquisition_tests COMMAND fmcw_acquisition_tests)
 
+add_executable(fmcw_edfa_concurrency_tests
+  edfa_concurrency_test.cpp
+)
+target_link_libraries(fmcw_edfa_concurrency_tests PRIVATE fmcw_core)
+target_compile_features(fmcw_edfa_concurrency_tests PRIVATE cxx_std_17)
+add_test(NAME fmcw_edfa_concurrency_tests COMMAND fmcw_edfa_concurrency_tests)
+set_tests_properties(fmcw_edfa_concurrency_tests PROPERTIES TIMEOUT 30)
+
+add_executable(fmcw_storage_failure_tests storage_failure_test.cpp)
+target_link_libraries(fmcw_storage_failure_tests PRIVATE fmcw_core)
+target_compile_features(fmcw_storage_failure_tests PRIVATE cxx_std_17)
+add_test(NAME fmcw_storage_failure_tests COMMAND fmcw_storage_failure_tests)
+set_tests_properties(fmcw_storage_failure_tests PROPERTIES TIMEOUT 30)
+add_executable(fmcw_processing_history_tests processing_history_test.cpp)
+target_link_libraries(fmcw_processing_history_tests PRIVATE fmcw_core)
+add_test(NAME fmcw_processing_history_tests COMMAND fmcw_processing_history_tests)
+set_tests_properties(fmcw_processing_history_tests PROPERTIES TIMEOUT 30 SKIP_RETURN_CODE 77)
+add_executable(fmcw_async_replay_tests async_replay_test.cpp)
+target_link_libraries(fmcw_async_replay_tests PRIVATE fmcw_core)
+add_test(NAME fmcw_async_replay_tests COMMAND fmcw_async_replay_tests)
+set_tests_properties(fmcw_async_replay_tests PROPERTIES TIMEOUT 15)
+
 if(FMCW_BUILD_QT_APPS)
   find_package(Qt6 6.2 REQUIRED COMPONENTS Core)
+  add_executable(fmcw_runtime_tests runtime_orchestration_test.cpp)
+  target_link_libraries(fmcw_runtime_tests PRIVATE fmcw_qt_common Qt6::Core)
+  add_test(NAME fmcw_runtime_tests COMMAND fmcw_runtime_tests)
+  set_tests_properties(fmcw_runtime_tests PROPERTIES TIMEOUT 45 SKIP_RETURN_CODE 77)
   add_executable(fmcw_replay_setup_tests
     replay_setup_loader_test.cpp
   )
@@ -178,9 +200,14 @@ function(add_phase7_realtime_qualification target_name duration_seconds enforce_
   endif()
 endfunction()
 
-if(FMCW_HAS_FFTW)
+if(FMCW_HAS_FFTW OR FMCW_HAS_CUDA_FFT)
   add_phase7_realtime_qualification(fmcw_phase7_realtime_probe 2 0)
-  add_test(NAME fmcw_phase7_realtime_probe COMMAND fmcw_phase7_realtime_probe)
+  if(FMCW_HAS_FFTW)
+    add_test(NAME fmcw_realtime_fftw COMMAND fmcw_phase7_realtime_probe --backend=fftw)
+  endif()
+  if(FMCW_HAS_CUDA_FFT)
+    add_test(NAME fmcw_realtime_cuda COMMAND fmcw_phase7_realtime_probe --backend=cuda)
+  endif()
 
   # Fixed-duration release gate. It is intentionally not part of normal CTest because it
   # runs for ten minutes per selected backend and returns failure on any 5 ms miss.
@@ -223,3 +250,10 @@ add_phase7_storage_performance(fmcw_phase7_storage_probe 32 0 0)
 # 120,240 strict DMA blocks equal ten minutes at 200 kHz / 998 records per block.
 # The executable preflights roughly 1.2 TB of free space and is not part of normal CTest.
 add_phase7_storage_performance(fmcw_phase7_storage_acceptance 120240 1 1)
+
+if(WIN32 AND FMCW_HAS_CENTERPOINT AND FMCW_CUDNN_RUNTIME_DLL)
+  get_filename_component(_fmcw_test_cudnn_runtime_dir "${FMCW_CUDNN_RUNTIME_DLL}" DIRECTORY)
+  get_property(_fmcw_tests DIRECTORY PROPERTY TESTS)
+  string(REPLACE ";" "\\;" _fmcw_test_path "${_fmcw_test_cudnn_runtime_dir};$ENV{PATH}")
+  set_tests_properties(${_fmcw_tests} PROPERTIES ENVIRONMENT "PATH=${_fmcw_test_path}")
+endif()

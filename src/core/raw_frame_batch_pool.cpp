@@ -32,6 +32,7 @@ MutableRawFrameBatchPtr RawFrameBatchPool::acquire() {
   }
 
   batch->metadata = {};
+  batch->replay_processing.reset();
   batch->sample_owner.reset();
   for (auto& record : batch->records) {
     record.metadata = {};

@@ -15,6 +15,8 @@ option(FMCW_BUILD_TESTS "Build core contract tests" ON)
 option(FMCW_WITH_FFTW "Enable FFTW CPU backend when fftw3 is available" ON)
 option(FMCW_WITH_CUDA "Enable CUDA/cuFFT backend when CUDA is available" ON)
 option(FMCW_REQUIRE_CUDA "Fail configuration when CUDA/cuFFT is unavailable" OFF)
+option(FMCW_REQUIRE_FFTW "Fail configuration when the requested CPU backend is unavailable" OFF)
+option(FMCW_REQUIRE_ALAZAR "Fail configuration when ATS-SDK is unavailable" OFF)
 option(FMCW_WITH_ALAZAR "Enable AlazarTech ATS-SDK adapter when the SDK is available" ON)
 option(FMCW_WITH_CENTERPOINT "Enable the external CUDA/cuDNN CenterPoint detector" OFF)
 

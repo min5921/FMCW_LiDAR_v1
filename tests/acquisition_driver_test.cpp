@@ -286,7 +286,9 @@ class OrderedMcu final : public fmcw::IMcuController {
   void disconnect() override { status_.device = {}; }
   bool uploadWaveform(const std::vector<fmcw::McuWaveformFrame>& frames,
                       std::string& error,
-                      const fmcw::McuUploadProgressCallback& progress = {}) override {
+                      const fmcw::McuUploadProgressCallback& progress = {},
+                      const fmcw::CancellationCheck& cancelled = {}) override {
+    if (fmcw::isCancelled(cancelled)) { error = "cancelled"; return false; }
     status_.waveform_points = static_cast<std::uint32_t>(frames.size());
     loaded_waveform_ = fmcw::McuProtocol::snapshotForUploadedWaveform(frames, 100000.0);
     if (progress) {
