@@ -1,6 +1,7 @@
 #pragma once
 
 #include "processing/point_cloud_postprocessor.h"
+#include "apps/common/point_cloud_camera.h"
 
 #include <QOpenGLBuffer>
 #include <QOpenGLFunctions>
@@ -11,7 +12,6 @@
 #include <QString>
 
 #include <cstddef>
-#include <functional>
 #include <memory>
 #include <vector>
 
@@ -26,6 +26,8 @@ enum class PointCloudColorMode {
   Distance,
 };
 
+enum class PointCloudRenderer { Automatic, Painter };
+
 struct PointCloudDisplayStats {
   std::size_t source_valid_points = 0U;
   std::size_t fused_points = 0U;
@@ -37,17 +39,19 @@ struct PointCloudDisplayStats {
 
 class PointCloudWidget final : public QOpenGLWidget, protected QOpenGLFunctions {
  public:
-  explicit PointCloudWidget(QWidget* parent = nullptr);
+  explicit PointCloudWidget(QWidget* parent = nullptr,
+                            PointCloudRenderer renderer = PointCloudRenderer::Automatic);
   ~PointCloudWidget() override;
 
   void setSnapshot(std::shared_ptr<const PointCloudSnapshot> snapshot);
-  void clearSnapshot();
+  void clearSnapshot(bool reset_camera = true);
   void setColorMode(PointCloudColorMode mode);
   void setPointSize(float pixels);
   void setAxesVisible(bool visible);
   void setTemporalFusionFrames(std::uint32_t frame_count);
   void setVerticalInterpolationFactor(std::uint32_t factor);
   PointCloudDisplayStats displayStats() const;
+  bool gpuRendererReady() const { return gpu_renderer_ready_; }
   void resetCamera();
   bool saveCurrentCloud(const QString& path) const;
 
@@ -75,8 +79,8 @@ class PointCloudWidget final : public QOpenGLWidget, protected QOpenGLFunctions 
   void fitSpatialBounds();
   void initializeGpuRenderer();
   void uploadVertices();
-  void drawGpuPoints();
-  void drawPainterFallback(QPainter& painter, const std::function<QPointF(double, double, double)>& project);
+  void drawGpuPoints(const PointCloudProjection& projection);
+  void drawPainterFallback(QPainter& painter, const PointCloudProjection& projection);
 
   std::shared_ptr<const PointCloudSnapshot> snapshot_;
   PointCloudPostProcessor post_processor_;
@@ -89,15 +93,14 @@ class PointCloudWidget final : public QOpenGLWidget, protected QOpenGLFunctions 
   QPoint last_mouse_position_;
   PointCloudColorMode color_mode_ = PointCloudColorMode::Intensity;
   float point_size_ = 3.0F;
-  float yaw_degrees_ = -35.0F;
-  float pitch_degrees_ = -20.0F;
-  float zoom_ = 1.0F;
-  float pan_x_ = 0.0F;
-  float pan_y_ = 0.0F;
+  PointCloudCamera camera_;
+  PointCloudRenderer renderer_;
   float center_x_ = 0.0F;
   float center_y_ = 0.0F;
   float center_z_ = 0.0F;
   float extent_ = 1.0F;
+  double display_radius_ = 0.0;
+  float maximum_point_size_ = 1.0F;
   bool axes_visible_ = true;
   bool spatial_bounds_valid_ = false;
   bool gpu_renderer_ready_ = false;

@@ -6,7 +6,6 @@
 #include <QPainter>
 #include <QSurfaceFormat>
 #include <QTextStream>
-#include <QVector2D>
 #include <QVector3D>
 #include <QWheelEvent>
 
@@ -20,43 +19,20 @@
 namespace fmcw {
 namespace {
 
-constexpr double kPi = 3.14159265358979323846;
-
 constexpr auto kPointVertexShaderBody = R"glsl(
 layout(location = 0) in vec3 in_position;
 layout(location = 1) in vec4 in_color;
 
 uniform vec3 cloud_center;
 uniform float cloud_extent;
-uniform float yaw_radians;
-uniform float pitch_radians;
-uniform float zoom_factor;
-uniform vec2 pan_offset;
-uniform vec2 viewport_size;
+uniform mat4 view_projection;
 uniform float point_size;
 
 out vec4 vertex_color;
 
 void main() {
   vec3 point = (in_position - cloud_center) * (2.0 / max(cloud_extent, 1.0e-6));
-  float cosine_yaw = cos(yaw_radians);
-  float sine_yaw = sin(yaw_radians);
-  float cosine_pitch = cos(pitch_radians);
-  float sine_pitch = sin(pitch_radians);
-  float rotated_x = cosine_yaw * point.x + sine_yaw * point.y;
-  float yaw_depth = -sine_yaw * point.x + cosine_yaw * point.y;
-  float rotated_vertical = cosine_pitch * point.z - sine_pitch * yaw_depth;
-  float rotated_depth = sine_pitch * point.z + cosine_pitch * yaw_depth;
-  float depth = max(0.2, 3.4 / max(zoom_factor, 0.05) - rotated_depth);
-  float canvas_scale = min(viewport_size.x, viewport_size.y) * 0.72;
-  float screen_x = viewport_size.x * (0.5 + 0.5 * pan_offset.x) +
-      rotated_x * canvas_scale / depth;
-  float screen_y = viewport_size.y * (0.5 - 0.5 * pan_offset.y) -
-      rotated_vertical * canvas_scale / depth;
-  vec2 ndc = vec2(2.0 * screen_x / max(viewport_size.x, 1.0) - 1.0,
-                  1.0 - 2.0 * screen_y / max(viewport_size.y, 1.0));
-  float normalized_depth = clamp((depth - 0.2) / 8.0, 0.0, 1.0);
-  gl_Position = vec4(ndc, normalized_depth * 2.0 - 1.0, 1.0);
+  gl_Position = view_projection * vec4(point, 1.0);
   gl_PointSize = point_size;
   vertex_color = in_color;
 }
@@ -110,7 +86,8 @@ void colorMap(float value, float& red, float& green, float& blue) {
 
 }  // namespace
 
-PointCloudWidget::PointCloudWidget(QWidget* parent) : QOpenGLWidget(parent) {
+PointCloudWidget::PointCloudWidget(QWidget* parent, PointCloudRenderer renderer)
+    : QOpenGLWidget(parent), renderer_(renderer) {
   auto surface_format = format();
   const bool open_gl_es = QOpenGLContext::openGLModuleType() == QOpenGLContext::LibGLES;
   surface_format.setRenderableType(open_gl_es ? QSurfaceFormat::OpenGLES
@@ -150,15 +127,19 @@ void PointCloudWidget::setSnapshot(std::shared_ptr<const PointCloudSnapshot> sna
   update();
 }
 
-void PointCloudWidget::clearSnapshot() {
+void PointCloudWidget::clearSnapshot(bool reset_camera) {
   snapshot_.reset();
   post_processor_.reset();
   current_points_.clear();
   vertices_.clear();
   vertices_dirty_ = true;
-  spatial_bounds_valid_ = false;
-  center_x_ = center_y_ = center_z_ = 0.0F;
-  extent_ = 1.0F;
+  display_radius_ = 0.0;
+  if (reset_camera) {
+    camera_ = PointCloudCamera{};
+    spatial_bounds_valid_ = false;
+    center_x_ = center_y_ = center_z_ = 0.0F;
+    extent_ = 1.0F;
+  }
   update();
 }
 
@@ -209,11 +190,7 @@ PointCloudDisplayStats PointCloudWidget::displayStats() const {
 }
 
 void PointCloudWidget::resetCamera() {
-  yaw_degrees_ = -35.0F;
-  pitch_degrees_ = -20.0F;
-  zoom_ = 1.0F;
-  pan_x_ = 0.0F;
-  pan_y_ = 0.0F;
+  camera_ = PointCloudCamera{};
   fitSpatialBounds();
   update();
 }
@@ -240,7 +217,14 @@ bool PointCloudWidget::saveCurrentCloud(const QString& path) const {
 void PointCloudWidget::initializeGL() {
   initializeOpenGLFunctions();
   glClearColor(0.035F, 0.055F, 0.063F, 1.0F);
-  initializeGpuRenderer();
+  if (renderer_ == PointCloudRenderer::Automatic) {
+    GLfloat point_size_range[2] = {1.0F, 1.0F};
+    glGetFloatv(GL_ALIASED_POINT_SIZE_RANGE, point_size_range);
+    maximum_point_size_ = point_size_range[1];
+    initializeGpuRenderer();
+  } else {
+    gpu_renderer_error_ = "Painter renderer selected";
+  }
 }
 
 void PointCloudWidget::resizeGL(int, int) {}
@@ -292,7 +276,7 @@ void PointCloudWidget::uploadVertices() {
   vertices_dirty_ = false;
 }
 
-void PointCloudWidget::drawGpuPoints() {
+void PointCloudWidget::drawGpuPoints(const PointCloudProjection& projection) {
   if (!gpu_renderer_ready_ || point_program_ == nullptr) {
     return;
   }
@@ -313,13 +297,9 @@ void PointCloudWidget::drawGpuPoints() {
   point_program_->bind();
   point_program_->setUniformValue("cloud_center", QVector3D(center_x_, center_y_, center_z_));
   point_program_->setUniformValue("cloud_extent", extent_);
-  point_program_->setUniformValue("yaw_radians", static_cast<float>(yaw_degrees_ * kPi / 180.0));
-  point_program_->setUniformValue("pitch_radians", static_cast<float>(pitch_degrees_ * kPi / 180.0));
-  point_program_->setUniformValue("zoom_factor", zoom_);
-  point_program_->setUniformValue("pan_offset", QVector2D(pan_x_, pan_y_));
-  point_program_->setUniformValue("viewport_size",
-                                  QVector2D(static_cast<float>(width()), static_cast<float>(height())));
-  point_program_->setUniformValue("point_size", point_size_);
+  point_program_->setUniformValue("view_projection", projection.matrix());
+  point_program_->setUniformValue("point_size",
+      std::min(point_size_ * static_cast<float>(devicePixelRatioF()), maximum_point_size_));
   {
     QOpenGLVertexArrayObject::Binder vertex_array_binder(&vertex_array_);
     glDrawArrays(GL_POINTS, 0, static_cast<GLsizei>(vertices_.size()));
@@ -336,89 +316,89 @@ void PointCloudWidget::drawGpuPoints() {
 }
 
 void PointCloudWidget::drawPainterFallback(
-    QPainter& painter, const std::function<QPointF(double, double, double)>& project) {
+    QPainter& painter, const PointCloudProjection& projection) {
   painter.setPen(Qt::NoPen);
   const auto point_radius = static_cast<double>(point_size_) * 0.5;
+  struct ProjectedPoint {
+    const Vertex* vertex;
+    QPointF screen;
+    float depth;
+  };
+  std::vector<ProjectedPoint> projected;
+  projected.reserve(vertices_.size());
   for (const auto& vertex : vertices_) {
-    const auto normalized_x = static_cast<double>(vertex.x - center_x_) * 2.0 / extent_;
-    const auto normalized_y = static_cast<double>(vertex.y - center_y_) * 2.0 / extent_;
-    const auto normalized_z = static_cast<double>(vertex.z - center_z_) * 2.0 / extent_;
-    const auto screen = project(normalized_x, normalized_y, normalized_z);
-    if (screen.x() < -point_size_ || screen.x() > width() + point_size_ ||
-        screen.y() < -point_size_ || screen.y() > height() + point_size_) {
-      continue;
+    ProjectedPoint point{&vertex, {}, 0.0F};
+    const auto normalized = QVector3D(vertex.x - center_x_, vertex.y - center_y_,
+                                      vertex.z - center_z_) * (2.0F / extent_);
+    if (projection.projectPoint(normalized, point.screen, point.depth)) {
+      projected.push_back(point);
     }
+  }
+  std::stable_sort(projected.begin(), projected.end(), [](const auto& a, const auto& b) {
+    return a.depth > b.depth;
+  });
+  for (const auto& point : projected) {
+    const auto& vertex = *point.vertex;
     painter.setBrush(QColor::fromRgbF(vertex.r, vertex.g, vertex.b, vertex.alpha));
-    painter.drawEllipse(screen, point_radius, point_radius);
+    painter.drawEllipse(point.screen, point_radius, point_radius);
   }
 }
 
 void PointCloudWidget::paintGL() {
+  const PointCloudProjection projection(camera_, size(),
+      static_cast<float>(2.0 * display_radius_ / extent_));
   glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-  drawGpuPoints();
+  drawGpuPoints(projection);
 
   QPainter painter(this);
   painter.setRenderHint(QPainter::Antialiasing);
   painter.setRenderHint(QPainter::TextAntialiasing);
 
-  const auto yaw = static_cast<double>(yaw_degrees_) * kPi / 180.0;
-  const auto pitch = static_cast<double>(pitch_degrees_) * kPi / 180.0;
-  const auto cosine_yaw = std::cos(yaw);
-  const auto sine_yaw = std::sin(yaw);
-  const auto cosine_pitch = std::cos(pitch);
-  const auto sine_pitch = std::sin(pitch);
-  const auto canvas_scale = static_cast<double>(std::min(width(), height())) * 0.72;
-  const auto project = [&](double x, double y, double z) {
-    const auto rotated_x = cosine_yaw * x + sine_yaw * y;
-    const auto yaw_depth = -sine_yaw * x + cosine_yaw * y;
-    const auto rotated_vertical = cosine_pitch * z - sine_pitch * yaw_depth;
-    const auto rotated_depth = sine_pitch * z + cosine_pitch * yaw_depth;
-    const auto depth = std::max(0.2, 3.4 / static_cast<double>(zoom_) - rotated_depth);
-    return QPointF(width() * (0.5 + 0.5 * pan_x_) + rotated_x * canvas_scale / depth,
-                   height() * (0.5 - 0.5 * pan_y_) - rotated_vertical * canvas_scale / depth);
+  const auto normalize = [&](const QVector3D& point) {
+    return (point - QVector3D(center_x_, center_y_, center_z_)) * (2.0F / extent_);
   };
-  const auto projectWorld = [&](double x, double y, double z) {
-    return project((x - static_cast<double>(center_x_)) * 2.0 / extent_,
-                   (y - static_cast<double>(center_y_)) * 2.0 / extent_,
-                   (z - static_cast<double>(center_z_)) * 2.0 / extent_);
+  const auto drawWorldLine = [&](const QVector3D& from, const QVector3D& to) {
+    QLineF line;
+    if (projection.projectSegment(normalize(from), normalize(to), line)) {
+      painter.drawLine(line);
+    }
   };
 
   painter.setPen(QPen(QColor(52, 72, 78, 120), 1.0));
   for (int index = -4; index <= 4; ++index) {
-    const auto coordinate = static_cast<double>(index) / 4.0;
-    const auto x = static_cast<double>(center_x_) + coordinate * extent_ * 0.5;
-    const auto y = static_cast<double>(center_y_) + coordinate * extent_ * 0.5;
-    painter.drawLine(projectWorld(x, center_y_ - extent_ * 0.5, 0.0),
-                     projectWorld(x, center_y_ + extent_ * 0.5, 0.0));
-    painter.drawLine(projectWorld(center_x_ - extent_ * 0.5, y, 0.0),
-                     projectWorld(center_x_ + extent_ * 0.5, y, 0.0));
+    const auto coordinate = static_cast<float>(index) / 4.0F;
+    const auto x = center_x_ + coordinate * extent_ * 0.5F;
+    const auto y = center_y_ + coordinate * extent_ * 0.5F;
+    drawWorldLine({x, center_y_ - extent_ * 0.5F, 0.0F},
+                  {x, center_y_ + extent_ * 0.5F, 0.0F});
+    drawWorldLine({center_x_ - extent_ * 0.5F, y, 0.0F},
+                  {center_x_ + extent_ * 0.5F, y, 0.0F});
   }
 
   if (axes_visible_) {
-    const auto axis_length = static_cast<double>(extent_) * 0.325;
-    const auto origin = projectWorld(0.0, 0.0, 0.0);
-    const auto x_axis = projectWorld(axis_length, 0.0, 0.0);
-    const auto y_axis = projectWorld(0.0, axis_length, 0.0);
-    const auto z_axis = projectWorld(0.0, 0.0, axis_length);
-    painter.setPen(QPen(QColor("#e05a67"), 2.0));
-    painter.drawLine(origin, x_axis);
-    painter.drawText(x_axis + QPointF(4.0, 0.0), "X");
-    painter.setPen(QPen(QColor("#67c98c"), 2.0));
-    painter.drawLine(origin, y_axis);
-    painter.drawText(y_axis + QPointF(4.0, 0.0), "Y");
-    painter.setPen(QPen(QColor("#55aee6"), 2.0));
-    painter.drawLine(origin, z_axis);
-    painter.drawText(z_axis + QPointF(4.0, 0.0), "Z");
+    const auto axis_length = extent_ * 0.325F;
+    const auto drawAxis = [&](const QVector3D& endpoint, const QColor& color, const char* label) {
+      painter.setPen(QPen(color, 2.0));
+      drawWorldLine({}, endpoint);
+      QPointF screen;
+      float depth = 0.0F;
+      if (projection.projectPoint(normalize(endpoint), screen, depth)) {
+        painter.drawText(screen + QPointF(4.0, 0.0), label);
+      }
+    };
+    drawAxis({axis_length, 0.0F, 0.0F}, QColor("#e05a67"), "X");
+    drawAxis({0.0F, axis_length, 0.0F}, QColor("#67c98c"), "Y");
+    drawAxis({0.0F, 0.0F, axis_length}, QColor("#55aee6"), "Z");
   }
 
   if (!gpu_renderer_ready_) {
-    drawPainterFallback(painter, project);
+    drawPainterFallback(painter, projection);
   }
 
   painter.setPen(QColor("#aebdc1"));
   const auto stats = displayStats();
   auto frame_text = snapshot_
-      ? QString("Frame %1 | source %2 | fused %3 | +%4 interpolated | %5 shown")
+      ? QString("Frame %1 | source %2 | fused %3 | +%4 interpolated | %5 display points")
             .arg(snapshot_->scan_frame_index + 1U)
             .arg(stats.source_valid_points)
             .arg(stats.fused_points)
@@ -446,19 +426,19 @@ void PointCloudWidget::mouseMoveEvent(QMouseEvent* event) {
   const auto delta = position - last_mouse_position_;
   last_mouse_position_ = position;
   if ((event->buttons() & Qt::LeftButton) != 0) {
-    yaw_degrees_ += static_cast<float>(delta.x()) * 0.45F;
-    pitch_degrees_ = std::clamp(pitch_degrees_ + static_cast<float>(delta.y()) * 0.45F,
+    camera_.yaw_degrees = std::remainder(camera_.yaw_degrees - static_cast<float>(delta.x()) * 0.45F, 360.0F);
+    camera_.pitch_degrees = std::clamp(camera_.pitch_degrees + static_cast<float>(delta.y()) * 0.45F,
                                 -89.0F, 89.0F);
   } else if ((event->buttons() & (Qt::RightButton | Qt::MiddleButton)) != 0) {
-    pan_x_ += static_cast<float>(delta.x()) / std::max(1, width()) * 2.0F;
-    pan_y_ -= static_cast<float>(delta.y()) / std::max(1, height()) * 2.0F;
+    camera_.pan_x += static_cast<float>(delta.x()) / std::max(1, width()) * 2.0F;
+    camera_.pan_y -= static_cast<float>(delta.y()) / std::max(1, height()) * 2.0F;
   }
   update();
 }
 
 void PointCloudWidget::wheelEvent(QWheelEvent* event) {
-  zoom_ = std::clamp(zoom_ * std::pow(1.0015F, static_cast<float>(event->angleDelta().y())),
-                     0.2F, 8.0F);
+  camera_.zoomBy(static_cast<float>(event->angleDelta().y()));
+  event->accept();
   update();
 }
 
@@ -474,6 +454,7 @@ void PointCloudWidget::rebuildDisplayCloud() {
 void PointCloudWidget::rebuildVertices() {
   vertices_.clear();
   vertices_dirty_ = true;
+  display_radius_ = 0.0;
   if (current_points_.empty()) {
     return;
   }
@@ -498,6 +479,8 @@ void PointCloudWidget::rebuildVertices() {
   vertices_.reserve(current_points_.size());
   for (const auto& display_point : current_points_) {
     const auto& point = display_point.point;
+    display_radius_ = std::max(display_radius_, std::hypot(
+        static_cast<double>(point.x), static_cast<double>(point.y), static_cast<double>(point.z)));
     float red = 1.0F;
     float green = 1.0F;
     float blue = 1.0F;
@@ -514,14 +497,9 @@ void PointCloudWidget::fitSpatialBounds() {
     spatial_bounds_valid_ = false;
     return;
   }
-  float maximum_radius_squared = 0.0F;
-  for (const auto& display_point : current_points_) {
-    const auto& point = display_point.point;
-    maximum_radius_squared = std::max(
-        maximum_radius_squared, point.x * point.x + point.y * point.y + point.z * point.z);
-  }
   center_x_ = center_y_ = center_z_ = 0.0F;
-  extent_ = std::max(2.0F * std::sqrt(maximum_radius_squared), 1.0e-4F);
+  extent_ = static_cast<float>(std::clamp(2.0 * display_radius_, 1.0e-4,
+                                        static_cast<double>(std::numeric_limits<float>::max())));
   spatial_bounds_valid_ = true;
 }
 

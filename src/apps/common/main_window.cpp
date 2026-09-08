@@ -783,7 +783,7 @@ void MainWindow::stopPointCloudReplay(bool rewind_to_first) {
     return;
   }
   point_cloud_replay_frames_displayed_ = 0U;
-  point_cloud_plot_->clearSnapshot();
+  point_cloud_plot_->clearSnapshot(false);
   showNextPointCloudReplayFrame();
 }
 

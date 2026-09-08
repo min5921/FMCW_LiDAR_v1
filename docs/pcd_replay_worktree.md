@@ -61,3 +61,48 @@ contains no model weights or cuDNN DLLs. Hardware acquisition was not started.
 
 Earlier review documents describe their historical baseline, including a previous
 CenterPoint-enabled package. They do not override the scope of this worktree.
+
+## Projection Fixes (2026-09-07)
+
+- `apps/common/point_cloud_camera.h` owns the shared right-handed Qt lookAt and
+  perspective matrix used by GPU points, Painter fallback, and reference overlays.
+  The initial camera is above the XY plane. Stored XYZIV and scan direction are
+  unchanged; no point data is mirrored or converted by this change.
+- Real homogeneous near/far clipping replaces clamping negative eye depth to 0.2.
+  Points behind the eye are hidden. Grid/axis segments are clipped before division,
+  including segments crossing the eye. Reference guides remain overlay graphics.
+- Far clipping follows the current display radius and camera distance. It does
+  not alter the view, origin, or initial fit scale between playback frames.
+- Wheel dolly range is 0.01 to 200 (formerly 0.2 to 8), bounded in log space.
+  Moving the camera through a surface correctly hides points now behind the eye.
+  Reset restores the initial pose and fits the current frame about the LiDAR origin.
+- Horizontal left-button dragging makes the front of the cloud follow the pointer.
+  The yaw input sign is opposite to the old mirrored projection's sign. Vertical
+  orbit, right/middle-button pan, and stored XYZIV coordinates are unchanged.
+  Framebuffer regressions verify left/right orbit, downward orbit and rightward pan
+  on both GPU and Painter at 100% and 200% scaling.
+- A newly opened file or new acquisition session resets the camera and fit.
+  Same-file rewind clears frame history but retains both camera pose and fit.
+- GPU sprite size uses logical size times device pixel ratio, limited to the
+  device's reported maximum point size. Painter points use logical pixels.
+- Painter fallback clips identically and sorts visible points far-to-near so
+  farther input points cannot overwrite closer opaque points. Antialiasing and
+  translucent coverage can still differ from GPU sprites.
+- The count label says `display points`, not `shown`: it counts submitted points,
+  not on-screen pixels after clipping or occlusion.
+
+Five added CTest cases cover camera mathematics and actual GPU/Painter framebuffers
+at 100% and 200% display scaling. Cases include zoom-out, farther subsequent frames,
+behind-eye points, new-file reset, rewind preservation, near/far occlusion, rotation,
+and wide/tall window aspect ratios. Windows: all 24 CTest cases passed.
+Screenshots are generated under `build/replay-release/tests/projection-*`.
+The render test also accepts `--sample=<path>` for optional local-data screenshots;
+normal CTest cases have no external dataset or hardware dependency.
+
+Projection and orbit-direction fix packages are separate from the previously opened executable:
+
+- Windows: `build/package/FMCW_LiDAR_PCDReplay_OrbitFix/FMCW_LiDAR.exe`.
+- Jetson sources: `build/package/FMCW_LiDAR_PCDReplay_Jetson_Source_OrbitFix.zip`.
+  Build with the included `deploy/jetson/build.sh`. These use the same shared
+  camera code and Qt 6.2-compatible APIs; Jetson hardware execution is not verified
+  by the Windows checks above.

@@ -404,6 +404,7 @@ if(FMCW_BUILD_QT_APPS)
     apps/common/main_window.h
     apps/common/point_cloud_widget.cpp
     apps/common/point_cloud_widget.h
+    apps/common/point_cloud_camera.h
     apps/common/plot_widgets.cpp
     apps/common/plot_widgets.h
     apps/common/replay_setup_loader.cpp
