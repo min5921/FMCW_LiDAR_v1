@@ -48,6 +48,7 @@ class PointCloudWidget final : public QOpenGLWidget, protected QOpenGLFunctions 
   void setColorMode(PointCloudColorMode mode);
   void setPointSize(float pixels);
   void setAxesVisible(bool visible);
+  void setGridSpacing(float meters);
   void setTemporalFusionFrames(std::uint32_t frame_count);
   void setVerticalInterpolationFactor(std::uint32_t factor);
   PointCloudDisplayStats displayStats() const;
@@ -93,6 +94,7 @@ class PointCloudWidget final : public QOpenGLWidget, protected QOpenGLFunctions 
   QPoint last_mouse_position_;
   PointCloudColorMode color_mode_ = PointCloudColorMode::Intensity;
   float point_size_ = 3.0F;
+  float grid_spacing_m_ = 1.0F;
   PointCloudCamera camera_;
   PointCloudRenderer renderer_;
   float center_x_ = 0.0F;

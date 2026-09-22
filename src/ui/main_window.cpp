@@ -839,6 +839,15 @@ QWidget* MainWindow::buildLivePage() {
   auto* show_axes = new QCheckBox("XYZ axes", point_cloud_page);
   show_axes->setChecked(true);
   show_axes->setToolTip("Show or hide the X, Y, and Z reference axes");
+  auto* grid_spacing = new QComboBox(point_cloud_page);
+  grid_spacing->setObjectName("pointCloudGridSpacing");
+  for (const double meters : {0.01, 0.1, 0.5, 1.0, 2.0, 5.0, 10.0, 100.0}) {
+    grid_spacing->addItem(QString("Grid %1 m").arg(meters), meters);
+  }
+  grid_spacing->setCurrentIndex(3);
+  grid_spacing->setToolTip(
+      "Fixed world spacing per cell on the XY ground plane (Z = 0). "
+      "Fit View and zoom never change meters per cell. Up to 100 cells per side of the origin.");
   auto* reset_camera = new QToolButton(point_cloud_page);
   reset_camera->setIcon(style()->standardIcon(QStyle::SP_BrowserReload));
   reset_camera->setToolTip("Fit the current cloud and reset the 3D camera");
@@ -855,6 +864,7 @@ QWidget* MainWindow::buildLivePage() {
   point_cloud_tools->addWidget(temporal_frames);
   point_cloud_tools->addWidget(vertical_interpolation);
   point_cloud_tools->addWidget(show_axes);
+  point_cloud_tools->addWidget(grid_spacing);
   point_cloud_tools->addWidget(reset_camera);
   point_cloud_tools->addWidget(save_cloud);
   point_cloud_tools->addStretch(1);
@@ -943,6 +953,10 @@ QWidget* MainWindow::buildLivePage() {
                 vertical_interpolation->currentData().toUInt());
           });
   connect(show_axes, &QCheckBox::toggled, point_cloud_plot_, &PointCloudWidget::setAxesVisible);
+  connect(grid_spacing, &QComboBox::currentIndexChanged, point_cloud_plot_,
+          [this, grid_spacing](int) {
+            point_cloud_plot_->setGridSpacing(grid_spacing->currentData().toFloat());
+          });
   connect(reset_camera, &QToolButton::clicked, point_cloud_plot_, &PointCloudWidget::resetCamera);
   connect(save_cloud, &QToolButton::clicked, this, [this] {
     const auto path = QFileDialog::getSaveFileName(this, "Save point cloud", "point_cloud.csv",

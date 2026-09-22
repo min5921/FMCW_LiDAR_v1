@@ -21,8 +21,27 @@ struct PointCloudCamera {
   float pan_y = 0.0F;
 
   void zoomBy(float wheel_delta) {
-    zoom = std::exp(std::clamp(std::log(zoom) + wheel_delta * std::log(1.0015F),
-                               std::log(0.01F), std::log(200.0F)));
+    if (!std::isfinite(wheel_delta)) return;
+    // Numerical guards only: six orders of magnitude on either side of Fit View.
+    // Logarithmic updates also handle large wheel/trackpad deltas without overflow.
+    zoom = static_cast<float>(std::exp(std::clamp(
+        std::log(static_cast<double>(zoom)) + wheel_delta * std::log(1.0015),
+        std::log(1.0e-6), std::log(1.0e6))));
+  }
+
+  void zoomAt(float wheel_delta, const QPointF& cursor, QSize viewport) {
+    if (viewport.width() <= 0 || viewport.height() <= 0 ||
+        !std::isfinite(cursor.x()) || !std::isfinite(cursor.y())) return;
+    const double previous_zoom = zoom;
+    zoomBy(wheel_delta);
+    const double ratio = zoom / previous_zoom;
+    // Projection magnifies every depth by the same ratio. Compensate the pan in
+    // NDC so the ray under the pointer stays at that pixel, even after panning.
+    // Use the actual ratio so hitting a numerical zoom guard cannot move the view.
+    const double anchor_x = 2.0 * cursor.x() / viewport.width() - 1.0;
+    const double anchor_y = 1.0 - 2.0 * cursor.y() / viewport.height();
+    pan_x = static_cast<float>(anchor_x + ratio * (pan_x - anchor_x));
+    pan_y = static_cast<float>(anchor_y + ratio * (pan_y - anchor_y));
   }
 };
 
@@ -39,12 +58,14 @@ class PointCloudProjection {
                             std::cos(pitch) * std::cos(yaw), std::sin(pitch));
     const QVector3D up(std::sin(pitch) * std::sin(yaw),
                       -std::sin(pitch) * std::cos(yaw), std::cos(pitch));
-    const auto distance = 3.4F / camera.zoom;
-    const auto near_plane = std::min(0.01F, distance * 0.01F);
+    // Magnify the view instead of driving the eye through the measured points.
+    // This also keeps depth precision independent of the zoom factor.
+    constexpr float distance = 3.4F;
+    constexpr float near_plane = 0.01F;
     const auto far_plane = std::max(10.0F, distance + std::max(1.0F, radius) * 1.2F + 1.0F);
     QMatrix4x4 view;
     view.lookAt(toward * distance, QVector3D(), up);
-    const auto scale = std::min(viewport_.width(), viewport_.height()) * 0.72F;
+    const auto scale = std::min(viewport_.width(), viewport_.height()) * 0.72F * camera.zoom;
     const auto half_width = near_plane * viewport_.width() / (2.0F * scale);
     const auto half_height = near_plane * viewport_.height() / (2.0F * scale);
     QMatrix4x4 projection;
@@ -74,8 +95,8 @@ class PointCloudProjection {
     if (!finite(a) || !finite(b)) return false;
     const auto da = planeDistances(a);
     const auto db = planeDistances(b);
-    float first = 0.0F;
-    float last = 1.0F;
+    double first = 0.0;
+    double last = 1.0;
     // Clip before the perspective divide so grid/axis lines crossing the eye
     // cannot turn into unbounded screen-space lines.
     for (std::size_t i = 0; i < da.size(); ++i) {
@@ -84,8 +105,8 @@ class PointCloudProjection {
       if (db[i] < 0.0F) last = std::min(last, da[i] / (da[i] - db[i]));
     }
     if (first > last) return false;
-    const auto clipped_a = a + (b - a) * first;
-    const auto clipped_b = a + (b - a) * last;
+    const auto clipped_a = interpolateClip(a, b, first);
+    const auto clipped_b = interpolateClip(a, b, last);
     if (clipped_a.w() <= 0.0F || clipped_b.w() <= 0.0F) return false;
     line = QLineF(toScreen(clipped_a), toScreen(clipped_b));
     return true;
@@ -96,9 +117,19 @@ class PointCloudProjection {
     return std::isfinite(p.x()) && std::isfinite(p.y()) &&
            std::isfinite(p.z()) && std::isfinite(p.w());
   }
-  static std::array<float, 6> planeDistances(const QVector4D& p) {
-    return {p.w() + p.x(), p.w() - p.x(), p.w() + p.y(),
-            p.w() - p.y(), p.w() + p.z(), p.w() - p.z()};
+  static std::array<double, 6> planeDistances(const QVector4D& p) {
+    const double w = p.w();
+    return {w + p.x(), w - p.x(), w + p.y(), w - p.y(), w + p.z(), w - p.z()};
+  }
+  static QVector4D interpolateClip(const QVector4D& a, const QVector4D& b, double t) {
+    // At high magnification a line can extend millions of pixels offscreen.
+    // Keep the intersection calculation in double precision until after clipping.
+    QVector4D result;
+    for (int i = 0; i < 4; ++i) {
+      result[i] = static_cast<float>(static_cast<double>(a[i]) +
+          (static_cast<double>(b[i]) - a[i]) * t);
+    }
+    return result;
   }
   QPointF toScreen(const QVector4D& p) const {
     return {(p.x() / p.w() + 1.0) * viewport_.width() * 0.5,

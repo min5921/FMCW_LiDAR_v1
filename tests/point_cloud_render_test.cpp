@@ -8,6 +8,7 @@
 #include <QWheelEvent>
 
 #include <array>
+#include <algorithm>
 #include <cmath>
 #include <iostream>
 #include <stdexcept>
@@ -55,8 +56,8 @@ std::shared_ptr<fmcw::PointCloudSnapshot> plane(float depth, bool anchor = false
   return snapshot(std::move(points));
 }
 
-void zoom(fmcw::PointCloudWidget& widget, int delta) {
-  QWheelEvent event({320, 240}, {320, 240}, {}, {0, delta}, Qt::NoButton,
+void zoom(fmcw::PointCloudWidget& widget, int delta, QPointF cursor = {320, 240}) {
+  QWheelEvent event(cursor, cursor, {}, {0, delta}, Qt::NoButton,
                     Qt::NoModifier, Qt::NoScrollPhase, false);
   QApplication::sendEvent(&widget, &event);
 }
@@ -120,6 +121,12 @@ int main(int argc, char** argv) {
     const bool painter = app.arguments().contains("--painter");
     fmcw::PointCloudWidget widget(nullptr, painter ? fmcw::PointCloudRenderer::Painter
                                                  : fmcw::PointCloudRenderer::Automatic);
+    const bool no_msaa = app.arguments().contains("--no-msaa");
+    if (no_msaa) {
+      auto format = widget.format();
+      format.setSamples(0);
+      widget.setFormat(format);
+    }
     widget.resize(640, 480);
     widget.setAxesVisible(false);
     widget.setPointSize(8);
@@ -127,7 +134,8 @@ int main(int argc, char** argv) {
     widget.setVerticalInterpolationFactor(1);
     widget.show();
     const auto directory = QCoreApplication::applicationDirPath() + "/projection-" +
-        (painter ? "painter-" : "gpu-") + QString::number(widget.devicePixelRatioF());
+        (painter ? "painter-" : no_msaa ? "gpu-no-msaa-" : "gpu-") +
+        QString::number(widget.devicePixelRatioF());
     check(QDir().mkpath(directory), "Cannot create screenshot directory");
     widget.setSnapshot(plane(0, true));
     const auto baseline = capture(widget, directory, "01_default");
@@ -140,7 +148,8 @@ int main(int argc, char** argv) {
     widget.clearSnapshot();
     widget.setSnapshot(plane(1));
     zoom(widget, 1440);
-    check(capture(widget, directory, "04_behind_camera").pixels == 0, "Behind-eye points were painted");
+    check(capture(widget, directory, "04_zoom_front_plane").pixels > 0,
+          "Zoom moved the camera through the front plane");
     widget.clearSnapshot();
     widget.setSnapshot(plane(0, true));
     widget.setSnapshot(plane(-10));
@@ -207,6 +216,82 @@ int main(int argc, char** argv) {
               std::abs(pan_right.bounds.center().x() - front.bounds.center().x() -
                        40.0 * widget.devicePixelRatioF()) <= 2,
           "Right-button pan must retain its direction and screen-space scale");
+    // The same geometry must not become darker when acquisition/draw order reverses.
+    std::vector<fmcw::PointXYZI> dense_points;
+    for (int row = -4; row <= 4; ++row) {
+      for (int column = -30; column <= 30; ++column) {
+        dense_points.push_back(point(column * 0.012F, row * 0.08F,
+                                     column * 0.01F));
+      }
+    }
+    dense_points.push_back(point(0, 0, -1));
+    widget.clearSnapshot();
+    widget.setSnapshot(snapshot(dense_points));
+    const auto ordered = capture(widget, directory, "19_dense_forward_order");
+    std::reverse(dense_points.begin(), dense_points.end());
+    widget.clearSnapshot();
+    widget.setSnapshot(snapshot(dense_points));
+    const auto reversed = capture(widget, directory, "20_dense_reverse_order");
+    const int margin = static_cast<int>(48 * widget.devicePixelRatioF());
+    const QRect cloud_area(0, margin, ordered.image.width(), ordered.image.height() - 2 * margin);
+    check(ordered.image.copy(cloud_area) == reversed.image.copy(cloud_area),
+          "Overlapping point brightness depends on draw order");
+    std::vector<fmcw::PointXYZI> symmetric_points;
+    for (int row = -4; row <= 4; ++row) {
+      for (int column = -40; column <= 40; ++column) {
+        fmcw::PointXYZI p;
+        p.x = column * 0.01F; p.y = 0; p.z = row * 0.08F;
+        p.intensity = 0;
+        p.valid = true;
+        symmetric_points.push_back(p);
+      }
+    }
+    widget.clearSnapshot();
+    widget.setSnapshot(snapshot(symmetric_points));
+    const auto from_left = capture(widget, directory, "23_view_left");
+    drag(widget, Qt::LeftButton, {-70.0 / 0.45, 0});
+    const auto from_right = capture(widget, directory, "24_view_right");
+    const auto blue_energy = [&](const QImage& image) {
+      double energy = 0;
+      for (int y = margin; y < image.height() - margin; ++y) {
+        for (int x = 0; x < image.width(); ++x) {
+          const auto color = image.pixelColor(x, y);
+          if (blue(color)) energy += color.blue() - color.green();
+        }
+      }
+      return energy;
+    };
+    const double left_energy = blue_energy(from_left.image);
+    const double right_energy = blue_energy(from_right.image);
+    std::cout << "Left/right brightness=" << left_energy << '/' << right_energy << '\n';
+    check(left_energy > 0 && std::abs(left_energy - right_energy) / left_energy < 0.05,
+          "Symmetric views of the same plane have different point brightness");
+    widget.clearSnapshot();
+    widget.setSnapshot(snapshot({point(0, 0, 0), point(0, 0, -1)}));
+    zoom(widget, 12000);
+    check(capture(widget, directory, "21_extended_zoom_in").pixels > 0,
+          "A centered point vanished beyond the former zoom limit");
+    zoom(widget, -24000);
+    check(capture(widget, directory, "22_extended_zoom_out").pixels > 0,
+          "A centered point vanished at extreme zoom-out");
+    widget.clearSnapshot();
+    widget.setSnapshot(snapshot({point(0.3F, 0.2F, 0, 0), point(0, 0, -1, 1)}));
+    drag(widget, Qt::RightButton, {80, -35});
+    const auto cursor_before = capture(widget, directory, "25_cursor_zoom_before");
+    check(cursor_before.pixels > 0, "Cursor zoom marker is missing");
+    const auto cursor = QRectF(cursor_before.bounds).center() / widget.devicePixelRatioF();
+    zoom(widget, 480, cursor);
+    const auto cursor_after = capture(widget, directory, "26_cursor_zoom_after");
+    check(cursor_after.pixels > 0 &&
+              QLineF(QRectF(cursor_before.bounds).center(), QRectF(cursor_after.bounds).center())
+                  .length() <= 2 * widget.devicePixelRatioF(),
+          "Wheel zoom failed to keep an off-center point under the pointer after panning");
+    zoom(widget, -480, cursor);
+    const auto cursor_restored = capture(widget, directory, "27_cursor_zoom_restored");
+    check(cursor_restored.pixels > 0 &&
+              QLineF(QRectF(cursor_before.bounds).center(), QRectF(cursor_restored.bounds).center())
+                  .length() <= widget.devicePixelRatioF(),
+          "Zooming back out failed to restore the off-center point");
     for (const auto& argument : app.arguments()) {
       if (!argument.startsWith("--sample=")) continue;
       fmcw::PointCloudReplayReader reader;

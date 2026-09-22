@@ -1,4 +1,5 @@
 #include "ui/point_cloud/point_cloud_widget.h"
+#include "ui/point_cloud/point_cloud_grid.h"
 
 #include <QFile>
 #include <QMouseEvent>
@@ -48,7 +49,9 @@ void main() {
     discard;
   }
   float coverage = 1.0 - smoothstep(0.38, 0.5, radius);
-  fragment_color = vec4(vertex_color.rgb, vertex_color.a * coverage);
+  // Interpolated rows retain a fixed dimmer color, without transparent layers.
+  vec3 color = mix(vec3(0.035, 0.055, 0.063), vertex_color.rgb, vertex_color.a);
+  fragment_color = vec4(color, coverage);
 }
 )glsl";
 
@@ -96,10 +99,11 @@ PointCloudWidget::PointCloudWidget(QWidget* parent, PointCloudRenderer renderer)
   surface_format.setProfile(open_gl_es ? QSurfaceFormat::NoProfile
                                        : QSurfaceFormat::CoreProfile);
   surface_format.setDepthBufferSize(24);
+  surface_format.setSamples(4);
   setFormat(surface_format);
   setMinimumSize(480, 320);
   setFocusPolicy(Qt::StrongFocus);
-  setToolTip("Drag to rotate, right-drag to pan, and use the wheel to zoom");
+  setToolTip("Drag to rotate, right-drag to pan, and use the wheel to zoom at the pointer");
 }
 
 PointCloudWidget::~PointCloudWidget() {
@@ -156,6 +160,12 @@ void PointCloudWidget::setPointSize(float pixels) {
 
 void PointCloudWidget::setAxesVisible(bool visible) {
   axes_visible_ = visible;
+  update();
+}
+
+void PointCloudWidget::setGridSpacing(float meters) {
+  if (!std::isfinite(meters) || meters <= 0.0F) return;
+  grid_spacing_m_ = meters;
   update();
 }
 
@@ -285,9 +295,17 @@ void PointCloudWidget::drawGpuPoints(const PointCloudProjection& projection) {
     return;
   }
   glEnable(GL_DEPTH_TEST);
+  glDepthMask(GL_TRUE);
   glDepthFunc(GL_LESS);
-  glEnable(GL_BLEND);
-  glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+  // Alpha blending plus depth writes made dense rows depend on draw order.
+  // Coverage is tested per MSAA sample; each sample keeps the nearest opaque
+  // point. Without MSAA, use opaque discs instead of reintroducing that bug.
+  glDisable(GL_BLEND);
+  GLint samples = 0;
+  glGetIntegerv(GL_SAMPLES, &samples);
+  if (samples > 1) glEnable(GL_SAMPLE_ALPHA_TO_COVERAGE);
+  // Coverage controls sample occupancy, not the widget's compositing opacity.
+  glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_FALSE);
 #ifdef GL_PROGRAM_POINT_SIZE
   if (context() != nullptr && !context()->isOpenGLES()) {
     glEnable(GL_PROGRAM_POINT_SIZE);
@@ -306,12 +324,13 @@ void PointCloudWidget::drawGpuPoints(const PointCloudProjection& projection) {
   }
   point_program_->release();
 
+  glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
 #ifdef GL_PROGRAM_POINT_SIZE
   if (context() != nullptr && !context()->isOpenGLES()) {
     glDisable(GL_PROGRAM_POINT_SIZE);
   }
 #endif
-  glDisable(GL_BLEND);
+  glDisable(GL_SAMPLE_ALPHA_TO_COVERAGE);
   glDisable(GL_DEPTH_TEST);
 }
 
@@ -339,7 +358,11 @@ void PointCloudWidget::drawPainterFallback(
   });
   for (const auto& point : projected) {
     const auto& vertex = *point.vertex;
-    painter.setBrush(QColor::fromRgbF(vertex.r, vertex.g, vertex.b, vertex.alpha));
+    const auto shade = [&](float value, float background) {
+      return background + (value - background) * vertex.alpha;
+    };
+    painter.setBrush(QColor::fromRgbF(shade(vertex.r, 0.035F),
+                                     shade(vertex.g, 0.055F), shade(vertex.b, 0.063F)));
     painter.drawEllipse(point.screen, point_radius, point_radius);
   }
 }
@@ -348,7 +371,6 @@ void PointCloudWidget::paintGL() {
   const PointCloudProjection projection(camera_, size(),
       static_cast<float>(2.0 * display_radius_ / extent_));
   glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-  drawGpuPoints(projection);
 
   QPainter painter(this);
   painter.setRenderHint(QPainter::Antialiasing);
@@ -364,15 +386,33 @@ void PointCloudWidget::paintGL() {
     }
   };
 
-  painter.setPen(QPen(QColor(52, 72, 78, 120), 1.0));
-  for (int index = -4; index <= 4; ++index) {
-    const auto coordinate = static_cast<float>(index) / 4.0F;
-    const auto x = center_x_ + coordinate * extent_ * 0.5F;
-    const auto y = center_y_ + coordinate * extent_ * 0.5F;
-    drawWorldLine({x, center_y_ - extent_ * 0.5F, 0.0F},
-                  {x, center_y_ + extent_ * 0.5F, 0.0F});
-    drawWorldLine({center_x_ - extent_ * 0.5F, y, 0.0F},
-                  {center_x_ + extent_ * 0.5F, y, 0.0F});
+  const PointCloudGrid grid(extent_ * 0.5F, grid_spacing_m_);
+  std::vector<QRectF> tick_label_bounds;
+  for (int index = -grid.half_cells; index <= grid.half_cells; ++index) {
+    const bool major = index % 5 == 0;
+    painter.setPen(QPen(major ? QColor(77, 100, 107, 170) : QColor(52, 72, 78, 120), 1.0));
+    const auto coordinate = grid.coordinate(index);
+    drawWorldLine({coordinate, -grid.radius(), 0.0F}, {coordinate, grid.radius(), 0.0F});
+    drawWorldLine({-grid.radius(), coordinate, 0.0F}, {grid.radius(), coordinate, 0.0F});
+    if (axes_visible_ && index != 0 && (major || grid.half_cells < 5)) {
+      painter.setPen(QColor("#82969c"));
+      const auto label = QString("%1 m").arg(coordinate, 0, 'g', 5);
+      for (const auto position : {QVector3D(coordinate, 0, 0), QVector3D(0, coordinate, 0)}) {
+        QPointF screen;
+        float depth = 0.0F;
+        if (projection.projectPoint(normalize(position), screen, depth)) {
+          const auto baseline = screen + QPointF(4, -5);
+          const QRectF bounds = painter.fontMetrics().boundingRect(label)
+              .translated(baseline.toPoint()).adjusted(-3, -2, 3, 2);
+          if (QRectF(8, 48, width() - 16, height() - 92).contains(bounds) &&
+              std::none_of(tick_label_bounds.begin(), tick_label_bounds.end(),
+                           [&](const QRectF& other) { return other.intersects(bounds); })) {
+            painter.drawText(baseline, label);
+            tick_label_bounds.push_back(bounds);
+          }
+        }
+      }
+    }
   }
 
   if (axes_visible_) {
@@ -386,11 +426,18 @@ void PointCloudWidget::paintGL() {
         painter.drawText(screen + QPointF(4.0, 0.0), label);
       }
     };
-    drawAxis({axis_length, 0.0F, 0.0F}, QColor("#e05a67"), "X");
-    drawAxis({0.0F, axis_length, 0.0F}, QColor("#67c98c"), "Y");
-    drawAxis({0.0F, 0.0F, axis_length}, QColor("#55aee6"), "Z");
+    drawAxis({axis_length, 0.0F, 0.0F}, QColor("#e05a67"), "X (m)");
+    drawAxis({0.0F, axis_length, 0.0F}, QColor("#67c98c"), "Y (m)");
+    drawAxis({0.0F, 0.0F, axis_length}, QColor("#55aee6"), "Z (m)");
   }
 
+  // Keep the reference grid behind the points in both rendering paths.
+  if (gpu_renderer_ready_) {
+    painter.beginNativePainting();
+    glClear(GL_DEPTH_BUFFER_BIT);
+    drawGpuPoints(projection);
+    painter.endNativePainting();
+  }
   if (!gpu_renderer_ready_) {
     drawPainterFallback(painter, projection);
   }
@@ -406,15 +453,11 @@ void PointCloudWidget::paintGL() {
             .arg(stats.displayed_points)
       : QString("Waiting for complete raster frame");
   painter.drawText(QRect(14, 12, width() - 28, 24), Qt::AlignLeft | Qt::AlignVCenter, frame_text);
-  if (axes_visible_) {
-    painter.setPen(QColor("#71858b"));
-    const auto renderer_text = gpu_renderer_ready_
-        ? QString("X forward | Y left | Z up | meters | GPU VBO point sprites")
-        : QString("X forward | Y left | Z up | meters | CPU fallback: %1")
-              .arg(gpu_renderer_error_);
-    painter.drawText(QRect(14, height() - 34, width() - 28, 22),
-                     Qt::AlignLeft | Qt::AlignVCenter, renderer_text);
-  }
+  painter.setPen(QColor("#82969c"));
+  const auto scale_text = QString("Grid: %1 m/cell | XY ground (Z = 0) | Zoom: %2x")
+      .arg(grid.spacing_m, 0, 'g', 5).arg(camera_.zoom, 0, 'g', 5);
+  painter.drawText(QRect(14, height() - 34, width() - 28, 22),
+                   Qt::AlignLeft | Qt::AlignVCenter, scale_text);
 }
 
 void PointCloudWidget::mousePressEvent(QMouseEvent* event) {
@@ -437,7 +480,7 @@ void PointCloudWidget::mouseMoveEvent(QMouseEvent* event) {
 }
 
 void PointCloudWidget::wheelEvent(QWheelEvent* event) {
-  camera_.zoomBy(static_cast<float>(event->angleDelta().y()));
+  camera_.zoomAt(static_cast<float>(event->angleDelta().y()), event->position(), size());
   event->accept();
   update();
 }

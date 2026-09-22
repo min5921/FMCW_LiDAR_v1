@@ -27,6 +27,7 @@ HOST_ROLES = {
     'ui/plots/plot_widgets': '선 그래프·B-scan heatmap·up/down 구간 표시와 축·범위·갱신 통계 처리',
     'ui/point_cloud/point_cloud_widget': '3D 점군 위젯, OpenGL/대체 표시 경로와 마우스 조작 처리',
     'ui/point_cloud/point_cloud_camera': '3D 카메라의 회전·이동·확대와 투영·화면 좌표 계산. 헤더 안에 구현 포함',
+    'ui/point_cloud/point_cloud_grid': '미터 단위 고정 격자 좌표·표시 범위 계산. 확대·Fit View와 관계없이 한 칸 간격을 유지',
     'core/acquisition/acquisition_session': 'digitizer·MCU·EDFA의 계측 설정·연결·준비·트리거·데이터 수신·정지 관리',
     'core/acquisition/continuous_acquisition_worker': '별도 worker에서 연속 수집하고 RAW 배치를 전달하며 중단·종료 상태 관리',
     'core/acquisition/raw_frame_batch_pool': 'RAW 배치를 담을 메모리 버퍼의 재사용 관리',

@@ -88,12 +88,16 @@ if(FMCW_BUILD_QT_APPS)
         ENVIRONMENT "QT_SCALE_FACTOR=${_scale}" RUN_SERIAL TRUE)
     endforeach()
   endforeach()
+  add_test(NAME fmcw_point_cloud_gpu_no_msaa COMMAND fmcw_point_cloud_render_tests --no-msaa)
+  set_tests_properties(fmcw_point_cloud_gpu_no_msaa PROPERTIES TIMEOUT 30 SKIP_RETURN_CODE 77
+    ENVIRONMENT "QT_SCALE_FACTOR=1" RUN_SERIAL TRUE)
   if(WIN32)
     get_target_property(_fmcw_qt_core Qt6::Core IMPORTED_LOCATION_RELEASE)
     get_filename_component(_fmcw_qt_bin "${_fmcw_qt_core}" DIRECTORY)
     string(REPLACE ";" "\\;" _fmcw_ui_test_path "${_fmcw_qt_bin};$ENV{PATH}")
     foreach(_qt_test IN ITEMS fmcw_basic_ui_tests fmcw_point_cloud_camera_tests
         fmcw_point_cloud_gpu_1x fmcw_point_cloud_gpu_2x
+        fmcw_point_cloud_gpu_no_msaa
         fmcw_point_cloud_painter_1x fmcw_point_cloud_painter_2x)
       set_property(TEST ${_qt_test} APPEND PROPERTY ENVIRONMENT
         "PATH=${_fmcw_ui_test_path}" "QT_PLUGIN_PATH=${_fmcw_qt_bin}/../plugins")

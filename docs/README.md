@@ -11,6 +11,7 @@
 | VS Code 빨간 밑줄·`nmake` 오류 | [VS Code 설정](guides/windows_setup_ko.md#vscode) |
 | Basic·CenterPoint·PCDReplay 구분 | [작업 공간 관리](guides/workspaces_ko.md) |
 | 실행 파일·배포 ZIP·이전 패키지 위치 | [배포 파일 안내](guides/package_layout.md) |
+| 3D 격자의 미터 간격·밝기·확대 | [3D 화면 조작](guides/point_cloud_view_ko.md) |
 | Jetson 빌드·배포 | [Jetson 매뉴얼](../deploy/jetson/README_KO.md) |
 | MCU 프로젝트 열기 | [펌웨어 README](../src/firmware/mcu/FMCW_LiDAR_MCU/README.md) |
 

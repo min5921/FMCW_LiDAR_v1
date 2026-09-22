@@ -172,6 +172,7 @@ PCD 파일 열기 옵션은 기본 제품에서 거부합니다. 시작 파일�
 | `plots/plot_widgets.h / .cpp` | 선 그래프, B-scan heatmap, up/down 구간 표시 위젯. 축·범위·그리기와 화면 갱신 통계 처리 |
 | `point_cloud/point_cloud_widget.h / .cpp` | 점군을 화면에 그리는 3D 위젯. OpenGL 표시와 대체 표시 경로, 사용자 조작 처리 |
 | `point_cloud/point_cloud_camera.h` | 3D 화면의 시점·회전·이동·확대 등에 사용하는 카메라 계산 |
+| `point_cloud/point_cloud_grid.h` | 화면 배율과 독립적인 미터 격자 좌표·표시 범위 계산 |
 
 여기의 “3D 점군 표시”는 **실시간 FMCW 계산 결과 표시**에도 필요합니다. PCD 파일 재생 기능과 동일한 뜻이 아닙니다.
 

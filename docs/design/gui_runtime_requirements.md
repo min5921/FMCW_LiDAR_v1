@@ -188,6 +188,8 @@ Peak Analysis 탭은 FFT spectrum을 다시 그리지 않는다. 다음 두 plot
 - auto/manual range, cursor readout, plot save를 공통 plot toolbar로 제공한다.
 - 3D는 Qt/OpenGL-backed point renderer를 사용하고 acquisition과 독립 rate로 갱신한다. 좌표계는 `X forward, Y left, Z up`으로 고정하고 축 표시를 끄고 켤 수 있다.
 - 3D spatial bounds는 새 session의 첫 complete frame에서 한 번 맞춘 뒤 고정하고, 사용자가 Fit View를 실행할 때만 다시 계산한다. 물체 거리 변화만으로 view center/scale이 움직여서는 안 된다.
+- 3D 격자는 원점 기준 XY 바닥면에 선택한 미터 간격(기본 1 m)으로 표시한다. Fit View와 줌으로 간격을 재정의하지 않는다. 줌은 카메라 이동 대신 투영 배율을 조절하고, 1e-6~1e6의 수치 보호 범위에서 동작한다. [사용 안내](../guides/point_cloud_view_ko.md)를 참고한다.
+- GPU 점 표시의 가장자리는 MSAA sample coverage와 깊이 검사로 처리하고 반투명 혼합에 따른 그리기 순서 의존성을 피한다. MSAA가 없으면 불투명 원형 점을 사용한다. 격자·축은 점 뒤에 그리며, 보간점은 고정 색 감쇠로 구분한다.
 - 3D 기능은 Phase 6의 실제 동작 tab으로 제공하며 빈 tab이나 disabled placeholder를 노출하지 않는다.
 - Processing의 `Batch Diagnostics` 상세 숫자는 Processing page가 보일 때만 Qt label에 반영한다. 다른 page에서는 마지막 표시값을 유지하되 signal processing, latency 계측, queue 감시와 STOP 정책은 계속 동작한다.
 

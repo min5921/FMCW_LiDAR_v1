@@ -265,6 +265,7 @@ if(FMCW_BUILD_QT_APPS)
     ui/point_cloud/point_cloud_widget.cpp
     ui/point_cloud/point_cloud_widget.h
     ui/point_cloud/point_cloud_camera.h
+    ui/point_cloud/point_cloud_grid.h
     ui/plots/plot_widgets.cpp
     ui/plots/plot_widgets.h
     application/replay_setup_loader.cpp

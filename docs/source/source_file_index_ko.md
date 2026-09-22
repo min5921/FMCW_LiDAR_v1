@@ -2,7 +2,7 @@
 
 [처음 읽는 설명서](source_guide_ko.md) · [짧은 소스 지도](../../src/README.md)
 
-기준: 2026-09-22 정리 이후 기본 작업 공간. **`src/` 파일 224개**를 각각 설명합니다.
+기준: 2026-09-22 정리 이후 기본 작업 공간. **`src/` 파일 225개**를 각각 설명합니다.
 
 파일명은 클릭하면 해당 소스로 이동합니다. `Ctrl+F`로 파일명이나 역할을 찾을 수 있습니다.
 제품 코드와 MCU 코드, ST/ARM 제공 코드를 구분했습니다. 제공 파일의 존재가 실제 기능 사용을 뜻하지는 않습니다.
@@ -14,7 +14,7 @@ Git 대상 소스를 기준으로 하며 삭제된 옛 경로·빌드 산출물�
 | MCU 설정/문서 | 11 |
 | MCU 시작 코드 | 1 |
 | MCU 프로젝트 코드 | 19 |
-| PC/Jetson 제품 코드 | 98 |
+| PC/Jetson 제품 코드 | 99 |
 | ST 제공 HAL/LL | 63 |
 | 빌드 설정 | 1 |
 | 안내 문서 | 1 |
@@ -510,6 +510,7 @@ Git 대상 소스를 기준으로 하며 삭제된 옛 경로·빌드 산출물�
 | 파일 | 구분 | 하는 일 |
 |---|---|---|
 | [point_cloud_camera.h](../../src/ui/point_cloud/point_cloud_camera.h) | PC/Jetson 제품 코드 | 3D 카메라의 회전·이동·확대와 투영·화면 좌표 계산. 헤더 안에 구현 포함 · 헤더: 선언·자료형·상수/inline 코드 |
+| [point_cloud_grid.h](../../src/ui/point_cloud/point_cloud_grid.h) | PC/Jetson 제품 코드 | 미터 단위 고정 격자 좌표·표시 범위 계산. 확대·Fit View와 관계없이 한 칸 간격을 유지 · 헤더: 선언·자료형·상수/inline 코드 |
 | [point_cloud_widget.cpp](../../src/ui/point_cloud/point_cloud_widget.cpp) | PC/Jetson 제품 코드 | 3D 점군 위젯, OpenGL/대체 표시 경로와 마우스 조작 처리 · C++ 구현 |
 | [point_cloud_widget.h](../../src/ui/point_cloud/point_cloud_widget.h) | PC/Jetson 제품 코드 | 3D 점군 위젯, OpenGL/대체 표시 경로와 마우스 조작 처리 · 헤더: 선언·자료형·상수/inline 코드 |
 
