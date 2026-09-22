@@ -10,7 +10,7 @@ $repositoryRoot = [System.IO.Path]::GetFullPath((Join-Path $scriptDirectory "..\
 $packageRoot = [System.IO.Path]::GetFullPath((Join-Path $repositoryRoot "build\package"))
 
 if ([string]::IsNullOrWhiteSpace($Destination)) {
-    $Destination = Join-Path $packageRoot "FMCW_LiDAR_Jetson_Source"
+    $Destination = Join-Path $packageRoot "Jetson\FMCW_LiDAR_Jetson_Source"
 }
 
 $destinationPath = [System.IO.Path]::GetFullPath($Destination)
@@ -26,7 +26,10 @@ if (Test-Path -LiteralPath $destinationPath) {
     }
     Remove-Item -LiteralPath $destinationPath -Recurse -Force
 }
+New-Item -ItemType Directory -Path (Split-Path -Parent $destinationPath) -Force | Out-Null
 New-Item -ItemType Directory -Path $destinationPath | Out-Null
+Copy-Item -LiteralPath (Join-Path $repositoryRoot "docs\package_layout.md") `
+    -Destination (Join-Path $packageRoot "README.md") -Force
 
 $files = @(
     ".gitattributes",
@@ -78,7 +81,8 @@ $documents = @(
     "phase_status.md",
     "runtime_contract_v2.md",
     "v2_review_completion.md",
-    "pcd_replay_worktree.md"
+    "pcd_replay_worktree.md",
+    "package_layout.md"
 )
 foreach ($document in $documents) {
     Copy-Item -LiteralPath (Join-Path $repositoryRoot "docs\$document") -Destination $documentationTarget
@@ -137,11 +141,12 @@ $archive = [System.IO.Compression.ZipFile]::Open(
     $zipPath,
     [System.IO.Compression.ZipArchiveMode]::Create
 )
+$archiveParent = Split-Path -Parent $destinationPath
 try {
     Get-ChildItem -LiteralPath $destinationPath -Recurse -File |
         Sort-Object FullName |
         ForEach-Object {
-            $relative = $_.FullName.Substring($packageRoot.Length + 1).Replace("\", "/")
+            $relative = $_.FullName.Substring($archiveParent.Length + 1).Replace("\", "/")
             $null = [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile(
                 $archive,
                 $_.FullName,

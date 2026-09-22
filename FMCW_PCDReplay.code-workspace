@@ -1,0 +1,12 @@
+{
+  "folders": [
+    {
+      "name": "FMCW PCDReplay",
+      "path": "."
+    }
+  ],
+  "settings": {
+    "window.title": "FMCW PCDReplay \u2014 ${activeEditorShort}",
+    "cmake.useCMakePresets": "always"
+  }
+}

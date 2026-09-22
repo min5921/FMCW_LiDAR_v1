@@ -1,4 +1,16 @@
-﻿# FMCW LiDAR v2
+# FMCW LiDAR — PCDReplay
+
+이 폴더는 **기본 계측 + PCD/pointcloud 파일 재생; 객체 탐지 제외** 프로젝트입니다. 전용 브랜치는 `codex/pcd-replay`입니다.
+
+- [이 작업 공간의 시작 안내](WORKSPACE.md)
+- [세 프로젝트 관리 규칙과 다른 PC 설정](docs/workspaces_ko.md)
+- 현재 Windows 실행본: `build/package/Windows-PCDReplay/FMCW_LiDAR.exe`
+
+아래는 분리 이전의 공통 개발 기록입니다. 과거 브랜치명·패키지 경로·기능 설명보다 위 작업 공간 안내를 우선합니다.
+
+---
+
+# FMCW LiDAR v2
 
 FMCW LiDAR 시스템을 Windows와 Jetson에서 함께 운용하기 위한 프로젝트입니다. v2는 기존 측정/파일 규약을 유지하면서 종료·기록·재생 신뢰성과 실제 runtime 검증을 개선합니다.
 
@@ -60,17 +72,17 @@ Phase별로 구현 단위를 나누고, 각 Phase가 끝날 때 commit/push한�
 
 Run the packaged application by double-clicking:
 
-`build/package/FMCW_LiDAR_v2/FMCW_LiDAR.exe`
+`build/package/Windows/FMCW_LiDAR.exe`
 
-Keep the entire package folder together. Check `BUILD_FEATURES.txt` for included backends and source identity. Old package folders are preserved; their executables are not updated by a source-only build.
+Keep the entire Windows folder together. Check `BUILD_FEATURES.txt` for included backends and source identity. Previous local packages are kept outside the active package folder in `build/package_archive`. See [Package Layout](docs/package_layout.md).
 
 Create the self-contained Jetson source folder and ZIP on Windows with:
 
 ```powershell
-.\deploy\jetson\export_source.ps1 -Destination build/package/FMCW_LiDAR_v2_Jetson_Source
+.\deploy\jetson\export_source.ps1
 ```
 
-After copying `build/package/FMCW_LiDAR_v2_Jetson_Source` to the Jetson, edit
+After copying `build/package/Jetson/FMCW_LiDAR_Jetson_Source` to the Jetson, edit
 `deploy/jetson/jetson.env` and run:
 
 ```bash

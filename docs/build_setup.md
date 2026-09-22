@@ -51,8 +51,8 @@ For transfer to another Jetson, the Windows workspace can create a source-only b
 This produces:
 
 ```text
-build/package/FMCW_LiDAR_Jetson_Source
-build/package/FMCW_LiDAR_Jetson_Source.zip
+build/package/Jetson/FMCW_LiDAR_Jetson_Source
+build/package/Jetson/FMCW_LiDAR_Jetson_Source.zip
 ```
 
 On the Jetson, configure `deploy/jetson/jetson.env` and run one command:
@@ -142,7 +142,7 @@ CUDA/cuFFT is enabled when `nvcc` and `CUDAToolkit` are found. On Windows the bu
 
 The Windows Qt target is linked with the `Windows GUI` subsystem, so launching `fmcw_lidar_windows.exe` does not create a separate command window. Local SDK paths belong in ignored `CMakeUserPresets.json`; this workspace uses the `windows-local-debug` preset for ATS-SDK 25.1.0 and FFTW.
 
-The executable under `build/preset-windows-msvc-release/src` is a development build artifact and is not standalone. After a Release build, run `deploy/windows/package.ps1` to create `build/package/FMCW_LiDAR/FMCW_LiDAR.exe` together with Qt, FFTW/cuFFT, ATS API, platform plugins, and configuration files. Operators launch only the packaged executable; the packaging script verifies `Qt6Core.dll`, `Qt6Widgets.dll`, `platforms/qwindows.dll`, and a packaged smoke test before reporting success.
+The executable under `build/preset-windows-msvc-release/src` is a development build artifact and is not standalone. After a Release build, run `deploy/windows/package.ps1` to create `build/package/Windows/FMCW_LiDAR.exe` together with Qt, FFTW/cuFFT, ATS API, platform plugins, and configuration files. Operators launch only the packaged executable; the packaging script verifies `Qt6Core.dll`, `Qt6Widgets.dll`, `platforms/qwindows.dll`, and a packaged smoke test before reporting success. Keep previous local versions outside the active folder in `build/package_archive`; see `docs/package_layout.md`.
 
 ## Current Workspace Check
 

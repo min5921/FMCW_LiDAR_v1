@@ -45,7 +45,7 @@ generation. Acquisition start cancels file replay so live and saved frames do no
 
 ## Build And Verification
 
-- Windows output: `build/package/FMCW_LiDAR_PCDReplay/FMCW_LiDAR.exe`.
+- Windows output: `build/package/Windows/FMCW_LiDAR.exe`.
 - Jetson uses `deploy/jetson/build.sh`, Qt >= 6.2, CMake >= 3.18, CUDA/cuFFT,
   and the configured Alazar SDK. CenterPoint, cuDNN and model weights are not required.
 - Reader tests cover ASCII XYZ PCD, binary XYZI PCD, XYZIV text and multi-frame binary.
@@ -99,10 +99,14 @@ Screenshots are generated under `build/replay-release/tests/projection-*`.
 The render test also accepts `--sample=<path>` for optional local-data screenshots;
 normal CTest cases have no external dataset or hardware dependency.
 
-Projection and orbit-direction fix packages are separate from the previously opened executable:
+The confirmed OrbitFix executable is kept in the stable platform layout. Previous
+local package folders are preserved in `build/package_archive/2026-09-08`:
 
-- Windows: `build/package/FMCW_LiDAR_PCDReplay_OrbitFix/FMCW_LiDAR.exe`.
-- Jetson sources: `build/package/FMCW_LiDAR_PCDReplay_Jetson_Source_OrbitFix.zip`.
+- Windows: `build/package/Windows/FMCW_LiDAR.exe`.
+- Jetson sources: `build/package/Jetson/FMCW_LiDAR_Jetson_Source.zip`.
   Build with the included `deploy/jetson/build.sh`. These use the same shared
   camera code and Qt 6.2-compatible APIs; Jetson hardware execution is not verified
   by the Windows checks above.
+
+See `docs/package_layout.md` for required runtime files, archive policy and the
+location of replay samples. Package layout changes do not alter the executable.

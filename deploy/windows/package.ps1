@@ -1,6 +1,6 @@
 param(
-  [string]$BuildDirectory = "build/preset-windows-msvc-release/src",
-  [string]$OutputDirectory = "build/package/FMCW_LiDAR"
+  [string]$BuildDirectory = "build/preset-windows-pcd/src",
+  [string]$OutputDirectory = "build/package/Windows-PCDReplay"
 )
 
 Set-StrictMode -Version Latest
@@ -44,6 +44,9 @@ if (-not $qtDeploy) {
 }
 
 New-Item -ItemType Directory -Path $outputRoot -Force | Out-Null
+New-Item -ItemType Directory -Path (Join-Path $repoRoot "build/package") -Force | Out-Null
+Copy-Item -LiteralPath (Join-Path $repoRoot "docs/package_layout.md") `
+    -Destination (Join-Path $repoRoot "build/package/README.md") -Force
 Copy-Item -LiteralPath $sourceExe -Destination $packagedExe -Force
 Copy-Item -LiteralPath (Join-Path (Split-Path -Parent $buildRoot) "BUILD_FEATURES.txt") -Destination $outputRoot -Force
 Copy-Item -LiteralPath (Join-Path (Split-Path -Parent $buildRoot) "BUILD_SOURCES.sha256") -Destination $outputRoot -Force

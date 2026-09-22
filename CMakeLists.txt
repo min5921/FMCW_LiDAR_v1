@@ -1,10 +1,12 @@
 cmake_minimum_required(VERSION 3.18)
 
-project(FMCW_LiDAR_v2
+project(FMCW_LiDAR_PCDReplay
   VERSION 0.2.0
   DESCRIPTION "FMCW LiDAR control, acquisition, processing, and visualization"
   LANGUAGES CXX
 )
+
+set(FMCW_WORKSPACE_VARIANT "PCDReplay")
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

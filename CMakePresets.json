@@ -55,6 +55,19 @@
         "FMCW_WITH_CUDA": "ON",
         "FMCW_REQUIRE_CUDA": "ON"
       }
+    },
+    {
+      "name": "windows-pcd",
+      "displayName": "PCDReplay Windows Release",
+      "inherits": "windows-msvc-release",
+      "cacheVariables": {
+        "FMCW_WITH_CENTERPOINT": "OFF",
+        "FMCW_WITH_FFTW": "ON",
+        "FMCW_REQUIRE_FFTW": "ON",
+        "FMCW_WITH_CUDA": "OFF",
+        "FMCW_REQUIRE_CUDA": "OFF",
+        "FMCW_WITH_ALAZAR": "OFF"
+      }
     }
   ],
   "buildPresets": [
@@ -69,6 +82,10 @@
     {
       "name": "jetson-release",
       "configurePreset": "jetson-release"
+    },
+    {
+      "name": "windows-pcd",
+      "configurePreset": "windows-pcd"
     }
   ],
   "testPresets": [
@@ -89,6 +106,13 @@
     {
       "name": "jetson-release",
       "configurePreset": "jetson-release",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "windows-pcd",
+      "configurePreset": "windows-pcd",
       "output": {
         "outputOnFailure": true
       }
