@@ -114,8 +114,8 @@ CPU 개발본은 별도 폴더에서 직접 실행해 계측용 실행본과 구
 <a id="vscode"></a>
 ## 7. VS Code가 헤더를 인식하게 하기
 
-1. 작업을 저장하고 기존 VS Code 창을 모두 닫습니다.
-2. 위의 **x64 개발 환경**에서 Qt·FFTW 경로를 지정하고 `code FMCW_Basic.code-workspace`를 실행합니다.
+1. PC에 **MSVC x64 빌드 도구**와 Qt MSVC 패키지가 설치되어 있는지 확인합니다.
+2. `FMCW_Basic.code-workspace`를 엽니다. CMake Tools가 preset의 x64 정보와 작업 영역 설정을 사용해 Visual Studio 개발 환경을 불러옵니다.
 3. VS Code에 **C/C++**와 **CMake Tools** 확장을 설치합니다.
 4. `Ctrl+Shift+P` → **CMake: Select Configure Preset**에서 사용할 구성을 선택합니다.
 5. **CMake: Configure**를 실행합니다. 처음 구성하는 PC라면 5절의 명령으로 SDK 경로를 먼저 지정할 수 있습니다.
@@ -127,13 +127,15 @@ CPU 개발본은 별도 폴더에서 직접 실행해 계측용 실행본과 구
 
 프로젝트 전체 설정을 사용하려면 `src/`만 열지 말고 **`FMCW_Basic.code-workspace`를 작업 영역으로 엽니다**.
 이 작업 영역에는 CMake의 경로 정보를 C/C++ 코드 분석에 연결하는 설정이 있습니다.
+각 preset의 빌드 폴더에는 `compile_commands.json`도 생성됩니다. CMake 연동을 사용할 수 없을 때는
+**C/C++: Edit Configurations (UI)**의 **Compile commands**에 해당 파일을 지정하면 Qt 헤더와 컴파일 옵션을 읽을 수 있습니다.
 
 Configure가 성공했는데 이전 밑줄이 남으면 **C/C++: Reset IntelliSense Database**를 실행합니다.
 Configure 자체가 실패했다면 먼저 아래 오류를 해결합니다.
 
 | 증상 | 먼저 확인할 것 |
 |---|---|
-| `nmake` 또는 `cl`을 찾지 못함 | VS Code를 x64 개발용 창에서 새로 실행했는지 |
+| `nmake` 또는 `cl`을 찾지 못함 | 작업 영역의 `cmake.useVsDeveloperEnvironment`가 `always`인지 확인. 계속 실패하면 기존 VS Code 창을 닫고 x64 개발용 창에서 다시 실행 |
 | Qt6를 찾지 못함 | `CMAKE_PREFIX_PATH`가 실제 Qt MSVC 설치 위치인지 |
 | FFTW를 찾지 못함 | `FFTW_ROOT`와 `fftw3.h`, 단정밀도 `fftw3f` 라이브러리 |
 | CUDA compiler/cuFFT를 찾지 못함 | CUDA Toolkit 설치와 해당 MSVC·GPU에 맞는 구성. CPU 개발이면 CPU preset 사용 |

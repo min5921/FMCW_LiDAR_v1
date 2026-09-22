@@ -8,6 +8,7 @@
   "settings": {
     "window.title": "FMCW Basic \u2014 ${activeEditorShort}",
     "cmake.useCMakePresets": "always",
+    "cmake.useVsDeveloperEnvironment": "always",
     "C_Cpp.default.configurationProvider": "ms-vscode.cmake-tools"
   }
 }
