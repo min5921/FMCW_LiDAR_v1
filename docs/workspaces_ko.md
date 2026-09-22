@@ -78,7 +78,7 @@ ctest --preset windows-centerpoint
 | `FMCW_LiDAR_CenterPoint` | `build/package/Windows-CenterPoint/FMCW_LiDAR.exe` |
 | `FMCW_LiDAR_PCDReplay` | `build/package/Windows-PCDReplay/FMCW_LiDAR.exe` |
 
-실행 창 제목과 패키지의 `BUILD_FEATURES.txt`에서 `WorkspaceVariant`를 확인한다. 이전 package 폴더와 기존 실행 파일은 보존되며 새 소스 빌드로 자동 갱신되지 않는다.
+실행 창 제목과 패키지의 `BUILD_FEATURES.txt`에서 `WorkspaceVariant`를 확인한다. 이전 package_archive 폴더와 기존 실행 파일은 보존되며 새 소스 빌드로 자동 갱신되지 않는다.
 패키징은 해당 workspace preset의 빌드를 사용한다. Jetson은 각 폴더의 `deploy/jetson/build.sh`를 사용하며 기본/PCD에서 CenterPoint를 켤 수 없다.
 
 ## 다른 PC로 가져오기
@@ -102,3 +102,9 @@ git worktree add -b codex/pcd-replay ../FMCW_LiDAR_PCDReplay origin/codex/pcd-re
 - 분리 전 전체 ref bundle, working/staged patch, 변경 파일 사본·SHA256은 기본 폴더의 `build/workspace-separation-backup-20260922/`에 있다.
 - 기본 폴더의 원래 미커밋 source는 `Preserve main source before three-workspace separation 2026-09-22`라는 stash에도 보존했다. 새 제품 브랜치에 무조건 stash pop하지 않는다.
 - IDE 개인 설정인 `legacy/MEMS_control_v3/.settings/language.settings.xml` 변경은 제품 커밋에 넣지 않고 원래 폴더에 남겼다.
+
+## 파일 정리 이후의 시작 위치
+
+각 제품 루트의 `RUN.cmd`로 실행하고, `docs/README.md`에서 문서를 찾습니다.
+과거 실행본은 `build/package_archive/2026-09-22/`, 검증·작업 자료는 `build/archive/2026-09-22/`에 있습니다.
+예전 CMake cache는 제거했으며 현재 제품 preset의 cache는 유지했습니다. [정리 기록](file_organization_2026-09-22.md)을 참고하세요.
