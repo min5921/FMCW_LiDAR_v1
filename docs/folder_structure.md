@@ -1,4 +1,6 @@
-﻿# Folder Structure
+> 현재 `PCDReplay` 제품의 폴더별 진입점은 [루트 README](../README.md), 문서 목록은 [문서 안내](README.md)를 확인하세요. 현재/과거 실행본의 구분은 [패키지 안내](package_layout.md)를 따릅니다.
+
+# Folder Structure
 
 현재 프로젝트는 기존 코드를 보존하면서 새 구조를 단순하게 보기 위해 아래처럼 정리한다.
 

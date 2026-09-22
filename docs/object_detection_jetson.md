@@ -1,3 +1,5 @@
+> 이 문서는 CenterPoint 프로젝트용 참고 자료입니다. 현재 제품에는 객체 탐지가 포함되지 않습니다. [제품 구분](workspaces_ko.md)을 확인하세요.
+
 # Jetson CenterPoint integration
 
 This branch keeps object detection separate from the `main` acquisition branch while sharing

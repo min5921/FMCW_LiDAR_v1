@@ -1,50 +1,32 @@
-> 2026-09-22: 현재 패키지는 `build/package/Windows-PCDReplay/`이며, 아래 `Windows/` 경로는 보존된 이전 패키지입니다. [현재 작업 공간 안내](workspaces_ko.md)를 확인하세요.
+# Windows 실행 패키지
 
-# Package Layout
-
-This is the PCDReplay worktree, without object detection or model weights.
+루트의 `RUN.cmd`를 더블클릭하면 `PCDReplay` 실행본을 엽니다.
 
 ```text
-build/package/
-  README.md
-  Windows/
-    FMCW_LiDAR.exe
-    config/
-    *.dll and Qt plugin folders
-    BUILD_FEATURES.txt
-    BUILD_SOURCES.sha256
-  Jetson/
-    FMCW_LiDAR_Jetson_Source/
-    FMCW_LiDAR_Jetson_Source.zip
+build/
+  preset-windows-pcd/        현재 개발 빌드
+  package/
+    Windows-PCDReplay/
+      FMCW_LiDAR.exe
+      config/
+      *.dll, platforms/, 기타 Qt 플러그인
+      BUILD_FEATURES.txt
+      BUILD_SOURCES.sha256
+  package_archive/
+    2026-09-22/               이전 실행본·Jetson 소스 번들
+  archive/
+    2026-09-22/               이전 검증 자료·로그
 ```
 
-## Run On Windows
+다른 PC에는 `Windows-PCDReplay` 전체를 복사합니다. DLL·Qt 플러그인·config를 분리하지 않습니다.
+`BUILD_FEATURES.txt`에서 제품 종류·소스 커밋·포함된 backend를 확인합니다.
+실제 장비 사용 여부는 [검증 기록](workspace_verification_2026-09-22.md)을 확인하고 필요한 SDK/드라이버와 빌드 옵션을 준비합니다.
 
-Open `Windows/FMCW_LiDAR.exe`. This is the confirmed OrbitFix application.
-Keep the entire Windows folder together when copying it to another PC.
+빌드 후 `deploy/windows/package.ps1`로 이 제품의 패키지를 갱신합니다.
+현재 빌드 절차는 [작업 공간 안내](workspaces_ko.md)를 따릅니다.
+이전 패키지는 실행 폴더에서 분리하여 `build/package_archive/2026-09-22/`로 옮겼습니다.
+기존 날짜별 보관 폴더가 있으면 그대로 유지합니다.
+Jetson 소스 번들을 새로 만들 때는 `deploy/jetson/export_source.ps1`와 [Jetson 안내](../deploy/jetson/README_KO.md)를 사용합니다.
 
-- `Qt6*.dll` and plugin folders: user interface, OpenGL, and image support.
-- `cufft64_12.dll`: CUDA FFT runtime; this is the largest file, not replay data.
-- `fftw3f.dll`: CPU FFT runtime.
-- `ATSApi.dll`: Alazar API runtime; board drivers are installed separately.
-- `msvcp*`, `vcruntime*`, and other Microsoft DLLs: compiler runtimes.
-- `config/`: default settings, profiles, calibration, and MCU waveform.
-- `BUILD_*`: source identity and build-feature records.
-
-Do not remove or relocate individual DLLs to simplify the folder view.
-
-## Build On Jetson
-
-Transfer either the Jetson source folder or its ZIP, not both. Extract the ZIP
-and run `bash deploy/jetson/build.sh` inside `FMCW_LiDAR_Jetson_Source`.
-This is buildable source, not a prebuilt ARM64 application.
-
-## Previous Versions And Data
-
-Previous packages are preserved outside this folder in
-`build/package_archive/2026-09-08/`, with a file-hash relocation inventory.
-They are not the current executable. No previous package was deleted.
-
-Replay samples remain in the original `FMCW_LiDAR/data/samples` directory,
-not in this worktree's package. Select the `.merged.pointcloud.bin` file in the GUI.
-Original-project packages and other worktrees were not reorganized.
+측정·재생 데이터는 `data/`, 사용 중 생성된 결과는 `outputs/`에서 관리합니다.
+PCDReplay의 기존 샘플이 기본 FMCW 폴더의 `data/samples/`에 있다면 그 위치에서 선택합니다.

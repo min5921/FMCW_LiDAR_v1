@@ -1,3 +1,5 @@
+> 현재 제품의 preset·실행 경로는 [작업 공간 안내](workspaces_ko.md)와 [패키지 안내](package_layout.md)를 따릅니다. 아래의 공통·과거 예제에는 이전 경로가 포함되어 있습니다.
+
 # Build Setup
 
 The repository does not vendor Qt, CUDA, FFTW, AlazarTech SDK binaries, or device drivers. Install them per platform and provide their roots through CMake or environment-specific user presets.
