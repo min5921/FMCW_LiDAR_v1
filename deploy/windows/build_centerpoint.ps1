@@ -9,8 +9,8 @@ param(
   [string]$AlazarRoot = $(if ($env:ALAZAR_SDK_ROOT) { $env:ALAZAR_SDK_ROOT } else { "C:\AlazarTech\ATS-SDK\25.1.0" }),
   [string]$FftwRoot = $(if ($env:FFTW_ROOT) { $env:FFTW_ROOT } else { "C:\DEV\vcpkg\installed\x64-windows" }),
   [string]$QtRoot = $(if ($env:QT_ROOT) { $env:QT_ROOT } else { "C:\Qt\6.11.0\msvc2022_64" }),
-  [string]$BuildDirectory = "build/preset-windows-centerpoint-release",
-  [string]$PackageDirectory = "build/package/FMCW_LiDAR_CenterPoint",
+  [string]$BuildDirectory = "build/preset-windows-centerpoint",
+  [string]$PackageDirectory = "build/package/Windows-CenterPoint",
   [switch]$SkipPackage
 )
 
