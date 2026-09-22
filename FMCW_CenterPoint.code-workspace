@@ -1,0 +1,12 @@
+{
+  "folders": [
+    {
+      "name": "FMCW CenterPoint",
+      "path": "."
+    }
+  ],
+  "settings": {
+    "window.title": "FMCW CenterPoint \u2014 ${activeEditorShort}",
+    "cmake.useCMakePresets": "always"
+  }
+}

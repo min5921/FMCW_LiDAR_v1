@@ -26,7 +26,7 @@ endforeach()
 file(WRITE "${CMAKE_BINARY_DIR}/BUILD_SOURCES.sha256" "${_fmcw_source_manifest}")
 file(SHA256 "${CMAKE_BINARY_DIR}/BUILD_SOURCES.sha256" _fmcw_source_hash)
 file(WRITE "${CMAKE_BINARY_DIR}/BUILD_FEATURES.txt"
-  "Project=${PROJECT_NAME}\nVersion=${PROJECT_VERSION}\nSource=${FMCW_SOURCE_REVISION}\n"
+  "WorkspaceVariant=${FMCW_WORKSPACE_VARIANT}\nProject=${PROJECT_NAME}\nVersion=${PROJECT_VERSION}\nSource=${FMCW_SOURCE_REVISION}\n"
   "HostSourceManifestSHA256=${_fmcw_source_hash}\n"
   "Platform=${FMCW_TARGET_PLATFORM}\nCompiler=${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION}\n"
   "CMake=${CMAKE_VERSION}\nQt=${Qt6_VERSION}\nCUDA=${CUDAToolkit_VERSION}\n"

@@ -1,4 +1,16 @@
-﻿# FMCW LiDAR v2
+# FMCW LiDAR — CenterPoint
+
+이 폴더는 **기본 계측 + CenterPoint 객체 탐지 + 파일 입력** 프로젝트입니다. 전용 브랜치는 `codex/centerpoint`입니다.
+
+- [이 작업 공간의 시작 안내](WORKSPACE.md)
+- [세 프로젝트 관리 규칙과 다른 PC 설정](docs/workspaces_ko.md)
+- 현재 Windows 실행본: `build/package/Windows-CenterPoint/FMCW_LiDAR.exe`
+
+아래는 분리 이전의 공통 개발 기록입니다. 과거 브랜치명·패키지 경로·기능 설명보다 위 작업 공간 안내를 우선합니다.
+
+---
+
+# FMCW LiDAR v2
 
 FMCW LiDAR 시스템을 Windows와 Jetson에서 함께 운용하기 위한 프로젝트입니다. v2는 기존 측정/파일 규약을 유지하면서 종료·기록·재생 신뢰성과 실제 runtime 검증을 개선합니다.
 

@@ -1,6 +1,6 @@
 param(
-  [string]$BuildDirectory = "build/preset-windows-msvc-release/src",
-  [string]$OutputDirectory = "build/package/FMCW_LiDAR"
+  [string]$BuildDirectory = "build/preset-windows-centerpoint/src",
+  [string]$OutputDirectory = "build/package/Windows-CenterPoint"
 )
 
 Set-StrictMode -Version Latest

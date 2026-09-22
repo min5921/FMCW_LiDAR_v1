@@ -505,7 +505,7 @@ MainWindow::MainWindow(QString platform_name, QWidget* parent)
     config_.processing.fft_backend = FftBackendKind::Cuda;
     config_.mcu.port = "/dev/ttyTHS0";
   }
-  setWindowTitle(QString("FMCW LiDAR v%1 - %2").arg(QString::fromStdString(versionString()), platform_name_));
+  setWindowTitle(QString("FMCW LiDAR v%1 - %2 | CenterPoint").arg(QString::fromStdString(versionString()), platform_name_));
   setMinimumSize(1180, 720);
   resize(1480, 900);
 

@@ -1,10 +1,12 @@
 cmake_minimum_required(VERSION 3.18)
 
-project(FMCW_LiDAR_v2
+project(FMCW_LiDAR_CenterPoint
   VERSION 0.2.0
   DESCRIPTION "FMCW LiDAR control, acquisition, processing, and visualization"
   LANGUAGES CXX
 )
+
+set(FMCW_WORKSPACE_VARIANT "CenterPoint")
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -18,7 +20,10 @@ option(FMCW_REQUIRE_CUDA "Fail configuration when CUDA/cuFFT is unavailable" OFF
 option(FMCW_REQUIRE_FFTW "Fail configuration when the requested CPU backend is unavailable" OFF)
 option(FMCW_REQUIRE_ALAZAR "Fail configuration when ATS-SDK is unavailable" OFF)
 option(FMCW_WITH_ALAZAR "Enable AlazarTech ATS-SDK adapter when the SDK is available" ON)
-option(FMCW_WITH_CENTERPOINT "Enable the external CUDA/cuDNN CenterPoint detector" OFF)
+option(FMCW_WITH_CENTERPOINT "Enable the external CUDA/cuDNN CenterPoint detector" ON)
+if(NOT FMCW_WITH_CENTERPOINT)
+  message(FATAL_ERROR "The CenterPoint workspace requires object detection. Use FMCW_LiDAR for the basic product.")
+endif()
 
 set(FMCW_TARGET_PLATFORM "AUTO" CACHE STRING "Target platform: AUTO, WINDOWS, or JETSON")
 set_property(CACHE FMCW_TARGET_PLATFORM PROPERTY STRINGS AUTO WINDOWS JETSON)
