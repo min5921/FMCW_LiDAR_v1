@@ -1,10 +1,12 @@
 cmake_minimum_required(VERSION 3.18)
 
-project(FMCW_LiDAR_v2
+project(FMCW_LiDAR_Basic
   VERSION 0.2.0
   DESCRIPTION "FMCW LiDAR control, acquisition, processing, and visualization"
   LANGUAGES CXX
 )
+
+set(FMCW_WORKSPACE_VARIANT "Basic")
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -20,7 +22,7 @@ option(FMCW_REQUIRE_ALAZAR "Fail configuration when ATS-SDK is unavailable" OFF)
 option(FMCW_WITH_ALAZAR "Enable AlazarTech ATS-SDK adapter when the SDK is available" ON)
 option(FMCW_WITH_CENTERPOINT "Enable the external CUDA/cuDNN CenterPoint detector" OFF)
 if(FMCW_WITH_CENTERPOINT)
-  message(FATAL_ERROR "This replay worktree excludes object detection. Use the separate CenterPoint worktree for inference.")
+  message(FATAL_ERROR "The Basic workspace excludes object detection. Use FMCW_LiDAR_CenterPoint.")
 endif()
 
 set(FMCW_TARGET_PLATFORM "AUTO" CACHE STRING "Target platform: AUTO, WINDOWS, or JETSON")

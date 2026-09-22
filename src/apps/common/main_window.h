@@ -1,11 +1,9 @@
 #pragma once
-#include "storage/async_point_cloud_replay.h"
 
 #include "apps/common/application_controller.h"
 #include "apps/common/plot_widgets.h"
 #include "apps/common/point_cloud_widget.h"
 #include "core/config_types.h"
-#include "storage/point_cloud_replay.h"
 
 #include <QMainWindow>
 #include <QElapsedTimer>
@@ -43,7 +41,6 @@ class MainWindow final : public QMainWindow {
   void showPage(int index);
   void showLiveTab(int index);
   bool savePointCloudFramebuffer(const QString& path);
-  bool openPointCloudReplayFile(const QString& path);
 
  private:
   QWidget* buildOverviewPage();
@@ -84,11 +81,6 @@ class MainWindow final : public QMainWindow {
                                  std::uint32_t records_in_buffer,
                                  std::uint64_t dma_sequence);
   void updateProcessingTelemetryLabels();
-  void openPointCloudReplay();
-  bool showNextPointCloudReplayFrame();
-  void setPointCloudReplayRunning(bool running);
-  void stopPointCloudReplay(bool rewind_to_first);
-  void updatePointCloudReplayControls();
   void displayPointCloudSnapshot(PointCloudSnapshotPtr snapshot, const QString& source);
   void updateStopStageDisplay();
   void applyProfile();
@@ -159,17 +151,6 @@ class MainWindow final : public QMainWindow {
   PointCloudWidget* point_cloud_plot_ = nullptr;
   QLabel* point_cloud_status_ = nullptr;
   QComboBox* point_cloud_color_mode_ = nullptr;
-  QLineEdit* point_cloud_replay_file_ = nullptr;
-  QToolButton* point_cloud_replay_open_ = nullptr;
-  QToolButton* point_cloud_replay_play_ = nullptr;
-  QToolButton* point_cloud_replay_step_ = nullptr;
-  QToolButton* point_cloud_replay_stop_ = nullptr;
-  QCheckBox* point_cloud_replay_loop_ = nullptr;
-  QDoubleSpinBox* point_cloud_replay_fps_ = nullptr;
-  QTimer* point_cloud_replay_timer_ = nullptr;
-  AsyncPointCloudReplay point_cloud_replay_reader_;
-  QTimer* point_cloud_load_timer_ = nullptr;
-  std::uint64_t point_cloud_replay_frames_displayed_ = 0U;
   QElapsedTimer point_cloud_update_timer_;
   SegmentationPlotWidget* segmentation_plot_ = nullptr;
   QLabel* segmentation_state_ = nullptr;

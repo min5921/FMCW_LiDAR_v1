@@ -500,7 +500,7 @@ MainWindow::MainWindow(QString platform_name, QWidget* parent)
     config_.processing.fft_backend = FftBackendKind::Cuda;
     config_.mcu.port = "/dev/ttyTHS0";
   }
-  setWindowTitle(QString("FMCW LiDAR v%1 - %2 | PCD Replay").arg(QString::fromStdString(versionString()), platform_name_));
+  setWindowTitle(QString("FMCW LiDAR v%1 - %2 | Basic").arg(QString::fromStdString(versionString()), platform_name_));
   setMinimumSize(1180, 720);
   resize(1480, 900);
 
@@ -631,9 +631,6 @@ MainWindow::MainWindow(QString platform_name, QWidget* parent)
   connect(stop_stage_timer_, &QTimer::timeout, this, &MainWindow::updateStopStageDisplay);
 
   controller_ = new ApplicationController(platform_name_, this);
-  point_cloud_load_timer_ = new QTimer(this);
-  point_cloud_load_timer_->setInterval(16);
-  connect(point_cloud_load_timer_, &QTimer::timeout, this, &MainWindow::showNextPointCloudReplayFrame);
   loadConfigToControls(config_);
   connectUi();
   live_display_timer_ = new QTimer(this);
@@ -641,165 +638,13 @@ MainWindow::MainWindow(QString platform_name, QWidget* parent)
   live_display_timer_->setInterval(1000);
   connect(live_display_timer_, &QTimer::timeout, this, &MainWindow::updateLiveDisplayDiagnostics);
   live_display_timer_->start();
-  navigation_->setCurrentRow(kLivePageIndex);
-  live_tabs_->setCurrentIndex(5);
+  navigation_->setCurrentRow(kOverviewPageIndex);
   validateControls();
   controller_->applyConfig(config_);
 }
 
 bool MainWindow::savePointCloudFramebuffer(const QString& path) {
   return point_cloud_plot_ != nullptr && point_cloud_plot_->grabFramebuffer().save(path, "PNG");
-}
-
-void MainWindow::openPointCloudReplay() {
-  if (runtime_status_.running) {
-    QMessageBox::information(this, "Point cloud replay",
-                             "Stop acquisition before opening a point-cloud file.");
-    return;
-  }
-  const auto path = QFileDialog::getOpenFileName(
-      this, "Open point cloud", point_cloud_replay_file_->text(),
-      "Point clouds (*.pointcloud.bin *.pcd *.xyz *.xyzi *.csv *.txt);;"
-      "FMCW point cloud (*.pointcloud.bin);;PCD point cloud (*.pcd);;"
-      "XYZ / CSV text (*.xyz *.xyzi *.csv *.txt);;All files (*)");
-  if (path.isEmpty()) {
-    return;
-  }
-
-  openPointCloudReplayFile(path);
-}
-
-bool MainWindow::openPointCloudReplayFile(const QString& path) {
-  if (runtime_status_.running || mcu_uploading_ || path.trimmed().isEmpty()) {
-    return false;
-  }
-  setPointCloudReplayRunning(false);
-  std::string error;
-  if (!point_cloud_replay_reader_.open(fileSystemPath(path), error)) {
-    QMessageBox::critical(this, "Point cloud open failed", QString::fromStdString(error));
-    appendLog("ERROR", "Point cloud replay", QString::fromStdString(error));
-    updatePointCloudReplayControls();
-    return false;
-  }
-  point_cloud_replay_file_->setText(QDir::toNativeSeparators(path));
-  point_cloud_replay_frames_displayed_ = 0U;
-  point_cloud_plot_->clearSnapshot();
-  point_cloud_update_timer_.invalidate();
-  if (!showNextPointCloudReplayFrame()) {
-    point_cloud_replay_reader_.close();
-    updatePointCloudReplayControls();
-    return false;
-  }
-
-  updatePointCloudReplayControls();
-  return true;
-}
-
-bool MainWindow::showNextPointCloudReplayFrame() {
-  point_cloud_load_timer_->stop();
-  if (!point_cloud_replay_reader_.isOpen()) {
-    return false;
-  }
-  PointCloudSnapshot frame;
-  std::string error;
-  auto result = point_cloud_replay_reader_.readNext(frame, error);
-  if (result == PointCloudReadResult::EndOfStream &&
-      point_cloud_replay_loop_->isChecked() &&
-      point_cloud_replay_reader_.info().multiple_frames) {
-    if (!point_cloud_replay_reader_.rewind(error)) {
-      result = PointCloudReadResult::Error;
-    } else {
-      result = point_cloud_replay_reader_.readNext(frame, error);
-    }
-  }
-  if (result == PointCloudReadResult::EndOfStream) {
-    setPointCloudReplayRunning(false);
-    point_cloud_status_->setText(
-        QString("Replay complete | %1 frames shown").arg(point_cloud_replay_frames_displayed_));
-    setStyledProperty(point_cloud_status_, "statusKind", "neutral");
-    return false;
-  }
-  if (result == PointCloudReadResult::Pending) {
-    point_cloud_load_timer_->start();
-    return true;
-  }
-  if (result == PointCloudReadResult::Error) {
-    setPointCloudReplayRunning(false);
-    const auto message = QString::fromStdString(error);
-    point_cloud_status_->setText(QString("Replay error | %1").arg(message));
-    setStyledProperty(point_cloud_status_, "statusKind", "error");
-    appendLog("ERROR", "Point cloud replay", message);
-    QMessageBox::critical(this, "Point cloud replay failed", message);
-    return false;
-  }
-
-  if (point_cloud_replay_frames_displayed_ == 0U) {
-    const auto info = point_cloud_replay_reader_.info();
-    point_cloud_color_mode_->setCurrentIndex(info.has_intensity ? 0 : 2);
-    appendLog("INFO", "Point cloud replay", QString("Opened %1 | %2 points")
-        .arg(QString::fromStdString(info.format_name)).arg(info.point_count));
-    updatePointCloudReplayControls();
-  }
-  ++point_cloud_replay_frames_displayed_;
-  const auto source = QString("Replay %1 | %2")
-      .arg(QFileInfo(point_cloud_replay_file_->text()).fileName())
-      .arg(QString::fromStdString(point_cloud_replay_reader_.info().format_name));
-  displayPointCloudSnapshot(std::make_shared<const PointCloudSnapshot>(std::move(frame)), source);
-  return true;
-}
-
-void MainWindow::setPointCloudReplayRunning(bool running) {
-  if (!running && point_cloud_load_timer_) { point_cloud_load_timer_->stop(); }
-  const bool can_run = running && !runtime_status_.running &&
-      point_cloud_replay_reader_.isOpen() &&
-      point_cloud_replay_reader_.info().multiple_frames;
-  if (can_run) {
-    point_cloud_replay_timer_->setInterval(std::max(
-        1, static_cast<int>(std::lround(1000.0 / point_cloud_replay_fps_->value()))));
-    point_cloud_replay_timer_->start();
-  } else {
-    point_cloud_replay_timer_->stop();
-  }
-  const QSignalBlocker blocker(point_cloud_replay_play_);
-  point_cloud_replay_play_->setChecked(can_run);
-  point_cloud_replay_play_->setIcon(
-      style()->standardIcon(can_run ? QStyle::SP_MediaPause : QStyle::SP_MediaPlay));
-  point_cloud_replay_play_->setToolTip(
-      can_run ? "Pause point-cloud playback" : "Play point-cloud frames");
-  updatePointCloudReplayControls();
-}
-
-void MainWindow::stopPointCloudReplay(bool rewind_to_first) {
-  setPointCloudReplayRunning(false);
-  if (!rewind_to_first || !point_cloud_replay_reader_.isOpen()) {
-    return;
-  }
-  std::string error;
-  if (!point_cloud_replay_reader_.rewind(error)) {
-    const auto message = QString::fromStdString(error);
-    appendLog("ERROR", "Point cloud replay", message);
-    point_cloud_status_->setText(QString("Replay error | %1").arg(message));
-    setStyledProperty(point_cloud_status_, "statusKind", "error");
-    return;
-  }
-  point_cloud_replay_frames_displayed_ = 0U;
-  point_cloud_plot_->clearSnapshot(false);
-  showNextPointCloudReplayFrame();
-}
-
-void MainWindow::updatePointCloudReplayControls() {
-  if (point_cloud_replay_open_ == nullptr) {
-    return;
-  }
-  const bool editable = !runtime_status_.running && !mcu_uploading_;
-  const bool open = point_cloud_replay_reader_.isOpen();
-  const bool multiple = open && point_cloud_replay_reader_.info().multiple_frames;
-  point_cloud_replay_open_->setEnabled(editable);
-  point_cloud_replay_play_->setEnabled(editable && multiple);
-  point_cloud_replay_step_->setEnabled(editable && multiple);
-  point_cloud_replay_stop_->setEnabled(editable && open);
-  point_cloud_replay_loop_->setEnabled(editable && multiple);
-  point_cloud_replay_fps_->setEnabled(editable && multiple);
 }
 
 void MainWindow::displayPointCloudSnapshot(PointCloudSnapshotPtr snapshot,
@@ -967,46 +812,6 @@ QWidget* MainWindow::buildLivePage() {
   auto* point_cloud_layout = new QVBoxLayout(point_cloud_page);
   point_cloud_layout->setContentsMargins(0, 0, 0, 0);
   point_cloud_layout->setSpacing(8);
-  auto* point_cloud_replay_tools = new QHBoxLayout;
-  point_cloud_replay_file_ = new QLineEdit(point_cloud_page);
-  point_cloud_replay_file_->setReadOnly(true);
-  point_cloud_replay_file_->setPlaceholderText(
-      "Open FMCWPCD1, WaymoPCD2, PCD, XYZ, XYZI, or CSV");
-  point_cloud_replay_file_->setMinimumWidth(240);
-  point_cloud_replay_open_ = new QToolButton(point_cloud_page);
-  point_cloud_replay_open_->setIcon(style()->standardIcon(QStyle::SP_DialogOpenButton));
-  point_cloud_replay_open_->setToolTip("Open point-cloud replay file");
-  point_cloud_replay_play_ = new QToolButton(point_cloud_page);
-  point_cloud_replay_play_->setObjectName("pointCloudReplayPlay");
-  point_cloud_replay_play_->setCheckable(true);
-  point_cloud_replay_play_->setIcon(style()->standardIcon(QStyle::SP_MediaPlay));
-  point_cloud_replay_play_->setToolTip("Play point-cloud frames");
-  point_cloud_replay_step_ = new QToolButton(point_cloud_page);
-  point_cloud_replay_step_->setObjectName("pointCloudReplayStep");
-  point_cloud_replay_step_->setIcon(style()->standardIcon(QStyle::SP_MediaSkipForward));
-  point_cloud_replay_step_->setToolTip("Show next point-cloud frame");
-  point_cloud_replay_stop_ = new QToolButton(point_cloud_page);
-  point_cloud_replay_stop_->setObjectName("pointCloudReplayStop");
-  point_cloud_replay_stop_->setIcon(style()->standardIcon(QStyle::SP_MediaStop));
-  point_cloud_replay_stop_->setToolTip("Stop and return to the first point-cloud frame");
-  point_cloud_replay_loop_ = new QCheckBox("Loop", point_cloud_page);
-  point_cloud_replay_loop_->setChecked(true);
-  point_cloud_replay_fps_ = new QDoubleSpinBox(point_cloud_page);
-  point_cloud_replay_fps_->setRange(0.5, 60.0);
-  point_cloud_replay_fps_->setDecimals(1);
-  point_cloud_replay_fps_->setSingleStep(0.5);
-  point_cloud_replay_fps_->setValue(10.0);
-  point_cloud_replay_fps_->setSuffix(" FPS");
-  point_cloud_replay_fps_->setFixedWidth(92);
-  point_cloud_replay_fps_->setToolTip("Point-cloud file playback rate");
-  point_cloud_replay_tools->addWidget(point_cloud_replay_file_, 1);
-  point_cloud_replay_tools->addWidget(point_cloud_replay_open_);
-  point_cloud_replay_tools->addWidget(point_cloud_replay_play_);
-  point_cloud_replay_tools->addWidget(point_cloud_replay_step_);
-  point_cloud_replay_tools->addWidget(point_cloud_replay_stop_);
-  point_cloud_replay_tools->addWidget(point_cloud_replay_loop_);
-  point_cloud_replay_tools->addWidget(point_cloud_replay_fps_);
-
   auto* point_cloud_tools = new QHBoxLayout;
   point_cloud_color_mode_ = new QComboBox(point_cloud_page);
   point_cloud_color_mode_->addItems({"Intensity", "Velocity", "Distance"});
@@ -1059,9 +864,6 @@ QWidget* MainWindow::buildLivePage() {
       static_cast<std::uint32_t>(temporal_frames->value()));
   point_cloud_plot_->setVerticalInterpolationFactor(
       vertical_interpolation->currentData().toUInt());
-  point_cloud_replay_timer_ = new QTimer(point_cloud_page);
-  point_cloud_replay_timer_->setTimerType(Qt::PreciseTimer);
-  point_cloud_layout->addLayout(point_cloud_replay_tools);
   point_cloud_layout->addLayout(point_cloud_tools);
   point_cloud_layout->addWidget(point_cloud_plot_, 1);
   live_tabs_->addTab(time_plot_, "Time Domain");
@@ -1149,27 +951,6 @@ QWidget* MainWindow::buildLivePage() {
       QMessageBox::critical(this, "Point cloud save failed", "The current point cloud could not be written.");
     }
   });
-  connect(point_cloud_replay_open_, &QToolButton::clicked,
-          this, &MainWindow::openPointCloudReplay);
-  connect(point_cloud_replay_play_, &QToolButton::clicked, this, [this](bool checked) {
-    setPointCloudReplayRunning(checked);
-  });
-  connect(point_cloud_replay_step_, &QToolButton::clicked, this, [this] {
-    setPointCloudReplayRunning(false);
-    showNextPointCloudReplayFrame();
-  });
-  connect(point_cloud_replay_stop_, &QToolButton::clicked, this, [this] {
-    stopPointCloudReplay(true);
-  });
-  connect(point_cloud_replay_fps_, &QDoubleSpinBox::valueChanged, this, [this](double fps) {
-    point_cloud_replay_timer_->setInterval(
-        std::max(1, static_cast<int>(std::lround(1000.0 / fps))));
-  });
-  connect(point_cloud_replay_timer_, &QTimer::timeout, this, [this] {
-    showNextPointCloudReplayFrame();
-  });
-  point_cloud_replay_timer_->setInterval(100);
-  updatePointCloudReplayControls();
   return content;
 }
 
@@ -1783,7 +1564,6 @@ void MainWindow::connectUi() {
       return;
     }
     if (validateControls(true)) {
-      setPointCloudReplayRunning(false);
       point_cloud_plot_->clearSnapshot();
       point_cloud_update_timer_.invalidate();
       controller_->startSystem();
@@ -2906,7 +2686,6 @@ void MainWindow::updateControlAvailability() {
     control->setEnabled(editable);
   }
   updateRuntimeSourceControls();
-  updatePointCloudReplayControls();
 }
 
 void MainWindow::updatePeakBinLimits() {
@@ -3196,8 +2975,6 @@ void MainWindow::updateStatus(RuntimeStatus status) {
       runtime_status_.source_name != status.source_name;
   runtime_status_ = std::move(status);
   if (acquisition_started) {
-    setPointCloudReplayRunning(false);
-    point_cloud_replay_reader_.close();
     point_cloud_plot_->clearSnapshot();
     point_cloud_update_timer_.invalidate();
   }

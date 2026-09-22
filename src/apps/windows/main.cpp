@@ -22,14 +22,14 @@ int main(int argc, char* argv[]) {
     QTimer::singleShot(1600, &window, &fmcw::MainWindow::captureSegmentation);
   }
   QString screenshot_path;
-  QString point_cloud_path;
   int page_index = -1;
   int live_tab_index = -1;
   for (const auto& argument : arguments) {
     if (argument.startsWith(QStringLiteral("--screenshot="))) {
       screenshot_path = argument.mid(QStringLiteral("--screenshot=").size());
     } else if (argument.startsWith(QStringLiteral("--point-cloud="))) {
-      point_cloud_path = argument.mid(QStringLiteral("--point-cloud=").size());
+      qWarning("Point-cloud file playback belongs to the FMCW_LiDAR_PCDReplay workspace.");
+      return 2;
     } else if (argument.startsWith(QStringLiteral("--page="))) {
       page_index = argument.mid(QStringLiteral("--page=").size()).toInt();
     } else if (argument.startsWith(QStringLiteral("--live-tab="))) {
@@ -43,11 +43,6 @@ int main(int argc, char* argv[]) {
   if (live_tab_index >= 0) {
     QTimer::singleShot(arguments.contains(QStringLiteral("--demo-run")) ? 400 : 0, &window,
                        [&window, live_tab_index] { window.showLiveTab(live_tab_index); });
-  }
-  if (!point_cloud_path.isEmpty()) {
-    window.showPage(1);
-    window.showLiveTab(5);
-    if (!window.openPointCloudReplayFile(point_cloud_path)) return 2;
   }
   if (!screenshot_path.isEmpty()) {
     QTimer::singleShot(arguments.contains(QStringLiteral("--demo-run")) ? 5200 : 1000, &window,

@@ -1,0 +1,12 @@
+{
+  "folders": [
+    {
+      "name": "FMCW Basic",
+      "path": "."
+    }
+  ],
+  "settings": {
+    "window.title": "FMCW Basic \u2014 ${activeEditorShort}",
+    "cmake.useCMakePresets": "always"
+  }
+}

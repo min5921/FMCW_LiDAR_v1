@@ -54,10 +54,10 @@ set_tests_properties(fmcw_async_replay_tests PROPERTIES TIMEOUT 15)
 
 if(FMCW_BUILD_QT_APPS)
   find_package(Qt6 6.2 REQUIRED COMPONENTS Core Gui)
-  add_executable(fmcw_point_cloud_ui_tests point_cloud_ui_test.cpp)
-  target_link_libraries(fmcw_point_cloud_ui_tests PRIVATE fmcw_qt_common)
-  add_test(NAME fmcw_point_cloud_ui_tests COMMAND fmcw_point_cloud_ui_tests)
-  set_tests_properties(fmcw_point_cloud_ui_tests PROPERTIES TIMEOUT 30 SKIP_RETURN_CODE 77)
+  add_executable(fmcw_basic_ui_tests basic_ui_test.cpp)
+  target_link_libraries(fmcw_basic_ui_tests PRIVATE fmcw_qt_common)
+  add_test(NAME fmcw_basic_ui_tests COMMAND fmcw_basic_ui_tests)
+  set_tests_properties(fmcw_basic_ui_tests PROPERTIES TIMEOUT 30 SKIP_RETURN_CODE 77)
   add_executable(fmcw_point_cloud_camera_tests point_cloud_camera_test.cpp)
   target_link_libraries(fmcw_point_cloud_camera_tests PRIVATE Qt6::Gui)
   target_include_directories(fmcw_point_cloud_camera_tests PRIVATE ${PROJECT_SOURCE_DIR}/src)
@@ -81,7 +81,7 @@ if(FMCW_BUILD_QT_APPS)
     get_target_property(_fmcw_qt_core Qt6::Core IMPORTED_LOCATION_RELEASE)
     get_filename_component(_fmcw_qt_bin "${_fmcw_qt_core}" DIRECTORY)
     string(REPLACE ";" "\\;" _fmcw_ui_test_path "${_fmcw_qt_bin};$ENV{PATH}")
-    foreach(_qt_test IN ITEMS fmcw_point_cloud_ui_tests fmcw_point_cloud_camera_tests
+    foreach(_qt_test IN ITEMS fmcw_basic_ui_tests fmcw_point_cloud_camera_tests
         fmcw_point_cloud_gpu_1x fmcw_point_cloud_gpu_2x
         fmcw_point_cloud_painter_1x fmcw_point_cloud_painter_2x)
       set_property(TEST ${_qt_test} APPEND PROPERTY ENVIRONMENT
