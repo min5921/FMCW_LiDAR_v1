@@ -1,6 +1,6 @@
 #pragma once
 
-#include "core/config_types.h"
+#include "core/config/config_types.h"
 
 #include <complex>
 #include <string>

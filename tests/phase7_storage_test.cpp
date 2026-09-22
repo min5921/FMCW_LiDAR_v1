@@ -1,5 +1,5 @@
-#include "core/acquisition_session.h"
-#include "core/config_profile.h"
+#include "core/acquisition/acquisition_session.h"
+#include "core/config/config_profile.h"
 #include "drivers/replay/replay_digitizer.h"
 #include "drivers/simulator/fake_digitizer.h"
 #include "drivers/simulator/fake_edfa.h"

@@ -1,4 +1,4 @@
-#include "core/acquisition_session.h"
+#include "core/acquisition/acquisition_session.h"
 #include "drivers/edfa/edfa_serial_controller.h"
 #include "drivers/simulator/fake_digitizer.h"
 #include "drivers/simulator/fake_mcu.h"

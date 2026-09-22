@@ -1,5 +1,5 @@
 #include "storage/processing_history.h"
-#include "core/config_profile.h"
+#include "core/config/config_profile.h"
 #include <algorithm>
 #include <charconv>
 

@@ -1,5 +1,5 @@
-#include "core/acquisition_session.h"
-#include "core/continuous_acquisition_worker.h"
+#include "core/acquisition/acquisition_session.h"
+#include "core/acquisition/continuous_acquisition_worker.h"
 #include "drivers/simulator/fake_digitizer.h"
 #include "drivers/simulator/fake_edfa.h"
 #include "drivers/simulator/fake_mcu.h"

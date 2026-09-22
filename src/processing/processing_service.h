@@ -1,8 +1,8 @@
 #pragma once
 #include "storage/processing_history.h"
 
-#include "core/config_types.h"
-#include "core/frame_types.h"
+#include "core/config/config_types.h"
+#include "core/types/frame_types.h"
 #include "processing/fft_backend.h"
 #include "processing/processing_snapshots.h"
 

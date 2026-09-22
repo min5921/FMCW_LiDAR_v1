@@ -1,7 +1,7 @@
 #include "drivers/simulator/fake_digitizer.h"
 
-#include "core/config_validation.h"
-#include "core/realtime_thread.h"
+#include "core/config/config_validation.h"
+#include "core/runtime/realtime_thread.h"
 
 #include <algorithm>
 #include <chrono>

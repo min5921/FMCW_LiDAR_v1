@@ -1,12 +1,13 @@
-# FMCW LiDAR Jetson Source Bundle
+# FMCW LiDAR Basic — Jetson 배포
 
 이 폴더는 Windows 실행 파일을 변환하는 도구가 아니다. 현재 FMCW LiDAR 공통
 core, Qt UI, CUDA/cuFFT, POSIX serial, UDP, storage 소스를 Jetson ARM64에서
 native Release로 빌드한다. Jetson 버전의 신호 처리는 CUDA/cuFFT 전용이다.
 
-이 PCD Replay worktree는 객체 인지, weight 로딩, 검출 박스 표시를 포함하지 않는다.
-`jetson.env`의 CenterPoint는 OFF이며 cuDNN/외부 모델 소스가 필요하지 않다.
-저장된 PCD 및 `.pointcloud.bin` 재생과 기존 LiDAR 기능은 유지한다.
+Windows-Basic과 동일하게 계측·MCU/EDFA·실시간 3D·저장·RAW 재생을 유지한다.
+PCD/pointcloud 파일 재생, Weight 선택, CenterPoint 추론과 검출 박스 표시는 제외한다.
+빌드에서 CenterPoint는 OFF로 고정되며 cuDNN/외부 모델 소스가 필요하지 않다.
+처리는 기존 Jetson 구성대로 CUDA/cuFFT 전용이며 CPU FFTW는 포함하지 않는다.
 
 ## 1. 지원 범위
 
@@ -22,12 +23,30 @@ driver, 실제 DMA, CUDA 성능, NVMe, 온도 및 장시간 동작은 Jetson에�
 
 ## 2. 소스 복사
 
+Windows 프로젝트에서 `deploy/windows` 실행본과 별도로 다음 명령으로 최신 소스를 묶는다.
+
+```powershell
+.\deploy\jetson\export_source.ps1
+```
+
+기존 번들이 있으면 `-ReplaceExisting`을 지정한다. 기존 폴더와 ZIP은
+`build/package_archive/<날짜>/Jetson-Basic-Source-<시각>/`에 보존된다.
 Windows에서 생성된 다음 폴더 또는 ZIP 전체를 Jetson으로 복사한다.
 
 ```text
-FMCW_LiDAR_Jetson_Source
-FMCW_LiDAR_Jetson_Source.zip
+build/package/Jetson-Basic/
+  FMCW_LiDAR_Basic_Jetson_Source/
+  FMCW_LiDAR_Basic_Jetson_Source.zip
 ```
+
+ZIP은 `FMCW_LiDAR_Basic_Jetson_Source/` 한 폴더로 풀린다. 이 폴더에서 다음 검사를 먼저 실행하고 그 뒤 설정 파일을 수정한다.
+
+```bash
+sha256sum -c SOURCE_MANIFEST.sha256
+```
+
+이 번들은 최신 작업 소스이며, 네이티브 ARM64 실행 파일은 포함하지 않는다.
+`SOURCE_REVISION.txt`의 `-dirty`는 아직 커밋되지 않은 수정까지 포함한 상태를 뜻한다.
 
 경로에는 공백이 없어도 되고 있어도 된다. 빌드 결과가 소스 폴더 아래 `build`에
 생성되므로 최소 10 GB 이상의 여유 공간을 권장한다.
@@ -78,7 +97,7 @@ SDK 위치가 다르면 `deploy/jetson/jetson.env`의
 
 - `FMCW_JETSON_WITH_ALAZAR`: 실제 지원 ATS adapter
 - `FMCW_JETSON_ALAZAR_SDK_ROOT`: ARM64 SDK 위치
-- `FMCW_JETSON_CUDA_ARCHITECTURES`: 기본값 `auto`; Jetson 모델에서 숫자 architecture 자동 결정
+- `FMCW_JETSON_CUDA_ARCHITECTURES`: 기본값 `87` (현재 AGX Orin 설정); 다른 장치에서는 `auto` 또는 해당 숫자로 수정
 - `FMCW_JETSON_QT_ROOT`: system Qt 6.2 이상이 아닐 때 Qt CMake prefix
 
 Jetson 빌드는 `FMCW_WITH_FFTW=OFF`, `FMCW_WITH_CUDA=ON`,
@@ -120,13 +139,13 @@ Alazar SDK header와 `libATSApi.so`가 감지되었지만 device node가 없을 
 빌드가 끝나면 Jetson 데스크톱 터미널에서 실행한다.
 
 ```bash
-bash build/package/FMCW_LiDAR_Jetson/run.sh
+bash build/package/Jetson-Basic/run.sh
 ```
 
 실행 패키지는 다음 위치에 생성된다.
 
 ```text
-build/package/FMCW_LiDAR_Jetson
+build/package/Jetson-Basic
 ```
 
 `runtime_dependencies.txt`에서 `not found`가 없어야 한다. MCU와 EDFA serial port를
@@ -225,8 +244,13 @@ Jetson에서 생성된 `BUILD_INFO.txt`, `BUILD_FEATURES.txt`, `BUILD_SOURCES.sh
 
 ## 10. v2 검토 반영
 
-공통 소스에 R1~R10 수정이 포함된다. 현재 규약은 `docs/runtime_contract_v2.md`, 검증 범위는 `docs/v2_review_completion.md`를 참조한다. `BUILD_FEATURES.txt`에서 ATS/CUDA 실제 활성 여부와 source revision/dirty 상태를 확인한다. CUDA 전용에서도 realtime probe, processing history, storage parity, 실제 Qt runtime 테스트가 등록된다. FFTW 전용 시험 두 개는 의도적으로 제외된다.
+공통 소스에 R1~R10 수정이 포함된다. 현재 규약은 `docs/design/runtime_contract_v2.md`, 검증 범위는 `docs/archive/v2_review_completion.md`를 참조한다. `BUILD_FEATURES.txt`에서 ATS/CUDA 실제 활성 여부와 source revision/dirty 상태를 확인한다. CUDA 전용에서도 realtime probe, processing history, storage parity, 실제 Qt runtime 테스트가 등록된다. FFTW 전용 시험 두 개는 의도적으로 제외된다.
 
-`package.sh`는 기존 runtime 폴더가 있으면 `.previous-<UTC>-<pid>`로 보존한다. 기존 profile/raw 데이터는 이 백업에 남으며 새 package의 설정으로 자동 병합하지 않는다. 실행 확인 후 필요한 profile을 GUI에서 불러온다. Runtime 의존성이 누락된 경우 packaging은 실패하며 성공으로 표시하지 않는다.
+`package.sh`는 기존 runtime 폴더가 있으면 `build/package_archive/<UTC 날짜>/Jetson-Basic-<시각>-<pid>/`로 보존한다. 기존 profile/raw 데이터는 이 백업에 남으며 새 package의 설정으로 자동 병합하지 않는다. 실행 확인 후 필요한 profile을 GUI에서 불러온다. Runtime 의존성이 누락된 경우 packaging은 실패하며 성공으로 표시하지 않는다.
+
+기본 제품 표기와 CUDA ON / FFTW OFF / CenterPoint OFF를 확인한 빌드만 패키징한다.
+SSH처럼 화면 세션이 없는 환경의 CTest·smoke test에는 Qt offscreen 설정을 사용한다.
+실제 OpenGL 화면을 요구하는 테스트가 skip되면, Jetson 데스크톱에서 다시 검증한다.
+이 Windows 작업에서 확인한 것은 배포 스크립트와 소스 번들이다. 실제 Jetson의 ARM64 빌드·실행·DMA·MCU/EDFA 동작은 별도로 검증해야 한다.
 
 Raw 기록을 이동할 때 `.raw.*.bin`뿐 아니라 `.setup.yaml`, `.raw.json`, waveform, `.processing` 폴더도 함께 이동한다. **Recorded processing**은 실제 처리 revision 경계를 복원하고, 끄면 운용자 설정으로 재처리한다.

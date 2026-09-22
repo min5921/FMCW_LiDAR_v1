@@ -10,7 +10,7 @@ $repositoryRoot = [System.IO.Path]::GetFullPath((Join-Path $scriptDirectory "..\
 $packageRoot = [System.IO.Path]::GetFullPath((Join-Path $repositoryRoot "build\package"))
 
 if ([string]::IsNullOrWhiteSpace($Destination)) {
-    $Destination = Join-Path $packageRoot "FMCW_LiDAR_Jetson_Source"
+    $Destination = Join-Path $packageRoot "Jetson-Basic\FMCW_LiDAR_Basic_Jetson_Source"
 }
 
 $destinationPath = [System.IO.Path]::GetFullPath($Destination)
@@ -20,24 +20,52 @@ if (-not $destinationPath.StartsWith($packagePrefix, [System.StringComparison]::
     throw "Destination must remain under $packageRoot"
 }
 
-if (Test-Path -LiteralPath $destinationPath) {
+$zipPath = "$destinationPath.zip"
+if ((Test-Path -LiteralPath $destinationPath) -or (Test-Path -LiteralPath $zipPath)) {
     if (-not $ReplaceExisting) {
-        throw "Destination exists. Choose a new source folder or explicitly use -ReplaceExisting."
+        throw "Source folder or ZIP exists. Choose a new destination or use -ReplaceExisting to archive it."
     }
-    Remove-Item -LiteralPath $destinationPath -Recurse -Force
+    $archiveRoot = [System.IO.Path]::GetFullPath((Join-Path $repositoryRoot "build\package_archive"))
+    $archivePath = [System.IO.Path]::GetFullPath((Join-Path $archiveRoot (
+        "{0}\Jetson-Basic-Source-{1}" -f (Get-Date -Format 'yyyy-MM-dd'), (Get-Date -Format 'HHmmssfff'))))
+    if (-not $archivePath.StartsWith($archiveRoot + [System.IO.Path]::DirectorySeparatorChar,
+            [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "Archive must remain under $archiveRoot"
+    }
+    if (Test-Path -LiteralPath $archivePath) { throw "Archive destination already exists: $archivePath" }
+    foreach ($oldPath in @($destinationPath, $zipPath)) {
+        if (Test-Path -LiteralPath $oldPath) {
+            $oldItems = @((Get-Item -LiteralPath $oldPath -Force))
+            if (Test-Path -LiteralPath $oldPath -PathType Container) {
+                $oldItems += @(Get-ChildItem -LiteralPath $oldPath -Recurse -Force)
+            }
+            if (@($oldItems | Where-Object { $_.Attributes -band [System.IO.FileAttributes]::ReparsePoint }).Count) {
+                throw "Cannot archive reparse points: $oldPath"
+            }
+        }
+    }
+    New-Item -ItemType Directory -Path $archivePath | Out-Null
+    foreach ($oldPath in @($destinationPath, $zipPath)) {
+        if (Test-Path -LiteralPath $oldPath) {
+            Move-Item -LiteralPath $oldPath -Destination $archivePath
+        }
+    }
+    Write-Host "Previous source bundle preserved: $archivePath"
 }
+New-Item -ItemType Directory -Path (Split-Path -Parent $destinationPath) -Force | Out-Null
 New-Item -ItemType Directory -Path $destinationPath | Out-Null
 
 $files = @(
     ".gitattributes",
     "CMakeLists.txt",
     "CMakePresets.json",
-    "README.md"
+    "WORKSPACE.md"
 )
 $directories = @(
     "src",
     "tests",
     "config",
+    "docs",
     "deploy\jetson"
 )
 
@@ -59,37 +87,71 @@ if (Test-Path -LiteralPath $firmwareTarget) {
     Get-ChildItem -LiteralPath $firmwareTarget -Recurse -Directory |
         Where-Object { $_.Name -in @("Debug", "Release") } |
         Sort-Object { $_.FullName.Length } -Descending |
-        Remove-Item -Recurse -Force
+        ForEach-Object {
+            $cleanupPath = [System.IO.Path]::GetFullPath($_.FullName)
+            if (-not $cleanupPath.StartsWith($destinationPath + [System.IO.Path]::DirectorySeparatorChar,
+                    [System.StringComparison]::OrdinalIgnoreCase)) { throw "Unsafe firmware cleanup path: $cleanupPath" }
+            if (((Get-Item -LiteralPath $cleanupPath -Force).Attributes -band [System.IO.FileAttributes]::ReparsePoint) -or
+                @(Get-ChildItem -LiteralPath $cleanupPath -Recurse -Force |
+                    Where-Object { $_.Attributes -band [System.IO.FileAttributes]::ReparsePoint }).Count) {
+                throw "Firmware output contains a reparse point: $cleanupPath"
+            }
+            Remove-Item -LiteralPath $cleanupPath -Recurse -Force
+        }
     Get-ChildItem -LiteralPath $firmwareTarget -Recurse -File |
         Where-Object { $_.Name -eq "language.settings.xml" } |
-        Remove-Item -Force
+        ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force }
 }
 
-$documentationTarget = Join-Path $destinationPath "docs"
-New-Item -ItemType Directory -Path $documentationTarget | Out-Null
-$documents = @(
-    "build_setup.md",
-    "alazar_supported_models.md",
-    "configuration.md",
-    "data_contract.md",
-    "device_protocols.md",
-    "hardware_acceptance.md",
-    "processing_storage.md",
-    "phase_status.md",
-    "runtime_contract_v2.md",
-    "v2_review_completion.md",
-    "pcd_replay_worktree.md"
-)
-foreach ($document in $documents) {
-    Copy-Item -LiteralPath (Join-Path $repositoryRoot "docs\$document") -Destination $documentationTarget
-}
+# Tests and documentation tools may have local Python bytecode caches.
+Get-ChildItem -LiteralPath $destinationPath -Directory -Recurse -Force |
+    Where-Object { $_.Name -eq "__pycache__" } |
+    Sort-Object { $_.FullName.Length } -Descending |
+    ForEach-Object {
+        $cleanupPath = [System.IO.Path]::GetFullPath($_.FullName)
+        if (-not $cleanupPath.StartsWith($destinationPath + [System.IO.Path]::DirectorySeparatorChar,
+                [System.StringComparison]::OrdinalIgnoreCase)) { throw "Unsafe cache cleanup path: $cleanupPath" }
+        $cacheItems = @((Get-Item -LiteralPath $cleanupPath -Force)) + @(Get-ChildItem -LiteralPath $cleanupPath -Recurse -Force)
+        if (@($cacheItems | Where-Object { $_.Attributes -band [System.IO.FileAttributes]::ReparsePoint }).Count) {
+            throw "Python cache contains a reparse point: $cleanupPath"
+        }
+        Remove-Item -LiteralPath $cleanupPath -Recurse -Force
+    }
+
+$utf8WithoutBom = [System.Text.UTF8Encoding]::new($false)
+$bundleReadme = @'
+# FMCW LiDAR Basic for Jetson
+
+This is a source bundle for a native Jetson ARM64 build, not a Windows executable.
+It includes acquisition, MCU/EDFA control, CUDA/cuFFT, live 3D, storage and RAW replay.
+PCD file playback, model weights, CenterPoint inference and cuDNN are excluded from the application.
+
+1. Read [the Jetson deployment guide](deploy/jetson/README_KO.md).
+2. Edit `deploy/jetson/jetson.env` for the Jetson's Alazar SDK, CUDA architecture and Qt installation.
+3. From this source folder on the Jetson, run:
+
+```bash
+sha256sum -c SOURCE_MANIFEST.sha256
+bash deploy/jetson/build.sh
+bash build/package/Jetson-Basic/run.sh
+```
+
+Verify the source manifest before editing the environment file.
+Jetson signal processing uses CUDA/cuFFT; FFTW is disabled.
+Native ARM64 compilation and hardware operation must be verified on the target Jetson.
+`SOURCE_REVISION.txt` and `SOURCE_MANIFEST.sha256` identify the exported working sources.
+Older Windows-oriented workspace documents are reference material; use the Jetson guide above to build this bundle.
+
+Documentation: [document index](docs/README.md), [source guide](docs/source/source_guide_ko.md),
+[per-file source index](docs/source/source_file_index_ko.md).
+'@
+[System.IO.File]::WriteAllText((Join-Path $destinationPath "README.md"), $bundleReadme + "`n", $utf8WithoutBom)
 
 $revision = "uncommitted-source"
 try {
     $revision = (git -C $repositoryRoot rev-parse HEAD).Trim()
     $revisionPaths = @($files) + @($directories)
     $revisionPaths += "deploy/build_manifest.cmake"
-    $revisionPaths += $documents | ForEach-Object { "docs/$_" }
     $statusArguments = @(
         "-C", $repositoryRoot,
         "status", "--porcelain", "--untracked-files=normal", "--"
@@ -103,14 +165,13 @@ try {
     }
 } catch {
 }
-$utf8WithoutBom = [System.Text.UTF8Encoding]::new($false)
 [System.IO.File]::WriteAllText(
     (Join-Path $destinationPath "SOURCE_REVISION.txt"),
     "$revision`n",
     $utf8WithoutBom
 )
 
-$manifestLines = Get-ChildItem -LiteralPath $destinationPath -Recurse -File |
+$manifestLines = Get-ChildItem -LiteralPath $destinationPath -Recurse -File -Force |
     Sort-Object FullName |
     ForEach-Object {
         $relative = $_.FullName.Substring($destinationPath.Length + 1).Replace("\", "/")
@@ -123,9 +184,8 @@ $manifestLines = Get-ChildItem -LiteralPath $destinationPath -Recurse -File |
     $utf8WithoutBom
 )
 
-$zipPath = "$destinationPath.zip"
 if (Test-Path -LiteralPath $zipPath) {
-    Remove-Item -LiteralPath $zipPath -Force
+    throw "ZIP appeared during export; refusing to overwrite: $zipPath"
 }
 
 # Compress-Archive records Windows directory attributes that Linux unzip can
@@ -138,10 +198,10 @@ $archive = [System.IO.Compression.ZipFile]::Open(
     [System.IO.Compression.ZipArchiveMode]::Create
 )
 try {
-    Get-ChildItem -LiteralPath $destinationPath -Recurse -File |
+    Get-ChildItem -LiteralPath $destinationPath -Recurse -File -Force |
         Sort-Object FullName |
         ForEach-Object {
-            $relative = $_.FullName.Substring($packageRoot.Length + 1).Replace("\", "/")
+            $relative = $_.FullName.Substring((Split-Path -Parent $destinationPath).Length + 1).Replace("\", "/")
             $null = [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile(
                 $archive,
                 $_.FullName,

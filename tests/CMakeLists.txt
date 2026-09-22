@@ -1,3 +1,13 @@
+# Point-cloud file readers are used only for format/rendering regression fixtures.
+# The Basic acquisition application does not link this library.
+add_library(fmcw_replay_test_support STATIC
+  support/point_cloud_replay/point_cloud_replay.cpp
+  support/point_cloud_replay/async_point_cloud_replay.cpp
+)
+target_link_libraries(fmcw_replay_test_support PUBLIC fmcw_core)
+target_include_directories(fmcw_replay_test_support PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_features(fmcw_replay_test_support PRIVATE cxx_std_17)
+
 add_executable(fmcw_core_tests
   core_contract_test.cpp
 )
@@ -10,11 +20,12 @@ add_test(NAME fmcw_core_tests COMMAND fmcw_core_tests)
 add_executable(fmcw_config_tests
   config_system_test.cpp
   # Historical policy prototypes, intentionally not linked into the application.
-  ../src/core/config_manager.cpp
-  ../src/core/operation_controller.cpp
+  support/config_prototypes/config_manager.cpp
+  support/config_prototypes/operation_controller.cpp
 )
 
 target_link_libraries(fmcw_config_tests PRIVATE fmcw_core)
+target_include_directories(fmcw_config_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_features(fmcw_config_tests PRIVATE cxx_std_17)
 target_compile_definitions(fmcw_config_tests PRIVATE FMCW_TEST_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
 
@@ -48,7 +59,7 @@ target_link_libraries(fmcw_processing_history_tests PRIVATE fmcw_core)
 add_test(NAME fmcw_processing_history_tests COMMAND fmcw_processing_history_tests)
 set_tests_properties(fmcw_processing_history_tests PROPERTIES TIMEOUT 30 SKIP_RETURN_CODE 77)
 add_executable(fmcw_async_replay_tests async_replay_test.cpp)
-target_link_libraries(fmcw_async_replay_tests PRIVATE fmcw_core)
+target_link_libraries(fmcw_async_replay_tests PRIVATE fmcw_replay_test_support)
 add_test(NAME fmcw_async_replay_tests COMMAND fmcw_async_replay_tests)
 set_tests_properties(fmcw_async_replay_tests PROPERTIES TIMEOUT 15)
 
@@ -64,7 +75,7 @@ if(FMCW_BUILD_QT_APPS)
   target_compile_features(fmcw_point_cloud_camera_tests PRIVATE cxx_std_17)
   add_test(NAME fmcw_point_cloud_camera_tests COMMAND fmcw_point_cloud_camera_tests)
   add_executable(fmcw_point_cloud_render_tests point_cloud_render_test.cpp)
-  target_link_libraries(fmcw_point_cloud_render_tests PRIVATE fmcw_qt_common)
+  target_link_libraries(fmcw_point_cloud_render_tests PRIVATE fmcw_qt_common fmcw_replay_test_support)
   foreach(_renderer IN ITEMS gpu painter)
     foreach(_scale IN ITEMS 1 2)
       set(_render_test fmcw_point_cloud_${_renderer}_${_scale}x)
@@ -141,7 +152,7 @@ add_executable(fmcw_point_cloud_replay_tests
   point_cloud_replay_test.cpp
 )
 
-target_link_libraries(fmcw_point_cloud_replay_tests PRIVATE fmcw_core)
+target_link_libraries(fmcw_point_cloud_replay_tests PRIVATE fmcw_replay_test_support)
 target_compile_features(fmcw_point_cloud_replay_tests PRIVATE cxx_std_17)
 
 add_test(NAME fmcw_point_cloud_replay_tests COMMAND fmcw_point_cloud_replay_tests)
@@ -275,10 +286,3 @@ add_phase7_storage_performance(fmcw_phase7_storage_probe 32 0 0)
 # 120,240 strict DMA blocks equal ten minutes at 200 kHz / 998 records per block.
 # The executable preflights roughly 1.2 TB of free space and is not part of normal CTest.
 add_phase7_storage_performance(fmcw_phase7_storage_acceptance 120240 1 1)
-
-if(WIN32 AND FMCW_HAS_CENTERPOINT AND FMCW_CUDNN_RUNTIME_DLL)
-  get_filename_component(_fmcw_test_cudnn_runtime_dir "${FMCW_CUDNN_RUNTIME_DLL}" DIRECTORY)
-  get_property(_fmcw_tests DIRECTORY PROPERTY TESTS)
-  string(REPLACE ";" "\\;" _fmcw_test_path "${_fmcw_test_cudnn_runtime_dir};$ENV{PATH}")
-  set_tests_properties(${_fmcw_tests} PROPERTIES ENVIRONMENT "PATH=${_fmcw_test_path}")
-endif()

@@ -5,16 +5,29 @@ set -Eeuo pipefail
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 root_dir="$(cd -- "${script_dir}/../.." && pwd)"
 build_dir="${root_dir}/build/jetson-release"
-package_dir="${root_dir}/build/package/FMCW_LiDAR_Jetson"
+package_dir="${root_dir}/build/package/Jetson-Basic"
+env_file="${FMCW_JETSON_ENV_FILE:-${script_dir}/jetson.env}"
 source_executable="${build_dir}/src/fmcw_lidar_jetson"
 
 if [[ ! -x "${source_executable}" ]]; then
   echo "ERROR: Build the Jetson target before packaging: ${source_executable}" >&2
   exit 2
 fi
+if [[ ! -f "${env_file}" ]]; then
+  echo "ERROR: Jetson environment file not found: ${env_file}" >&2
+  exit 2
+fi
+for feature in 'WorkspaceVariant=Basic' 'CUDA_FFT=ON' 'FFTW=OFF' 'CenterPoint=OFF'; do
+  if ! grep -Fx "${feature}" "${build_dir}/BUILD_FEATURES.txt" >/dev/null; then
+    echo "ERROR: Not a Basic Jetson build (required ${feature})" >&2
+    exit 2
+  fi
+done
 
 if [[ -e "${package_dir}" ]]; then
-  backup_dir="${package_dir}.previous-$(date -u +%Y%m%dT%H%M%SZ)-$$"
+  archive_dir="${root_dir}/build/package_archive/$(date -u +%Y-%m-%d)"
+  mkdir -p -- "${archive_dir}"
+  backup_dir="${archive_dir}/Jetson-Basic-$(date -u +%H%M%S)-$$"
   mv -- "${package_dir}" "${backup_dir}"
   printf 'Previous runtime, settings and data preserved: %s\n' "${backup_dir}"
 fi
@@ -24,7 +37,7 @@ install -m 0755 "${source_executable}" "${package_dir}/FMCW_LiDAR_Jetson"
 install -m 0644 "${build_dir}/BUILD_FEATURES.txt" "${package_dir}/BUILD_FEATURES.txt"
 install -m 0644 "${build_dir}/BUILD_SOURCES.sha256" "${package_dir}/BUILD_SOURCES.sha256"
 install -m 0755 "${script_dir}/run.sh" "${package_dir}/run.sh"
-install -m 0644 "${script_dir}/jetson.env" "${package_dir}/jetson.env"
+install -m 0644 "${env_file}" "${package_dir}/jetson.env"
 cp -a "${root_dir}/config/." "${package_dir}/config/"
 
 revision="source-bundle"
@@ -47,7 +60,7 @@ if command -v nvcc >/dev/null 2>&1; then
 fi
 
 {
-  printf 'FMCW LiDAR Jetson Release\n'
+  printf 'FMCW LiDAR Basic Jetson Release\n'
   printf 'Built UTC: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   printf 'Source revision: %s\n' "${revision}"
   printf 'Architecture: %s\n' "$(uname -m)"

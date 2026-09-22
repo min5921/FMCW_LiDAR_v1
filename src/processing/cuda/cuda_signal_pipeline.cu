@@ -1,6 +1,6 @@
 #include "processing/cuda/cuda_signal_pipeline.h"
 #include "processing/cuda/cuda_module_policy.h"
-#include "core/raw_frame_batch_pool.h"
+#include "core/acquisition/raw_frame_batch_pool.h"
 
 #include <cuda_runtime.h>
 #include <cufft.h>

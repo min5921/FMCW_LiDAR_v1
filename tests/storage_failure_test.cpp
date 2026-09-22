@@ -1,6 +1,6 @@
 #include "storage/async_storage_service.h"
 #include "storage/binary_storage.h"
-#include "core/config_profile.h"
+#include "core/config/config_profile.h"
 
 #include <chrono>
 #include <condition_variable>

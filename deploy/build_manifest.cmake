@@ -13,7 +13,8 @@ endif()
 file(GLOB_RECURSE _fmcw_manifest_sources RELATIVE "${PROJECT_SOURCE_DIR}"
   "${PROJECT_SOURCE_DIR}/src/*.cpp" "${PROJECT_SOURCE_DIR}/src/*.h"
   "${PROJECT_SOURCE_DIR}/src/*.cu" "${PROJECT_SOURCE_DIR}/src/CMakeLists.txt"
-  "${PROJECT_SOURCE_DIR}/tests/*.cpp" "${PROJECT_SOURCE_DIR}/tests/CMakeLists.txt")
+  "${PROJECT_SOURCE_DIR}/tests/*.cpp" "${PROJECT_SOURCE_DIR}/tests/*.h"
+  "${PROJECT_SOURCE_DIR}/tests/CMakeLists.txt")
 list(APPEND _fmcw_manifest_sources "CMakeLists.txt" "deploy/build_manifest.cmake")
 list(FILTER _fmcw_manifest_sources EXCLUDE REGEX "/firmware/|/Debug/|/Release/")
 list(SORT _fmcw_manifest_sources)

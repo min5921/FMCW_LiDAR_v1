@@ -20,7 +20,7 @@ option(FMCW_REQUIRE_CUDA "Fail configuration when CUDA/cuFFT is unavailable" OFF
 option(FMCW_REQUIRE_FFTW "Fail configuration when the requested CPU backend is unavailable" OFF)
 option(FMCW_REQUIRE_ALAZAR "Fail configuration when ATS-SDK is unavailable" OFF)
 option(FMCW_WITH_ALAZAR "Enable AlazarTech ATS-SDK adapter when the SDK is available" ON)
-option(FMCW_WITH_CENTERPOINT "Enable the external CUDA/cuDNN CenterPoint detector" OFF)
+option(FMCW_WITH_CENTERPOINT "Unsupported in Basic; use the CenterPoint workspace" OFF)
 if(FMCW_WITH_CENTERPOINT)
   message(FATAL_ERROR "The Basic workspace excludes object detection. Use FMCW_LiDAR_CenterPoint.")
 endif()
@@ -29,9 +29,6 @@ set(FMCW_TARGET_PLATFORM "AUTO" CACHE STRING "Target platform: AUTO, WINDOWS, or
 set_property(CACHE FMCW_TARGET_PLATFORM PROPERTY STRINGS AUTO WINDOWS JETSON)
 set(ALAZAR_SDK_ROOT "" CACHE PATH "AlazarTech SDK root directory")
 set(FFTW_ROOT "" CACHE PATH "FFTW installation root directory")
-set(FMCW_CENTERPOINT_SOURCE_DIR "" CACHE PATH
-    "LiDAR_recon root or 20_active_count_nms_project directory")
-set(FMCW_CUDNN_ROOT "" CACHE PATH "cuDNN installation root for CenterPoint")
 set(FMCW_CUDA_ARCHITECTURES "auto" CACHE STRING
     "CUDA architectures for FMCW targets (auto, native on CMake 3.24+, 87, 120, or 87;120)")
 

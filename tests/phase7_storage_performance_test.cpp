@@ -1,4 +1,4 @@
-#include "core/config_profile.h"
+#include "core/config/config_profile.h"
 #include "drivers/simulator/fake_digitizer.h"
 #include "storage/async_storage_service.h"
 #include "storage/binary_storage.h"

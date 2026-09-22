@@ -10,9 +10,6 @@ if [[ -f "${runtime_env}" ]]; then
   # shellcheck disable=SC1090
   source "${runtime_env}"
 fi
-if [[ -n "${FMCW_JETSON_CENTERPOINT_WEIGHTS_ROOT:-}" ]]; then
-  export FMCW_CENTERPOINT_WEIGHTS_ROOT="${FMCW_JETSON_CENTERPOINT_WEIGHTS_ROOT}"
-fi
 
 if [[ ! -x "${executable}" ]]; then
   echo "ERROR: Jetson executable is missing: ${executable}" >&2
@@ -20,8 +17,8 @@ if [[ ! -x "${executable}" ]]; then
 fi
 
 for library_dir in \
-  /usr/local/AlazarTech/lib \
-  /usr/local/AlazarTech/lib64 \
+  "${FMCW_JETSON_ALAZAR_SDK_ROOT:-/usr/local/AlazarTech}/lib" \
+  "${FMCW_JETSON_ALAZAR_SDK_ROOT:-/usr/local/AlazarTech}/lib64" \
   /usr/local/cuda/targets/aarch64-linux/lib \
   /usr/local/cuda/lib64; do
   if [[ -d "${library_dir}" ]]; then
@@ -35,4 +32,4 @@ if [[ -z "${DISPLAY:-}" && -z "${WAYLAND_DISPLAY:-}" ]]; then
 fi
 
 cd -- "${package_dir}"
-exec "${executable}"
+exec "${executable}" "$@"

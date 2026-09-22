@@ -1,5 +1,5 @@
-#include "apps/common/point_cloud_widget.h"
-#include "storage/point_cloud_replay.h"
+#include "ui/point_cloud/point_cloud_widget.h"
+#include "support/point_cloud_replay/point_cloud_replay.h"
 
 #include <QApplication>
 #include <QDir>

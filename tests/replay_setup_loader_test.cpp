@@ -1,6 +1,6 @@
-#include "apps/common/replay_setup_loader.h"
+#include "application/replay_setup_loader.h"
 
-#include "core/config_profile.h"
+#include "core/config/config_profile.h"
 
 #include <cstdint>
 #include <filesystem>

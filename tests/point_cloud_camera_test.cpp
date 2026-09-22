@@ -1,4 +1,4 @@
-#include "apps/common/point_cloud_camera.h"
+#include "ui/point_cloud/point_cloud_camera.h"
 
 #include <iostream>
 #include <stdexcept>

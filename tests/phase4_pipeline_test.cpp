@@ -1,4 +1,4 @@
-#include "core/config_profile.h"
+#include "core/config/config_profile.h"
 #include "drivers/simulator/fake_digitizer.h"
 #include "drivers/replay/replay_digitizer.h"
 #include "processing/fft_backends.h"

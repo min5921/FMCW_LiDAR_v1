@@ -1,6 +1,6 @@
 # Workspace scope
 
-This checkout is the Basic product on `codex/fmcw-base`. Read WORKSPACE.md and docs/workspaces_ko.md before changing product scope or packaging.
+This checkout is the Basic product on `codex/fmcw-base`. Read WORKSPACE.md and docs/guides/workspaces_ko.md before changing product scope or packaging.
 
 - Keep work inside this product unless the user explicitly asks for cross-project changes.
 - Preserve acquisition, FFT, live visualization, storage and RAW replay.

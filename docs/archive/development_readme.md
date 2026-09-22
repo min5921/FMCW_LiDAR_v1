@@ -5,7 +5,7 @@
 이 폴더는 **계측 · FFT · Live 3D · 저장 · RAW 재생** 프로젝트입니다. 전용 브랜치는 `codex/fmcw-base`입니다.
 
 - [이 작업 공간의 시작 안내](../../WORKSPACE.md)
-- [세 프로젝트 관리 규칙과 다른 PC 설정](../../docs/workspaces_ko.md)
+- [세 프로젝트 관리 규칙과 다른 PC 설정](../guides/workspaces_ko.md)
 - 현재 Windows 실행본: `build/package/Windows-Basic/FMCW_LiDAR.exe`
 
 아래는 분리 이전의 공통 개발 기록입니다. 과거 브랜치명·패키지 경로·기능 설명보다 위 작업 공간 안내를 우선합니다.
@@ -21,7 +21,7 @@ FMCW LiDAR 시스템을 Windows와 Jetson에서 함께 운용하기 위한 프�
 `codex/pcd-replay-only`: saved point-cloud replay and 3D viewing, without model
 weights, object inference, or detection boxes. Existing LiDAR functions remain.
 This worktree is intentionally separate from CenterPoint development.
-See [Replay Worktree](../../docs/pcd_replay_worktree.md) for scope and verification.
+See [Replay Worktree](../reference/pcd_replay_worktree.md) for scope and verification.
 
 ## Current Direction
 
@@ -39,22 +39,22 @@ See [Replay Worktree](../../docs/pcd_replay_worktree.md) for scope and verificat
 
 ## Key Documents
 
-- `docs/runtime_contract_v2.md`: 현재 코드 읽는 순서, 스레드/설정/단위의 기준
-- `docs/v2_review_completion.md`: R1~R10 구현·검증·미검증 범위
+- `docs/design/runtime_contract_v2.md`: 현재 코드 읽는 순서, 스레드/설정/단위의 기준
+- `docs/archive/v2_review_completion.md`: R1~R10 구현·검증·미검증 범위
 
-- `docs/requirements.md`: 시스템 요구사항과 Phase 계획
-- `docs/gui_runtime_requirements.md`: 승인된 GUI의 page ownership, global command, snapshot/thread 계약
-- `docs/folder_structure.md`: 폴더 구조와 파일 배치 기준
-- `docs/data_contract.md`: full-period raw frame과 metadata 규칙
-- `docs/processing_storage.md`: FFT/peak/B-scan 처리와 binary 저장/replay 계약
-- `docs/qt_ui_mvp.md`: Phase 5 Qt 화면, runtime thread 구조, 실행 및 operator flow
-- `docs/configuration.md`: YAML profile schema v5, validation, field presentation 및 pending 정책
-- `docs/device_protocols.md`: Alazar AutoDMA, MCU UART, EDFA binary protocol
-- `docs/alazar_supported_models.md`: 지원하는 12-bit AUX trigger-enable ATS 모델과 모델별 설정
+- `docs/design/requirements.md`: 시스템 요구사항과 Phase 계획
+- `docs/design/gui_runtime_requirements.md`: 승인된 GUI의 page ownership, global command, snapshot/thread 계약
+- `docs/guides/folder_structure.md`: 폴더 구조와 파일 배치 기준
+- `docs/design/data_contract.md`: full-period raw frame과 metadata 규칙
+- `docs/design/processing_storage.md`: FFT/peak/B-scan 처리와 binary 저장/replay 계약
+- `docs/archive/qt_ui_mvp.md`: Phase 5 Qt 화면, runtime thread 구조, 실행 및 operator flow
+- `docs/design/configuration.md`: YAML profile schema v5, validation, field presentation 및 pending 정책
+- `docs/hardware/device_protocols.md`: Alazar AutoDMA, MCU UART, EDFA binary protocol
+- `docs/hardware/alazar_supported_models.md`: 지원하는 12-bit AUX trigger-enable ATS 모델과 모델별 설정
 - `deploy/jetson/README_KO.md`: Jetson ARM64 소스 번들, 의존성 점검, 빌드 및 실행 절차
-- `docs/hardware_acceptance.md`: Windows/Jetson 실제 장비 검증 절차
-- `docs/build_setup.md`: Windows/Jetson 빌드 준비와 외부 SDK 경로
-- `docs/phase7_execution_plan.md`: Phase 7 subphase 순서, 완료 조건, audit finding 추적 및 commit/push 기준
+- `docs/hardware/hardware_acceptance.md`: Windows/Jetson 실제 장비 검증 절차
+- `docs/archive/build_setup.md`: Windows/Jetson 빌드 준비와 외부 SDK 경로
+- `docs/archive/phase7_execution_plan.md`: Phase 7 subphase 순서, 완료 조건, audit finding 추적 및 commit/push 기준
 - `Ros_project/README.md`: ROS Noetic C++ UDP receiver, RViz, copy/build/run 절차
 
 ## Phase Policy

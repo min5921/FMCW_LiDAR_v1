@@ -1,6 +1,6 @@
-#include "core/device_interfaces.h"
-#include "core/frame_types.h"
-#include "core/system_state.h"
+#include "core/devices/device_interfaces.h"
+#include "core/types/frame_types.h"
+#include "core/runtime/system_state.h"
 #include "processing/fft_backend.h"
 #include "storage/writer_interfaces.h"
 

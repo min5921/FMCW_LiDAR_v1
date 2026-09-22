@@ -1,9 +1,9 @@
-#include "core/config_manager.h"
-#include "core/config_policy.h"
-#include "core/config_profile.h"
-#include "core/config_validation.h"
-#include "core/digitizer_capabilities.h"
-#include "core/operation_controller.h"
+#include "support/config_prototypes/config_manager.h"
+#include "core/config/config_policy.h"
+#include "core/config/config_profile.h"
+#include "core/config/config_validation.h"
+#include "core/devices/digitizer_capabilities.h"
+#include "support/config_prototypes/operation_controller.h"
 
 #include <algorithm>
 #include <filesystem>

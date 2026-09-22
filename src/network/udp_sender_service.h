@@ -1,7 +1,7 @@
 #pragma once
 
-#include "core/config_types.h"
-#include "core/frame_types.h"
+#include "core/config/config_types.h"
+#include "core/types/frame_types.h"
 #include "processing/processing_snapshots.h"
 
 #include <cstddef>

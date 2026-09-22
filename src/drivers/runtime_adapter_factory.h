@@ -1,7 +1,7 @@
 #pragma once
 
-#include "core/config_types.h"
-#include "core/device_interfaces.h"
+#include "core/config/config_types.h"
+#include "core/devices/device_interfaces.h"
 
 #include <memory>
 #include <string>

@@ -1,6 +1,6 @@
 #include "processing/fft_backends.h"
 
-#include "core/realtime_thread.h"
+#include "core/runtime/realtime_thread.h"
 
 #ifndef FMCW_HAS_FFTW
 #define FMCW_HAS_FFTW 0

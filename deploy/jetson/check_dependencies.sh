@@ -160,78 +160,7 @@ else
   fail "libcufft.so was not found; install the JetPack CUDA toolkit"
 fi
 
-if is_on "${FMCW_JETSON_WITH_CENTERPOINT:-OFF}"; then
-  centerpoint_source="${FMCW_JETSON_CENTERPOINT_SOURCE_DIR:-}"
-  centerpoint_runtime="${centerpoint_source}"
-  if [[ -f "${centerpoint_source}/20_active_count_nms_project/include/centerpoint/gpu_preprocess.hpp" ]]; then
-    centerpoint_runtime="${centerpoint_source}/20_active_count_nms_project"
-  fi
-  if [[ -f "${centerpoint_runtime}/include/centerpoint/gpu_preprocess.hpp" &&
-        -f "${centerpoint_runtime}/cuda/gpu_preprocess.cu" &&
-        -f "${centerpoint_runtime}/cuda/gpu_rpn.cu" &&
-        -f "${centerpoint_runtime}/cuda/gpu_center_head.cu" &&
-        -f "${centerpoint_runtime}/cuda/gpu_postprocess.cu" ]]; then
-    pass "CenterPoint runtime source: ${centerpoint_runtime}"
-  else
-    fail "CenterPoint runtime source is incomplete: ${centerpoint_source}"
-  fi
-
-  centerpoint_weights="${FMCW_JETSON_CENTERPOINT_WEIGHTS_ROOT:-}"
-  weight_manifests=(
-    "04_pfn/weights_metadata.json"
-    "06_rpn/rpn_weights_metadata.json"
-    "07_head/head_weights_metadata.json"
-  )
-  weight_layout_valid=1
-  for manifest in "${weight_manifests[@]}"; do
-    if [[ ! -f "${centerpoint_weights}/${manifest}" ]]; then
-      fail "CenterPoint weight manifest is missing: ${centerpoint_weights}/${manifest}"
-      weight_layout_valid=0
-    fi
-  done
-  if [[ "${weight_layout_valid}" -eq 1 ]]; then
-    pass "CenterPoint runtime weights: ${centerpoint_weights}"
-  fi
-
-  cudnn_root="${FMCW_JETSON_CUDNN_ROOT:-}"
-  cudnn_header=""
-  for candidate in \
-    "${cudnn_root}/include/cudnn.h" \
-    /usr/include/cudnn.h \
-    /usr/include/aarch64-linux-gnu/cudnn.h \
-    /usr/local/cuda/include/cudnn.h
-  do
-    if [[ -f "${candidate}" ]]; then
-      cudnn_header="${candidate}"
-      break
-    fi
-  done
-  if [[ -n "${cudnn_header}" ]]; then
-    pass "cuDNN header: ${cudnn_header}"
-  else
-    fail "cudnn.h was not found; install the JetPack cuDNN development package"
-  fi
-
-  cudnn_library=""
-  for candidate in \
-    "${cudnn_root}/lib/libcudnn.so" \
-    "${cudnn_root}/lib64/libcudnn.so" \
-    /usr/lib/aarch64-linux-gnu/libcudnn.so \
-    /usr/local/cuda/lib64/libcudnn.so
-  do
-    if [[ -e "${candidate}" ]]; then
-      cudnn_library="${candidate}"
-      break
-    fi
-  done
-  if [[ -n "${cudnn_library}" ]]; then
-    pass "cuDNN runtime: ${cudnn_library}"
-  else
-    fail "libcudnn.so was not found; install the JetPack cuDNN development package"
-  fi
-else
-  warn "CenterPoint detector is disabled"
-fi
+pass "Basic product: PCD file playback and model inference are excluded"
 
 if is_on "${FMCW_JETSON_WITH_ALAZAR:-ON}"; then
   alazar_root="${FMCW_JETSON_ALAZAR_SDK_ROOT:-/usr/local/AlazarTech}"

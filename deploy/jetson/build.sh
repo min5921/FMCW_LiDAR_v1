@@ -93,7 +93,7 @@ cmake_arguments=(
   -DFMCW_REQUIRE_CUDA=ON
   "-DFMCW_WITH_ALAZAR=$(cmake_bool "${FMCW_JETSON_WITH_ALAZAR:-ON}")"
   "-DFMCW_REQUIRE_ALAZAR=$(cmake_bool "${FMCW_JETSON_WITH_ALAZAR:-ON}")"
-  "-DFMCW_WITH_CENTERPOINT=$(cmake_bool "${FMCW_JETSON_WITH_CENTERPOINT:-OFF}")"
+  -DFMCW_WITH_CENTERPOINT=OFF
 )
 
 if [[ -n "${FMCW_JETSON_ALAZAR_SDK_ROOT:-}" ]]; then
@@ -101,14 +101,6 @@ if [[ -n "${FMCW_JETSON_ALAZAR_SDK_ROOT:-}" ]]; then
 fi
 if [[ -n "${FMCW_JETSON_QT_ROOT:-}" ]]; then
   cmake_arguments+=("-DCMAKE_PREFIX_PATH=${FMCW_JETSON_QT_ROOT}")
-fi
-if is_on "${FMCW_JETSON_WITH_CENTERPOINT:-OFF}"; then
-  cmake_arguments+=(
-    "-DFMCW_CENTERPOINT_SOURCE_DIR=${FMCW_JETSON_CENTERPOINT_SOURCE_DIR}"
-  )
-  if [[ -n "${FMCW_JETSON_CUDNN_ROOT:-}" ]]; then
-    cmake_arguments+=("-DFMCW_CUDNN_ROOT=${FMCW_JETSON_CUDNN_ROOT}")
-  fi
 fi
 cuda_architectures="$(detect_cuda_architectures)"
 printf 'Jetson CUDA architecture: %s\n' "${cuda_architectures}"
@@ -139,7 +131,11 @@ if is_on "${FMCW_JETSON_BUILD_TESTS:-ON}"; then
   printf '\nRunning CTest...\n'
   (
     cd "${build_dir}"
-    ctest --output-on-failure
+    if [[ -n "${DISPLAY:-}" || -n "${WAYLAND_DISPLAY:-}" ]]; then
+      ctest --output-on-failure
+    else
+      QT_QPA_PLATFORM=offscreen ctest --output-on-failure
+    fi
   )
 fi
 
@@ -161,4 +157,4 @@ fi
 bash "${script_dir}/package.sh"
 
 printf '\nJetson build completed successfully.\n'
-printf 'Application: %s\n' "${root_dir}/build/package/FMCW_LiDAR_Jetson/FMCW_LiDAR_Jetson"
+printf 'Application: %s\n' "${root_dir}/build/package/Jetson-Basic/FMCW_LiDAR_Jetson"

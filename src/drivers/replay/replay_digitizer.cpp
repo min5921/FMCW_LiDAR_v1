@@ -1,6 +1,6 @@
 #include "drivers/replay/replay_digitizer.h"
 
-#include "core/config_validation.h"
+#include "core/config/config_validation.h"
 
 #include <algorithm>
 #include <chrono>

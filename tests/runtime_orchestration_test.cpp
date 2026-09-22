@@ -1,10 +1,10 @@
-#include "apps/common/application_controller.h"
+#include "application/application_controller.h"
 #include "drivers/simulator/fake_digitizer.h"
 #include "drivers/simulator/fake_edfa.h"
 #include "drivers/simulator/fake_mcu.h"
 #include "drivers/replay/replay_digitizer.h"
 #include "storage/binary_storage.h"
-#include "core/config_profile.h"
+#include "core/config/config_profile.h"
 #include "processing/fft_backends.h"
 #include <QCoreApplication>
 #include <QElapsedTimer>

@@ -1,7 +1,7 @@
 #pragma once
 
-#include "core/device_interfaces.h"
-#include "core/raw_frame_batch_pool.h"
+#include "core/devices/device_interfaces.h"
+#include "core/acquisition/raw_frame_batch_pool.h"
 #include "storage/binary_storage.h"
 #include "storage/processing_history.h"
 

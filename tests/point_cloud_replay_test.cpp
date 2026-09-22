@@ -1,5 +1,5 @@
 #include "storage/binary_storage.h"
-#include "storage/point_cloud_replay.h"
+#include "support/point_cloud_replay/point_cloud_replay.h"
 
 #include <array>
 #include <chrono>

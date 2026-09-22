@@ -1,6 +1,6 @@
 #pragma once
 
-#include "core/device_interfaces.h"
+#include "core/devices/device_interfaces.h"
 #include "drivers/edfa/edfa_protocol.h"
 #include "drivers/serial/serial_transport.h"
 

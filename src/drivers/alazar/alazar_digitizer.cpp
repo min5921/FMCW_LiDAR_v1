@@ -5,9 +5,9 @@
 
 #include "drivers/alazar/alazar_digitizer.h"
 
-#include "core/config_validation.h"
-#include "core/digitizer_capabilities.h"
-#include "core/raw_frame_batch_pool.h"
+#include "core/config/config_validation.h"
+#include "core/devices/digitizer_capabilities.h"
+#include "core/acquisition/raw_frame_batch_pool.h"
 
 #include <algorithm>
 #include <chrono>

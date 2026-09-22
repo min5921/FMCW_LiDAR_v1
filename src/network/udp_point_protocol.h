@@ -1,6 +1,6 @@
 #pragma once
 
-#include "core/frame_types.h"
+#include "core/types/frame_types.h"
 
 #include <cstddef>
 #include <cstdint>
